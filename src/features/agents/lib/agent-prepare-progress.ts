@@ -5,7 +5,8 @@
 // operation (SW-XS-8), per `operationId`, so two operations on one workspace
 // never fold into each other.
 
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import type { UnlistenFn } from "@tauri-apps/api/event";
+import { listenScoped } from "@/shared/windows/listen-scoped";
 
 import {
   AGENT_PREPARE_PROGRESS_EVENT,
@@ -110,15 +111,19 @@ export function listenAgentPrepareProgress(
   onChange: (state: AgentPrepareState) => void,
 ): Promise<UnlistenFn> {
   const states = new Map<string, AgentPrepareState>();
-  return listen<AgentPrepareProgressPayload>(AGENT_PREPARE_PROGRESS_EVENT, ({ payload }) => {
-    const key = prepareKey(payload.workspace, payload.agent, payload.operationId);
-    const next = reducePrepareProgress(states.get(key), payload);
-    // An explicit operation's state is dropped once it settles (its id is
-    // never reused); a launch keeps its workspace + agent state.
-    if (next.settled && payload.operationId) states.delete(key);
-    else states.set(key, next);
-    onChange(next);
-  });
+  return listenScoped<AgentPrepareProgressPayload>(
+    AGENT_PREPARE_PROGRESS_EVENT,
+    "every-window",
+    ({ payload }) => {
+      const key = prepareKey(payload.workspace, payload.agent, payload.operationId);
+      const next = reducePrepareProgress(states.get(key), payload);
+      // An explicit operation's state is dropped once it settles (its id is
+      // never reused); a launch keeps its workspace + agent state.
+      if (next.settled && payload.operationId) states.delete(key);
+      else states.set(key, next);
+      onChange(next);
+    },
+  );
 }
 
 /** SW-XS-11 (SPEC §11.2): the persistent note for files a run kept because they

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { useCallback, useEffect, useRef, useState } from "react";
-import { listen } from "@tauri-apps/api/event";
+import { listenScoped } from "@/shared/windows/listen-scoped";
 
 import { logger } from "@/shared/lib/logger";
 import { safeUnlisten } from "@/shared/lib/tauri-listeners";
@@ -56,7 +56,7 @@ export function useInboxRead<T>(
     void reload();
     const subs = [AGENT_INBOX_CHANGED_EVENT, AGENT_STATE_CHANGED_EVENT, ...also].map((event) =>
       // No event bus (a plain browser, a test): the read still happens once.
-      listen(event, () => void reload()).catch(() => () => {}),
+      listenScoped(event, "every-window", () => void reload()).catch(() => () => {}),
     );
     return () => {
       for (const sub of subs) void sub.then(safeUnlisten).catch(() => {});

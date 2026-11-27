@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
-import { listen } from "@tauri-apps/api/event";
+import { listenScoped } from "@/shared/windows/listen-scoped";
 
 import {
   workspaceChatRead,
@@ -256,13 +256,17 @@ export function useWorkspaceChat(
   // Subscribe to the chat-updated event. One subscription per hook instance.
   useEffect(() => {
     if (!workspaceId) return;
-    const unlisten = listen<WorkspaceChatUpdatedPayload>(EVENT_NAME, (event) => {
-      const payload = event.payload;
-      if (!payload || payload.workspaceId !== workspaceId) return;
-      const current = stateRef.current;
-      if (current.workspaceId !== workspaceId || payload.headId <= current.headId) return;
-      void readIncremental(workspaceId, current.headId);
-    });
+    const unlisten = listenScoped<WorkspaceChatUpdatedPayload>(
+      EVENT_NAME,
+      "every-window",
+      (event) => {
+        const payload = event.payload;
+        if (!payload || payload.workspaceId !== workspaceId) return;
+        const current = stateRef.current;
+        if (current.workspaceId !== workspaceId || payload.headId <= current.headId) return;
+        void readIncremental(workspaceId, current.headId);
+      },
+    );
     return () => {
       void unlisten.then((u) => u()).catch(() => {});
     };
@@ -271,11 +275,15 @@ export function useWorkspaceChat(
   // Subscribe to the chat-media event: a message's image changed state on this Mac.
   useEffect(() => {
     if (!workspaceId) return;
-    const unlisten = listen<WorkspaceChatMediaPayload>(MEDIA_EVENT_NAME, (event) => {
-      const payload = event.payload;
-      if (!payload || payload.workspaceId !== workspaceId) return;
-      void readMedia(workspaceId, payload.messageId);
-    });
+    const unlisten = listenScoped<WorkspaceChatMediaPayload>(
+      MEDIA_EVENT_NAME,
+      "every-window",
+      (event) => {
+        const payload = event.payload;
+        if (!payload || payload.workspaceId !== workspaceId) return;
+        void readMedia(workspaceId, payload.messageId);
+      },
+    );
     return () => {
       void unlisten.then((u) => u()).catch(() => {});
     };

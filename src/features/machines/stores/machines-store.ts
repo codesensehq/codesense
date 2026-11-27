@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 import { useEffect } from "react";
 import { useOwnsScope } from "@/shared/lib/warm-scopes";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import type { UnlistenFn } from "@tauri-apps/api/event";
+import { listenScoped } from "@/shared/windows/listen-scoped";
 import { create } from "zustand";
 
 import { teamLifecycleVersion, useViewerStore } from "@/shared/stores/viewer-store";
@@ -364,7 +365,7 @@ function retainMachineRegistry(teamKey: string): () => void {
         refresh(queued.splice(0));
       }, MACHINES_CHANGED_COALESCE_MS);
     };
-    void listen<MachinesChangedPayload>(MACHINES_CHANGED_EVENT, (event) => {
+    void listenScoped<MachinesChangedPayload>(MACHINES_CHANGED_EVENT, "every-window", (event) => {
       if (event.payload?.machineId) noteMachineChanged(event.payload.machineId);
       enqueue(event.payload?.scope ?? null);
     }).then(

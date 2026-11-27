@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-import { listen } from "@tauri-apps/api/event";
+import { listenScoped } from "@/shared/windows/listen-scoped";
 import { create } from "zustand";
 
 import { createListenerGroup, type ListenerGroup } from "@/shared/lib/tauri-listeners";
@@ -308,16 +308,22 @@ export function watchSessionTimers(): () => void {
     listeners = createListenerGroup();
     window.addEventListener("pagehide", flushPendingCancels);
     listeners.track(
-      listen<SessionTimersChanged>(SESSION_TIMERS_CHANGED_EVENT, (e) => {
+      listenScoped<SessionTimersChanged>(SESSION_TIMERS_CHANGED_EVENT, "every-window", (e) => {
         const store = useSessionTimersStore.getState();
         const target = targetOf(e.payload);
         if (timerTargetKey(target) in store.bySession) void store.refresh(target, { force: true });
       }),
     );
     listeners.track(
-      listen<WakeDeliveredEvent>(WAKE_DELIVERED_EVENT, (e) => onDelivered(e.payload)),
+      listenScoped<WakeDeliveredEvent>(WAKE_DELIVERED_EVENT, "every-window", (e) =>
+        onDelivered(e.payload),
+      ),
     );
-    listeners.track(listen<WakeOutcomeEvent>(WAKE_OUTCOME_EVENT, (e) => onOutcome(e.payload)));
+    listeners.track(
+      listenScoped<WakeOutcomeEvent>(WAKE_OUTCOME_EVENT, "every-window", (e) =>
+        onOutcome(e.payload),
+      ),
+    );
   }
   let stopped = false;
   return () => {

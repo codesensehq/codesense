@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 import { useEffect } from "react";
 import { create } from "zustand";
-import { listen } from "@tauri-apps/api/event";
+import { listenScoped } from "@/shared/windows/listen-scoped";
 import { rolesList, type RoleConfig } from "@/tauri/commands";
 import { useActiveTeamKey } from "@/shared/lib/team-key";
 
@@ -40,7 +40,10 @@ export function watchRoleConfigs() {
       for (const key of Object.keys(useRoleConfigsStore.getState().byTeam))
         void reloadRoleConfigs(key);
     };
-    unlisten = [listen("roles:changed", reload), listen("sync-wave-completed", reload)];
+    unlisten = [
+      listenScoped("roles:changed", "every-window", reload),
+      listenScoped("sync-wave-completed", "every-window", reload),
+    ];
     reload();
   }
   return () => {

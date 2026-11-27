@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 
-import { listen } from "@tauri-apps/api/event";
+import { listenScoped } from "@/shared/windows/listen-scoped";
 
 import { useCurrentUser } from "@/shared/lib/get-current-user";
 import { formatKeystrokeDisplay } from "@/shared/lib/shortcuts/keystroke";
@@ -54,7 +54,9 @@ export function useStoryAgentLaunch(teamKey: string): StoryAgentLaunchActions | 
 
   useEffect(() => {
     const group = createListenerGroup();
-    group.track(listen("dep-status-changed", () => setDepsRevision((n) => n + 1)));
+    group.track(
+      listenScoped("dep-status-changed", "every-window", () => setDepsRevision((n) => n + 1)),
+    );
     return () => group.dispose();
   }, []);
 

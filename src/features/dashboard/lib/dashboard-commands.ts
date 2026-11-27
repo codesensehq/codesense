@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 import { INBOX_PANEL_ID } from "@/features/shell/right-pane/right-pane-layout";
 import { useEffect } from "react";
-import { listen } from "@tauri-apps/api/event";
+import { listenScoped } from "@/shared/windows/listen-scoped";
 
 import { paneOnScreen } from "@/features/shell/right-pane/panes/pane-visibility";
 import { usePaneStore } from "@/features/shell/right-pane/panes/pane-store";
@@ -291,7 +291,7 @@ export function useDashboardCommandsSync(): void {
     ];
     const listeners = createListenerGroup();
     listeners.track(
-      listen<RunCommandPayload>(COMMAND_RUN_EVENT, ({ payload }) =>
+      listenScoped<RunCommandPayload>(COMMAND_RUN_EVENT, "main-only", ({ payload }) =>
         runDashboardCommand(payload.id, payload.args),
       ),
     );

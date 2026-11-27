@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { listen } from "@tauri-apps/api/event";
+import { listenScoped } from "@/shared/windows/listen-scoped";
 
 import type { AgentUpdate, InboxTeam } from "@/tauri/commands";
 import { listAgentUpdates } from "@/tauri/commands";
@@ -57,7 +57,7 @@ export function useAgentUpdates(
 
   useEffect(() => {
     void reload();
-    const unlisten = listen(AGENT_MESSAGE_EVENT, () => {
+    const unlisten = listenScoped(AGENT_MESSAGE_EVENT, "every-window", () => {
       void reload();
     });
     return () => {

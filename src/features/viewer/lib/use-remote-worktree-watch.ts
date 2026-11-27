@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 import { useEffect, useState } from "react";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import type { UnlistenFn } from "@tauri-apps/api/event";
+import { listenScoped } from "@/shared/windows/listen-scoped";
 import {
   sourceRemoteTrackedCount,
   sourceRemoteWatchStart,
@@ -98,7 +99,7 @@ function startListen(machineId: string, handle: string, bound: WatchEntry): void
   const key = watchKey(machineId, handle);
   const eventName = `remote-worktree-file-change-${machineId}-${handle}`;
   bound.listenPending = true;
-  listen<{ changedPath: string | null }>(eventName, () => {
+  listenScoped<{ changedPath: string | null }>(eventName, "main-only", () => {
     // Read the CURRENT entry under the key — a replacement entry (after a
     // release+reacquire cycle) owns the new listeners. If it changed under
     // us the `bound` entry has been retired and this closure is a leaked

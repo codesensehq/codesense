@@ -9,7 +9,7 @@ import { getCurrentUser, useCurrentUser } from "@/shared/lib/get-current-user";
 import { isCodesenseDocs } from "@/shared/lib/codesense-docs";
 import { CONTEXT_ATTACHMENTS_REFRESH } from "../lib/context-attachment-events";
 import { useEffect, useRef, useState } from "react";
-import { listen } from "@tauri-apps/api/event";
+import { listenScoped } from "@/shared/windows/listen-scoped";
 import { AppButton } from "@/shared/components/app-button";
 import { detachContextRepository, listContextAttachments } from "@/tauri/commands";
 import { useOrgStore } from "@/shared/stores/org-store";
@@ -75,10 +75,12 @@ function PrincipalContextAttachments({
     };
     window.addEventListener(CONTEXT_ATTACHMENTS_REFRESH, refresh);
     void refresh();
-    const subscription = listen("context-attachments-changed", refresh).catch((e: unknown) => {
-      if (live) setError(String(e));
-      return () => {};
-    });
+    const subscription = listenScoped("context-attachments-changed", "every-window", refresh).catch(
+      (e: unknown) => {
+        if (live) setError(String(e));
+        return () => {};
+      },
+    );
     return () => {
       live = false;
       window.removeEventListener(CONTEXT_ATTACHMENTS_REFRESH, refresh);

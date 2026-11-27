@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 import { invoke } from "@tauri-apps/api/core";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import type { UnlistenFn } from "@tauri-apps/api/event";
+import { listenScoped } from "@/shared/windows/listen-scoped";
 
 /** The beta build channels. Internal builds have no license commands. */
 export type LicenseChannel = "beta" | "beta-staging";
@@ -44,5 +45,7 @@ export const licenseHeadlessRuns = () => invoke<number>("license_headless_runs")
 
 /** Subscribes to every state change. Resolves to the unlisten function. */
 export function onLicenseState(handler: (view: LicenseView) => void): Promise<UnlistenFn> {
-  return listen<LicenseView>(LICENSE_STATE_EVENT, (event) => handler(event.payload));
+  return listenScoped<LicenseView>(LICENSE_STATE_EVENT, "every-window", (event) =>
+    handler(event.payload),
+  );
 }

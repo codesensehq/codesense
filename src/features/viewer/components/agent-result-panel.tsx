@@ -13,7 +13,7 @@
  */
 import { ArrowDownToLine } from "lucide-react";
 import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
-import { listen } from "@tauri-apps/api/event";
+import { listenScoped } from "@/shared/windows/listen-scoped";
 import { openUrl } from "@tauri-apps/plugin-opener";
 
 import type { AgentStatus } from "@/shared/lib/agent-status-config";
@@ -748,9 +748,13 @@ function useLiveTail(
     });
     const group = createListenerGroup();
     group.track(
-      listen<{ stream: string; chunk: string }>(`mcp:agent-output-${runId}`, (e) => {
-        if (e.payload?.chunk) buf.append(e.payload.chunk);
-      }),
+      listenScoped<{ stream: string; chunk: string }>(
+        `mcp:agent-output-${runId}`,
+        "every-window",
+        (e) => {
+          if (e.payload?.chunk) buf.append(e.payload.chunk);
+        },
+      ),
     );
     return () => {
       group.dispose();

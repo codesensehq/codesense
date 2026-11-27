@@ -24,7 +24,7 @@ import {
   servesSurface,
 } from "../../slots/reveal-slot";
 import { nativeSurface, SLOT_REGISTRY } from "../../slots/slot-registry";
-import { listen } from "@tauri-apps/api/event";
+import { listenScoped } from "@/shared/windows/listen-scoped";
 import type { LucideIcon } from "lucide-react";
 import { createElement, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -333,7 +333,7 @@ export function useRegisterPanePanels(): void {
     const openRequests = new Map<string, number>();
     const group = createListenerGroup();
     group.track(
-      listen<PaneOpenPayload>(PANE_OPEN_EVENT, (event) => {
+      listenScoped<PaneOpenPayload>(PANE_OPEN_EVENT, "main-only", (event) => {
         const { panelId, intent } = event.payload;
         const seq = (openRequests.get(panelId) ?? 0) + 1;
         openRequests.set(panelId, seq);

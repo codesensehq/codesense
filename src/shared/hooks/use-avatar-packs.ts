@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { create } from "zustand";
-import { listen } from "@tauri-apps/api/event";
+import { listenScoped } from "@/shared/windows/listen-scoped";
 
 import { createListenerGroup, type ListenerGroup } from "@/shared/lib/tauri-listeners";
 import { getActiveTeamKey, NO_TEAM_SENTINEL, useActiveTeamKey } from "@/shared/lib/team-key";
@@ -165,8 +165,8 @@ function watch(): () => void {
   watchers += 1;
   if (watchers === 1) {
     listeners = createListenerGroup();
-    listeners.track(listen(AVATARS_CHANGED_EVENT, reload));
-    listeners.track(listen(AGENTS_CHANGED_EVENT, reload));
+    listeners.track(listenScoped(AVATARS_CHANGED_EVENT, "every-window", reload));
+    listeners.track(listenScoped(AGENTS_CHANGED_EVENT, "every-window", reload));
   }
   return () => {
     watchers -= 1;

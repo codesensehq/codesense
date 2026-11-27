@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 import { useEffect, useLayoutEffect, useRef } from "react";
 
-import { listen } from "@tauri-apps/api/event";
+import { listenScoped } from "@/shared/windows/listen-scoped";
 
 import {
   WV_ASSERTION_POSTED_EVENT,
@@ -46,17 +46,17 @@ export function useWvEndorsementEvents(options: UseWvEndorsementEventsOptions): 
   useEffect(() => {
     const group = createListenerGroup();
     group.track(
-      listen<WvAssertionPostedPayload>(WV_ASSERTION_POSTED_EVENT, (e) => {
+      listenScoped<WvAssertionPostedPayload>(WV_ASSERTION_POSTED_EVENT, "every-window", (e) => {
         cbs.current.onPosted(e.payload);
       }),
     );
     group.track(
-      listen<WvAssertionSettledPayload>(WV_ASSERTION_RATIFIED_EVENT, (e) => {
+      listenScoped<WvAssertionSettledPayload>(WV_ASSERTION_RATIFIED_EVENT, "every-window", (e) => {
         cbs.current.onRatified(e.payload.id);
       }),
     );
     group.track(
-      listen<WvAssertionSettledPayload>(WV_ASSERTION_REVOKED_EVENT, (e) => {
+      listenScoped<WvAssertionSettledPayload>(WV_ASSERTION_REVOKED_EVENT, "every-window", (e) => {
         cbs.current.onRevoked(e.payload.id);
       }),
     );

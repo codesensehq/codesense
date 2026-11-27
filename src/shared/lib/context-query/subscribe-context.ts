@@ -14,7 +14,7 @@
  * never overwrite a newer one (per-subscription generation counter).
  */
 
-import { listen } from "@tauri-apps/api/event";
+import { listenScoped } from "@/shared/windows/listen-scoped";
 
 import { queryContext } from "@/tauri/commands";
 import { CONTEXT_INDEX_CHANGED_EVENT, type ContextIndexChangedPayload } from "@/tauri/events";
@@ -33,9 +33,13 @@ function attach(): void {
   if (group) return;
   group = createListenerGroup();
   group.track(
-    listen<ContextIndexChangedPayload>(CONTEXT_INDEX_CHANGED_EVENT, (event) => {
-      for (const s of [...subscribers]) s(event.payload ?? null);
-    }),
+    listenScoped<ContextIndexChangedPayload>(
+      CONTEXT_INDEX_CHANGED_EVENT,
+      "every-window",
+      (event) => {
+        for (const s of [...subscribers]) s(event.payload ?? null);
+      },
+    ),
   );
 }
 

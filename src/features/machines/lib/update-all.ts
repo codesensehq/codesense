@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { useSyncExternalStore } from "react";
-import { listen } from "@tauri-apps/api/event";
+import { listenScoped } from "@/shared/windows/listen-scoped";
 
 import {
   reviewTerminalServerUpdate,
@@ -212,7 +212,7 @@ export async function resumeUpdateAllRun(): Promise<void> {
 /** Follow the backend's runs as they go (any window, any starter): a run in
  *  progress holds single machine updates here too. Returns the unlisten. */
 export async function followUpdateRuns(): Promise<() => void> {
-  return listen<TerminalServersUpdateRun>(UPDATE_RUN_EVENT, (event) => {
+  return listenScoped<TerminalServersUpdateRun>(UPDATE_RUN_EVENT, "every-window", (event) => {
     const backend = event.payload;
     // A run this window does not know is taken in only while it runs.
     if (run.opId !== backend.opId && !backend.running) return;

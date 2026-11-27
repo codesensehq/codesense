@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { useCallback, useEffect, useRef, useState } from "react";
-import { listen } from "@tauri-apps/api/event";
+import { listenScoped } from "@/shared/windows/listen-scoped";
 
 import { currentNotesScope, type NotesScope } from "@/shared/lib/notes-scope";
 import { useViewerStore } from "@/shared/stores/viewer-store";
@@ -116,7 +116,7 @@ export function useNoteHistory(noteId: string | null): NoteHistory {
   useEffect(() => {
     let unlisten: (() => void) | null = null;
     let cancelled = false;
-    void listen<NotesChangedPayload>(NOTES_CHANGED_EVENT, (event) => {
+    void listenScoped<NotesChangedPayload>(NOTES_CHANGED_EVENT, "every-window", (event) => {
       if (shouldReloadHistory(event.payload, noteRef.current)) setTick((t) => t + 1);
     })
       .then((fn) => {

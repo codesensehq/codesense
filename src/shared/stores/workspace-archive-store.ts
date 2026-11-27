@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { create } from "zustand";
-import { listen } from "@tauri-apps/api/event";
+import { listenScoped } from "@/shared/windows/listen-scoped";
 
 import { listWorkspaceArchiveStates, type WorkspaceArchiveState } from "@/tauri/commands";
 import { logger } from "@/shared/lib/logger";
@@ -70,8 +70,9 @@ export const useWorkspaceArchiveStore = create<WorkspaceArchiveStoreState>((set,
       logger.warn("workspace-archive", `failed to load workspace archive registry: ${error}`);
       set({ loaded: true });
     }
-    const unlisten = await listen<WorkspaceArchiveState>(
+    const unlisten = await listenScoped<WorkspaceArchiveState>(
       "codesense:workspace-archive-changed",
+      "every-window",
       (event) => {
         if (event.payload) get().applyChange(event.payload);
       },

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { useEffect } from "react";
-import { listen } from "@tauri-apps/api/event";
+import { listenScoped } from "@/shared/windows/listen-scoped";
 import {
   getViewerState,
   TERMINAL_WIRE_STATUSES,
@@ -130,7 +130,7 @@ export function useTerminalStatusEvents() {
     const unwatchTabAgents = watchTerminalTabAgents();
 
     group.track(
-      listen<TerminalStatusPayload>("terminal-status-update", (event) => {
+      listenScoped<TerminalStatusPayload>("terminal-status-update", "owning-window", (event) => {
         if (cancelled) return;
         const { tab_session_id, status, hook_event } = event.payload;
         if (!admitsAgentUpdate(tab_session_id)) return;
@@ -171,7 +171,7 @@ export function useTerminalStatusEvents() {
     );
 
     group.track(
-      listen<PtyExitPayload>("pty-exit", (event) => {
+      listenScoped<PtyExitPayload>("pty-exit", "owning-window", (event) => {
         if (cancelled) return;
         const { session_id } = event.payload;
         const store = getViewerState();
@@ -192,7 +192,7 @@ export function useTerminalStatusEvents() {
     );
 
     group.track(
-      listen<PtyOsc133Payload>("pty-osc133", (event) => {
+      listenScoped<PtyOsc133Payload>("pty-osc133", "owning-window", (event) => {
         if (cancelled || event.payload.kind !== "command-end") return;
         const code = numberOrNull(event.payload.exit_code);
         if (code === null) return;

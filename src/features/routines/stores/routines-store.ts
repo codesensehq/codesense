@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { create } from "zustand";
-import { listen } from "@tauri-apps/api/event";
+import { listenScoped } from "@/shared/windows/listen-scoped";
 
 import { createListenerGroup, type ListenerGroup } from "@/shared/lib/tauri-listeners";
 import {
@@ -703,12 +703,12 @@ function ensureListening(): void {
   if (listeners) return;
   listeners = createListenerGroup();
   listeners.track(
-    listen<RoutinesChangedPayload>(ROUTINES_CHANGED_EVENT, (e) =>
+    listenScoped<RoutinesChangedPayload>(ROUTINES_CHANGED_EVENT, "every-window", (e) =>
       scheduleRefresh(e.payload.run_id === null),
     ),
   );
   // A routine shows its agent's name and archived state, which the Agents tab changes.
-  listeners.track(listen(AGENTS_CHANGED_EVENT, () => scheduleRefresh(true)));
+  listeners.track(listenScoped(AGENTS_CHANGED_EVENT, "every-window", () => scheduleRefresh(true)));
 }
 
 function releaseListening(): void {

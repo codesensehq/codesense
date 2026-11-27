@@ -13,7 +13,7 @@
  * Hidden documents catch up when shown.
  */
 import { useEffect, useRef } from "react";
-import { listen } from "@tauri-apps/api/event";
+import { listenScoped } from "@/shared/windows/listen-scoped";
 
 import type {
   ContextKind,
@@ -405,7 +405,7 @@ export function useNavSelectionPush(opts: {
     // The event names no paths, so a burst is throttled to one re-resolution.
     const group = createListenerGroup();
     group.track(
-      listen(CONTEXT_INDEX_CHANGED_EVENT, () => {
+      listenScoped(CONTEXT_INDEX_CHANGED_EVENT, "every-window", () => {
         if (indexTimer !== null) return;
         indexTimer = setTimeout(() => {
           indexTimer = null;

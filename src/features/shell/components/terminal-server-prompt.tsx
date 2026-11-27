@@ -2,7 +2,7 @@
 import { openMachinesPanel } from "@/features/machines/lib/machine-actions";
 import { TerminalActivityUpgradePrompt } from "./terminal-activity-upgrade";
 import { useEffect, useRef } from "react";
-import { listen } from "@tauri-apps/api/event";
+import { listenScoped } from "@/shared/windows/listen-scoped";
 import { toast } from "sonner";
 
 import {
@@ -97,20 +97,28 @@ function LegacyTerminalServerPrompt() {
       })
       .catch(() => {});
     const subscriptions = [
-      listen<IncompatibleTerminalServer>(TERMINAL_SERVER_INCOMPATIBLE_EVENT, (event) =>
-        found(event.payload),
+      listenScoped<IncompatibleTerminalServer>(
+        TERMINAL_SERVER_INCOMPATIBLE_EVENT,
+        "main-only",
+        (event) => found(event.payload),
       ),
-      listen<IncompatibleTerminalServer>(TERMINAL_SERVER_REFUSED_EVENT, (event) =>
-        refused(event.payload),
+      listenScoped<IncompatibleTerminalServer>(
+        TERMINAL_SERVER_REFUSED_EVENT,
+        "main-only",
+        (event) => refused(event.payload),
       ),
-      listen<TerminalServerRestarted>(TERMINAL_SERVER_RESTARTED_EVENT, (event) => {
-        const closed = event.payload.endedSessions;
-        if (closed > 0) {
-          toast.warning("The terminal server restarted", {
-            description: `${terminals(closed)} that ${closed === 1 ? "was" : "were"} open closed with it.`,
-          });
-        }
-      }),
+      listenScoped<TerminalServerRestarted>(
+        TERMINAL_SERVER_RESTARTED_EVENT,
+        "main-only",
+        (event) => {
+          const closed = event.payload.endedSessions;
+          if (closed > 0) {
+            toast.warning("The terminal server restarted", {
+              description: `${terminals(closed)} that ${closed === 1 ? "was" : "were"} open closed with it.`,
+            });
+          }
+        },
+      ),
     ].map((subscribed) => subscribed.catch(() => null));
     return () => {
       active = false;

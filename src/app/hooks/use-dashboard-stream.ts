@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { useEffect } from "react";
-import { listen } from "@tauri-apps/api/event";
+import { listenScoped } from "@/shared/windows/listen-scoped";
 
 import { safeUnlisten } from "@/shared/lib/tauri-listeners";
 import { getActiveTeamKey } from "@/shared/lib/team-key";
@@ -109,7 +109,7 @@ export function useDashboardStream(): void {
     };
 
     track(
-      listen<AgentDonePayload>(AGENT_DONE_EVENT, (event) => {
+      listenScoped<AgentDonePayload>(AGENT_DONE_EVENT, "every-window", (event) => {
         const p = event.payload;
         if (!p || !isSessionStatus(p.status)) return;
         useDashboardStreamStore.getState().pushSessionDelta({
@@ -134,7 +134,7 @@ export function useDashboardStream(): void {
       }),
     );
     track(
-      listen<AgentMessagePayload>(AGENT_MESSAGE_EVENT, (event) => {
+      listenScoped<AgentMessagePayload>(AGENT_MESSAGE_EVENT, "every-window", (event) => {
         const p = event.payload;
         if (!p) return;
         useDashboardStreamStore.getState().pushSessionDelta({
@@ -150,7 +150,7 @@ export function useDashboardStream(): void {
       // SW-GW-4: mid-run progress. Drop an off-enum phase (defence-in-depth — the
       // handler already rejects it) rather than push an unrenderable delta. `null`
       // optionals from the emit collapse to `undefined` so the delta omits them.
-      listen<AgentProgressPayload>(AGENT_PROGRESS_EVENT, (event) => {
+      listenScoped<AgentProgressPayload>(AGENT_PROGRESS_EVENT, "every-window", (event) => {
         const p = event.payload;
         if (!p) return;
         const phase = asPhase(p.phase);

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 import { useEffect } from "react";
 
-import { listen } from "@tauri-apps/api/event";
+import { listenScoped } from "@/shared/windows/listen-scoped";
 
 import { createTrailingCoalescer } from "@/features/viewer/lib/session-events";
 import { createListenerGroup } from "@/shared/lib/tauri-listeners";
@@ -38,7 +38,7 @@ export function useWorktreeRosterListener(): void {
     // Warm the store on mount so a cold-opened pane shows current truth.
     void useWorktreeRosterStore.getState().reload();
 
-    group.track(listen(WORKTREE_CHANGED_EVENT, () => coalescer.schedule()));
+    group.track(listenScoped(WORKTREE_CHANGED_EVENT, "every-window", () => coalescer.schedule()));
 
     return () => {
       coalescer.cancel();

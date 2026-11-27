@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-import { listen } from "@tauri-apps/api/event";
+import { listenScoped } from "@/shared/windows/listen-scoped";
 
 import { safeUnlisten } from "./tauri-listeners";
 
@@ -38,7 +38,9 @@ export type AgentMessageSubscribe = (
 
 /** The real Tauri-backed subscription to `mcp:agent-message`. */
 export const subscribeAgentMessages: AgentMessageSubscribe = (handler) =>
-  listen<AgentMessagePayload>("mcp:agent-message", (event) => handler(event.payload));
+  listenScoped<AgentMessagePayload>("mcp:agent-message", "every-window", (event) =>
+    handler(event.payload),
+  );
 
 /** Timer seam so the timeout path is deterministic under test. */
 export interface HandshakeTimer {

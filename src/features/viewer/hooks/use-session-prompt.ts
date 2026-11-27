@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { useCallback, useEffect, useSyncExternalStore, type RefObject } from "react";
-import { listen } from "@tauri-apps/api/event";
+import { listenScoped } from "@/shared/windows/listen-scoped";
 
 import * as commands from "@/tauri/commands";
 import type { RuntimeSessionReference, SessionPrompt } from "@/tauri/commands";
@@ -178,10 +178,15 @@ function subscribeMarks(): () => void {
     markListenPending = true;
     try {
       void Promise.resolve(
-        listen<{ session_id: string; kind: string }>("pty-osc133", (event) => {
-          const { session_id, kind } = event.payload ?? {};
-          if (session_id && (kind === "prompt-start" || kind === "command-end")) onMark(session_id);
-        }),
+        listenScoped<{ session_id: string; kind: string }>(
+          "pty-osc133",
+          "owning-window",
+          (event) => {
+            const { session_id, kind } = event.payload ?? {};
+            if (session_id && (kind === "prompt-start" || kind === "command-end"))
+              onMark(session_id);
+          },
+        ),
       )
         .then((un) => {
           // A reset while `listen` was pending: that listener is orphaned.

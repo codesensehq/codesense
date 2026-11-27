@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { useEffect } from "react";
-import { listen } from "@tauri-apps/api/event";
+import { listenScoped } from "@/shared/windows/listen-scoped";
 
 import { safeUnlisten } from "@/shared/lib/tauri-listeners";
 import {
@@ -19,18 +19,22 @@ import type { AgentMessagePayload } from "@/shared/lib/agent-handshake";
  */
 export function useAgentMessageListener(): void {
   useEffect(() => {
-    const unlisten = listen<AgentMessagePayload>("mcp:agent-message", (event) => {
-      const { sessionId, text } = event.payload;
-      if (!sessionId || !text) return;
-      const role: ChatRole = event.payload.role === "user" ? "user" : "agent";
-      // SW-WV-F6: narrow the Rust-stamped renderTarget to the three valid values;
-      // anything else (or absent) → undefined (no bubble suffix).
-      const rt = event.payload.renderTarget;
-      const renderTarget: RenderTarget | undefined =
-        rt === "terminal" || rt === "drill_doc" || rt === "artifact" ? rt : undefined;
-      logger.debug("mcp", `agent-message received for session ${sessionId}`);
-      useAgentChatStore.getState().appendMessage(sessionId, role, text, renderTarget);
-    });
+    const unlisten = listenScoped<AgentMessagePayload>(
+      "mcp:agent-message",
+      "every-window",
+      (event) => {
+        const { sessionId, text } = event.payload;
+        if (!sessionId || !text) return;
+        const role: ChatRole = event.payload.role === "user" ? "user" : "agent";
+        // SW-WV-F6: narrow the Rust-stamped renderTarget to the three valid values;
+        // anything else (or absent) → undefined (no bubble suffix).
+        const rt = event.payload.renderTarget;
+        const renderTarget: RenderTarget | undefined =
+          rt === "terminal" || rt === "drill_doc" || rt === "artifact" ? rt : undefined;
+        logger.debug("mcp", `agent-message received for session ${sessionId}`);
+        useAgentChatStore.getState().appendMessage(sessionId, role, text, renderTarget);
+      },
+    );
     return () => {
       unlisten.then(safeUnlisten).catch(() => {});
     };

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { useEffect } from "react";
-import { listen } from "@tauri-apps/api/event";
+import { listenScoped } from "@/shared/windows/listen-scoped";
 
 import { safeUnlisten } from "@/shared/lib/tauri-listeners";
 import { WORKTREE_RUN_COMPLETED_EVENT, type WorktreeRunCompletedPayload } from "@/tauri/events";
@@ -49,11 +49,15 @@ export function useEpicAssemblyListener(): void {
     let disposed = false;
     let unlisten: (() => void) | null = null;
 
-    void listen<WorktreeRunCompletedPayload>(WORKTREE_RUN_COMPLETED_EVENT, (event) => {
-      const { run_id, ok } = event.payload;
-      const cwd = markEpicInstall(run_id, ok);
-      if (cwd) syncEpicChipEcho(cwd);
-    }).then((u) => {
+    void listenScoped<WorktreeRunCompletedPayload>(
+      WORKTREE_RUN_COMPLETED_EVENT,
+      "every-window",
+      (event) => {
+        const { run_id, ok } = event.payload;
+        const cwd = markEpicInstall(run_id, ok);
+        if (cwd) syncEpicChipEcho(cwd);
+      },
+    ).then((u) => {
       if (disposed) safeUnlisten(u);
       else unlisten = u;
     });

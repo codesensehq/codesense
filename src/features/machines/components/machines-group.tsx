@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-import { listen } from "@tauri-apps/api/event";
+import { listenScoped } from "@/shared/windows/listen-scoped";
 import { Plus } from "lucide-react";
 import { getErrorMessage } from "@/shared/lib/error-message";
 
@@ -346,7 +346,7 @@ function MachineRow({
   );
   useEffect(() => {
     // The backend says when a machine's recorded tabs change.
-    const unlisten = listen<string>("terminal-restore-changed", (event) => {
+    const unlisten = listenScoped<string>("terminal-restore-changed", "every-window", (event) => {
       if (event.payload === id) setAsked((n) => n + 1);
     }).catch(() => null);
     return () => {

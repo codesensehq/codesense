@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { useEffect } from "react";
-import { listen } from "@tauri-apps/api/event";
+import { listenScoped } from "@/shared/windows/listen-scoped";
 
 import { safeUnlisten } from "@/shared/lib/tauri-listeners";
 import { resolveCanvasRender } from "@/tauri/commands";
@@ -74,9 +74,13 @@ export async function runCanvasRenderRequest(
  */
 export function useCanvasRenderBridge() {
   useEffect(() => {
-    const unlisten = listen<CanvasRenderRequest>("canvas:render-request", (event) => {
-      void runCanvasRenderRequest(event.payload);
-    });
+    const unlisten = listenScoped<CanvasRenderRequest>(
+      "canvas:render-request",
+      "main-only",
+      (event) => {
+        void runCanvasRenderRequest(event.payload);
+      },
+    );
     return () => {
       unlisten.then(safeUnlisten).catch(() => {});
     };

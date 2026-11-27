@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { useEffect } from "react";
-import { listen } from "@tauri-apps/api/event";
+import { listenScoped } from "@/shared/windows/listen-scoped";
 import { toast } from "sonner";
 
 import { discoverLocalOrgs } from "@/shared/api/org";
@@ -174,19 +174,31 @@ export function useOrgRegistrySync(): void {
   useEffect(() => {
     const group = createListenerGroup();
     group.track(
-      listen<{ principal: string }>(SOURCE_ATTACHMENTS_CHANGED_EVENT, ({ payload }) => {
-        if (payload?.principal) void applySourceAttachmentChange(payload);
-      }),
+      listenScoped<{ principal: string }>(
+        SOURCE_ATTACHMENTS_CHANGED_EVENT,
+        "every-window",
+        ({ payload }) => {
+          if (payload?.principal) void applySourceAttachmentChange(payload);
+        },
+      ),
     );
     group.track(
-      listen<OrgRegistryChangedPayload>(ORG_REGISTRY_CHANGED_EVENT, ({ payload }) => {
-        if (payload?.orgSlug) void applyOrgRegistryChange(payload);
-      }),
+      listenScoped<OrgRegistryChangedPayload>(
+        ORG_REGISTRY_CHANGED_EVENT,
+        "every-window",
+        ({ payload }) => {
+          if (payload?.orgSlug) void applyOrgRegistryChange(payload);
+        },
+      ),
     );
     group.track(
-      listen<ActiveTeamSwitchPayload>(ACTIVE_TEAM_SWITCH_EVENT, ({ payload }) => {
-        if (payload?.orgSlug && payload.team) void applyActiveTeamSwitch(payload);
-      }),
+      listenScoped<ActiveTeamSwitchPayload>(
+        ACTIVE_TEAM_SWITCH_EVENT,
+        "main-only",
+        ({ payload }) => {
+          if (payload?.orgSlug && payload.team) void applyActiveTeamSwitch(payload);
+        },
+      ),
     );
     return () => group.dispose();
   }, []);

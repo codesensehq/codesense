@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { useEffect } from "react";
-import { listen } from "@tauri-apps/api/event";
+import { listenScoped } from "@/shared/windows/listen-scoped";
 
 import {
   SYNC_WAVE_COMPLETED_EVENT,
@@ -79,7 +79,7 @@ export function useCompositeOverlayRefresh(): void {
     const track = group.track;
 
     track(
-      listen<SyncWaveCompletedPayload>(SYNC_WAVE_COMPLETED_EVENT, (event) => {
+      listenScoped<SyncWaveCompletedPayload>(SYNC_WAVE_COMPLETED_EVENT, "every-window", (event) => {
         const payload = event.payload;
         if (!payload) return;
         const teamKey = getActiveTeamKey();
@@ -96,7 +96,7 @@ export function useCompositeOverlayRefresh(): void {
     );
 
     track(
-      listen(CONTEXT_FILE_CHANGE_EVENT, () => {
+      listenScoped(CONTEXT_FILE_CHANGE_EVENT, "main-only", () => {
         // A direct write into a watched context repo (the composite's
         // team-workspace layer) — the case a wave may not cover (raw / agent
         // write). The payload carries no team identity the FE can map, so we

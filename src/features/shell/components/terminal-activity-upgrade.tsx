@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 import { useEffect, useRef } from "react";
 import { toast } from "sonner";
-import { listen } from "@tauri-apps/api/event";
+import { listenScoped } from "@/shared/windows/listen-scoped";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -52,7 +52,7 @@ export function TerminalActivityUpgradePrompt() {
   const safe = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     let active = true;
-    const subscription = listen("terminal-activity-upgrade-required", () => {
+    const subscription = listenScoped("terminal-activity-upgrade-required", "main-only", () => {
       if (active) void checkActivityUpgrade();
     }).catch(() => null);
     void subscription.then(() => {
