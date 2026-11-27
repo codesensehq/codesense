@@ -134,7 +134,7 @@ export function MessageMedia({
     <MediaCard a={a} loader={loader} live={tapped} onLoad={() => setTapped(true)} />
   );
   const afterCard = tapped && (cached || a.state === "loading");
-  const announcement = cached ? `${mediaKind(a)} loaded: ${a.alt}` : "Loading GIF…";
+  const announcement = cached ? `${mediaKind(a)} loaded: ${a.alt}` : `Loading ${mediaKind(a)}…`;
   // The region mounts empty and is filled after, so a screen reader hears what changed.
   const region = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
@@ -477,7 +477,7 @@ function MediaCard({
       <div className="meta">
         <span aria-live={live ? "polite" : undefined}>
           {loading ? (
-            "Loading GIF…"
+            `Loading ${mediaKind(a)}…`
           ) : error ? (
             error
           ) : decode ? (
@@ -496,7 +496,9 @@ function MediaCard({
           <button
             type="button"
             className="ibx-chip primary"
-            aria-label={state === "failed" ? "Retry" : `Load GIF from ${a.sourceHost}: ${a.alt}`}
+            aria-label={
+              state === "failed" ? "Retry" : `Load ${mediaKind(a)} from ${a.sourceHost}: ${a.alt}`
+            }
             disabled={loading}
             onClick={load}
           >
