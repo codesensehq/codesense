@@ -2,11 +2,12 @@
 // needs-you parity: every TS surface that counts or lists what needs the person equals the
 // one needs-you set, narrowed by its place, on the 14:02 sample day.
 //
-// The split by runtime: the mock backend serves the `needsYou` topic from
-// `tests/fixtures/sample-day-1402.json`, and this harness checks the TS surfaces against it.
-// The Rust surfaces (`codesense_overview` and the Inbox counts row's `needsYouBySender`)
-// are proven equal to the same set in cargo (`live_hub/needs_you_tests.rs`). The routines
-// count measures runs, not the set, so it is in neither.
+// The split by runtime: the mock backend derives the `needsYou` topic from the agents and Inbox
+// of `tests/fixtures/sample-day-1402.json`, and this harness checks the TS surfaces against the
+// fixture's expected set, each card placed by the team whose Inbox holds it. The Rust surfaces
+// (`codesense_overview` and the Inbox counts row's `needsYouBySender`) are proven equal to the
+// set in cargo (`live_hub/needs_you_tests.rs`). The routines count measures runs, not the set,
+// so it is in neither.
 //
 // To add a surface: append a row to `SURFACES` with its name and a `read(place)` that
 // renders or calls the surface over the mock backend and returns the needs-you ids it
@@ -18,6 +19,8 @@ import { createMockBackend } from "./mock-backend";
 import { resolveScenario } from "./scenario";
 import { SAMPLE_DAY } from "./sample-day";
 import type { HubSnapshot } from "@/features/dashboard/lib/live-hub";
+import { cardKind } from "./handlers/needs-you";
+import mergeCardCases from "../../../tests/fixtures/merge-card-cases.json";
 
 /** A place a surface is narrowed to: every team, or one team's view. */
 type Place = "all" | `team:${string}/${string}`;
@@ -37,14 +40,20 @@ async function topicIds(place: Place): Promise<string[]> {
   return view.snapshot.map((row) => row.id).sort();
 }
 
+/** Where an expected item sits: a card in the team whose Inbox holds it, an agent's item in
+ *  the agent's own team. */
+function placeOf(id: string, session: string): { org: string; team: string | null } | undefined {
+  const card = SAMPLE_DAY.inbox.find((c) => id === `inbox:${c.org}/${c.team}/${c.messageId}`);
+  return card ?? SAMPLE_DAY.agents.find((agent) => agent.session === session);
+}
+
 /** The set narrowed by place, from the fixture's expectations. */
 function expected(place: Place): string[] {
-  const teams = new Map(SAMPLE_DAY.agents.map((agent) => [agent.session, agent]));
   return SAMPLE_DAY.expect.needsYou
     .filter((item) => {
       if (place === "all") return true;
-      const agent = teams.get(item.session);
-      return agent?.team != null && place === `team:${agent.org}/${agent.team}`;
+      const at = placeOf(item.id, item.session);
+      return at?.team != null && place === `team:${at.org}/${at.team}`;
     })
     .map((item) => item.id)
     .sort();
@@ -75,7 +84,7 @@ describe("needs-you parity on the 14:02 sample day", () => {
       topic: "needsYou",
       viewKey: "all",
     })) as HubSnapshot;
-    const question = view.snapshot.find((row) => row.id === "inbox:9102");
+    const question = view.snapshot.find((row) => row.id === "inbox:acme/delivery/9102");
     expect(question).toMatchObject({
       kind: "question",
       org: "acme",
@@ -84,5 +93,10 @@ describe("needs-you parity on the 14:02 sample day", () => {
       question: "pins per window or per group?",
       messageId: 9102,
     });
+  });
+
+  it("tells a merge card from a question by the shared case table", () => {
+    for (const { name, summary, text, kind } of mergeCardCases.cases)
+      expect(cardKind({ summary, text }), name).toBe(kind);
   });
 });

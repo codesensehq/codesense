@@ -29,7 +29,7 @@ pub(crate) const CONCEPTS_GUIDE_PATH: &str = "getting-started/content/concepts/R
 /// How many rows a list section shows before it says `truncated`.
 const MAX_ROWS: usize = 25;
 
-pub(crate) const DESCRIPTION: &str = "Overview of CodeSense right now, in ONE read-only call: start here to answer any question about CodeSense state. Returns { generatedAt, context (active org/team), machines (connection status), sessions (running agents/terminals by state and machine, who launched whom, who needs you), agents (saved Agents), routines (enabled, last run, needs you), inbox (human unread; sessions with unread mail), roleQueues (per role in the active team: pending/claimed/accepted deliveries and live instances), workspaces (open workspaces and their tabs), docs (where the bundled CodeSense docs and the concepts guide are) }. Each section has `detail`: the tools to call for the full data. A section that could not be read has `error` instead of data; the rest still answer. Lists are capped (`truncated: true` when cut). Optional {guide: true}: return the concepts guide instead (how CodeSense works: orgs, teams, content layers, workspaces, machines, sessions, Agents, roles, inboxes, routines, notes, dashboards, each with its MCP tools).";
+pub(crate) const DESCRIPTION: &str = "Overview of CodeSense right now, in ONE read-only call: start here to answer any question about CodeSense state. Returns { generatedAt, context (active org/team), machines (connection status), sessions (running agents/terminals by state and machine, who launched whom, who needs you), needsYou (everything that waits on the person: questions, permission asks, merge cards, capped or failed agents, by kind; a team's agent sees only its own team's), agents (saved Agents), routines (enabled, last run, runsAwaiting: runs waiting on the person), inbox (human unread; sessions with unread mail), roleQueues (per role in the active team: pending/claimed/accepted deliveries and live instances), workspaces (open workspaces and their tabs), docs (where the bundled CodeSense docs and the concepts guide are) }. Each section has `detail`: the tools to call for the full data. A section that could not be read has `error` instead of data; the rest still answer. Lists are capped (`truncated: true` when cut). Optional {guide: true}: return the concepts guide instead (how CodeSense works: orgs, teams, content layers, workspaces, machines, sessions, Agents, roles, inboxes, routines, notes, dashboards, each with its MCP tools).";
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -219,20 +219,24 @@ fn sessions_section(
         Ok(rows) => rows,
         Err(e) => return failed(e, SESSION_TOOLS),
     };
-    let waiting = needs_you
-        .as_deref()
-        .map(waiting_sessions)
-        .unwrap_or_default();
-    let needs_you: Vec<Value> = rows
-        .iter()
-        .filter(|row| {
-            [str_at(row, "sessionId"), str_at(row, "handle")]
-                .into_iter()
-                .flatten()
-                .any(|id| waiting.contains(id))
-        })
-        .map(|row| pick(row, &["handle", "displayName", "machine"]))
-        .collect();
+    // A set that could not be read says so; it never reads as nobody waiting.
+    let needs_you = match needs_you {
+        Ok(items) => {
+            let waiting = waiting_sessions(items);
+            let rows: Vec<Value> = rows
+                .iter()
+                .filter(|row| {
+                    [str_at(row, "sessionId"), str_at(row, "handle")]
+                        .into_iter()
+                        .flatten()
+                        .any(|id| waiting.contains(id))
+                })
+                .map(|row| pick(row, &["handle", "displayName", "machine"]))
+                .collect();
+            Value::from(rows)
+        }
+        Err(e) => failed(e, NEEDS_YOU_TOOLS),
+    };
     let items: Vec<Value> = rows
         .iter()
         .filter(|row| str_at(row, "state") != Some("exited"))
@@ -594,6 +598,22 @@ fn role_entry(roles: &mut BTreeMap<String, RoleQueue>, role: String) -> &mut Rol
     })
 }
 
+/// The view of the needs-you set a caller reads: the person sees every place, a team's
+/// agent only its own team's.
+pub(crate) fn needs_you_view(
+    scope: &crate::context_repo::caller_scope::CallerScope,
+) -> Result<String, String> {
+    use crate::context_repo::caller_scope::CallerScope;
+    match scope {
+        CallerScope::Human => Ok("all".into()),
+        CallerScope::Team(view) => Ok(crate::live_hub::view_key::team_key(
+            view.org(),
+            view.reader_team(),
+        )),
+        CallerScope::Unknown => Err("the caller's team is unknown".into()),
+    }
+}
+
 /// Reads every source the overview needs from the running app. Never fails: a source
 /// that can't be read becomes its section's `error`.
 pub(crate) async fn gather(
@@ -716,7 +736,7 @@ pub(crate) async fn gather(
     let needs_you = app
         .try_state::<crate::live_hub::LiveHub>()
         .ok_or_else(|| "the live hub is not running".to_string())
-        .and_then(|hub| hub.needs_you_rows());
+        .and_then(|hub| hub.needs_you_rows(&needs_you_view(&scope)?));
 
     OverviewInputs {
         generated_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
@@ -832,6 +852,40 @@ mod tests {
         assert!(out["docs"].get("conceptsGuide").is_some());
     }
 
+    /// An unread set says so in both places it shows; the session lists still answer.
+    #[test]
+    fn an_unread_needs_you_set_is_an_error_never_nobody_waiting() {
+        let mut inputs = populated();
+        inputs.needs_you = Err("the needs-you set is not projected yet".into());
+        let out = compose(&inputs);
+        assert_eq!(
+            out["sessions"]["needsYou"]["error"],
+            "the needs-you set is not projected yet"
+        );
+        assert_eq!(
+            out["needsYou"]["error"],
+            "the needs-you set is not projected yet"
+        );
+        assert_eq!(out["sessions"]["total"], 4);
+        assert_eq!(out["sessions"]["notExited"].as_array().unwrap().len(), 3);
+    }
+
+    /// The person reads every place's items, a team's agent only its own team's view, and a
+    /// caller of no known team none.
+    #[test]
+    fn the_set_is_read_in_the_callers_view() {
+        use crate::context_repo::caller_scope::CallerScope;
+        let root = tempfile::tempdir().unwrap();
+        let team = CallerScope::Team(crate::context_repo::inheritance::team_view(
+            tempfile::TempDir::path(&root),
+            "acme",
+            "steward",
+        ));
+        assert_eq!(needs_you_view(&CallerScope::Human).unwrap(), "all");
+        assert_eq!(needs_you_view(&team).unwrap(), "team:acme/steward");
+        assert!(needs_you_view(&CallerScope::Unknown).is_err());
+    }
+
     #[test]
     fn docs_versions_are_collected_inputs_and_keep_links_and_detail() {
         let mut inputs = empty();
@@ -864,7 +918,7 @@ mod tests {
             // The set, not a session's state, says who waits on the person.
             needs_you: Ok(vec![
                 json!({"id":"agent:w1:permission","kind":"permission","session":"w1","org":"acme/ctx","team":"web","workItem":"wi_00000000000000a1"}),
-                json!({"id":"inbox:7","kind":"merge","session":"lead","org":"acme/ctx","team":"web","workItem":"wi_00000000000000a1","messageId":7}),
+                json!({"id":"inbox:acme/ctx/web/7","kind":"merge","session":"lead","org":"acme/ctx","team":"web","workItem":"wi_00000000000000a1","messageId":7}),
             ]),
             machines: Ok(vec![
                 json!({"machineId":"local","label":"This Mac","kind":"local","status":{"state":"connected","workspaces":2},"remoteMcpControl":false,"attention":0}),

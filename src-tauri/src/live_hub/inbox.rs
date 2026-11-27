@@ -157,6 +157,7 @@ fn team_cards(team: &LaunchTeam, state: &TeamInbox) -> Vec<super::needs_you::Car
                 team: Some(team.team.clone()),
                 summary: m.summary.clone(),
                 text: m.text.clone(),
+                work_item: None,
             })
         })
         .collect()

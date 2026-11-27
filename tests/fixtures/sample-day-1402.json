@@ -459,8 +459,8 @@
   },
   "expect": {
     "needsYou": [
-      { "id": "inbox:9101", "kind": "merge", "session": "tab-story-418" },
-      { "id": "inbox:9102", "kind": "question", "session": "tab-story-431", "question": "pins per window or per group?" },
+      { "id": "inbox:acme/delivery/9101", "kind": "merge", "session": "tab-story-418" },
+      { "id": "inbox:acme/delivery/9102", "kind": "question", "session": "tab-story-431", "question": "pins per window or per group?" },
       { "id": "agent:tab-design:permission", "kind": "permission", "session": "tab-design" },
       { "id": "agent:tab-architect:capped", "kind": "capped", "session": "tab-architect" }
     ],

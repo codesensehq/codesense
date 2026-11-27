@@ -186,6 +186,9 @@ struct Model {
     spend_rows: Vec<serde_json::Value>,
     /// Each live handle's work item, read from the launch registry with `rows`.
     work_items: BTreeMap<String, String>,
+    /// Whether the needs-you set's last recompute published: until then it reads as an error,
+    /// never as nobody waiting.
+    needs_you_projected: bool,
     agent_views: BTreeSet<String>,
     agent_ready: bool,
     agent_home_team: String,
@@ -479,10 +482,14 @@ impl LiveHub {
         };
         inbox.human_unread_total()
     }
-    /// The needs-you set as the hub last published it: the `needsYou` topic's `all` rows.
-    pub(crate) fn needs_you_rows(&self) -> Result<Vec<serde_json::Value>, String> {
+    /// The needs-you set as the hub last published it, in one view: `all`, or a team's
+    /// `team:<org>/<team>`. Errors until a recompute has published it.
+    pub(crate) fn needs_you_rows(&self, view: &str) -> Result<Vec<serde_json::Value>, String> {
         let mut model = self.model.lock().unwrap();
-        Ok(TopicRegistry::snapshot(&mut model.projections, needs_you::TOPIC, "all")?.snapshot)
+        if !model.needs_you_projected {
+            return Err("the needs-you set is not projected yet".into());
+        }
+        Ok(TopicRegistry::snapshot(&mut model.projections, needs_you::TOPIC, view)?.snapshot)
     }
     /// `team`'s pending needs-you mail to the human: the sum of its `counts` row's
     /// `needsYouBySender`. Errors while the team's projection is loading.
@@ -1328,7 +1335,22 @@ fn project_needs_you(model: &mut Model) -> Result<Vec<projection::Delta>, String
         &model.work_items,
     );
     let rows = needs_you::rows(&needs_you::needs_you(&inputs));
-    TopicRegistry::replace(&mut model.projections, needs_you::TOPIC, rows, None)
+    model.needs_you_projected = false;
+    let deltas = TopicRegistry::replace(&mut model.projections, needs_you::TOPIC, rows, None)?;
+    model.needs_you_projected = true;
+    Ok(deltas)
+}
+
+/// New spend rows: the agent views and the set recomputed on them. `None` when unchanged.
+fn apply_spend(
+    model: &mut Model,
+    rows: Vec<serde_json::Value>,
+) -> Result<Option<Vec<projection::Delta>>, String> {
+    if rows == model.spend_rows {
+        return Ok(None);
+    }
+    model.spend_rows = rows;
+    project_agent_views(model).map(Some)
 }
 
 pub(crate) fn spend_changed<R: tauri::Runtime>(
@@ -1340,12 +1362,10 @@ pub(crate) fn spend_changed<R: tauri::Runtime>(
     };
     let deltas = {
         let mut model = hub.model.lock().unwrap();
-        let rows = agent_list::spend::rows(value);
-        if rows == model.spend_rows {
-            return Ok(());
+        match apply_spend(&mut model, agent_list::spend::rows(value))? {
+            Some(deltas) => deltas,
+            None => return Ok(()),
         }
-        model.spend_rows = rows;
-        project_agent_views(&mut model)?
     };
     publish(app, deltas);
     Ok(())
