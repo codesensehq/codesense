@@ -786,17 +786,19 @@ impl GifService {
         match result {
             Ok(found) => {
                 // Held only when search stayed On with the same key the whole time, so a new
-                // install id never registers a GIF found under the old one. A lookup that took no
-                // rating is never held, so only a rated search can start or extend a hold.
+                // install id never registers a GIF found under the old one: the disk epoch is
+                // checked here, and `record` drops a search older than the epoch it holds. A
+                // lookup that took no rating is never held, so only a rated search can start or
+                // extend a hold.
                 let query = match request {
                     Request::Search { query, .. } => Some(query.as_str()),
                     Request::Lookup { .. } => None,
                 };
                 let holds = query.is_some() || Provider::rates_lookup(provider);
                 if holds && install::install_epoch(&self.data_dir, provider) == epoch {
-                    analytics::Analytics::start_epoch(&self.analytics, provider, epoch);
                     let now = (self.clock)();
-                    self.analytics.record(provider, &found, rating, query, now);
+                    self.analytics
+                        .record(provider, &found, rating, query, now, epoch);
                 }
                 Ok((provider, found.into_iter().map(|f| f.candidate).collect()))
             }

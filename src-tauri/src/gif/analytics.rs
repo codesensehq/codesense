@@ -53,6 +53,13 @@ struct Held {
     epochs: Epochs,
 }
 
+/// Hold `provider`'s entries for `epoch` from now on, letting go of those held for another.
+fn follow(held: &mut Held, provider: Provider, epoch: u64) {
+    *held.epochs.of_mut(provider) = epoch;
+    HashMap::retain(&mut held.entries, |(p, _), _| *p != provider);
+    VecDeque::retain(&mut held.order, |(p, _)| *p != provider);
+}
+
 pub(crate) struct Analytics {
     held: Mutex<Held>,
 }
@@ -73,26 +80,17 @@ impl Analytics {
     /// the old one. The other provider's entries stay.
     pub(crate) fn start_epoch(&self, provider: Provider, epoch: u64) {
         let mut held = self.held.lock().unwrap_or_else(|e| e.into_inner());
-        let Held {
-            entries,
-            order,
-            epochs,
-        } = &mut *held;
-        let seen = match provider {
-            Provider::Giphy => &mut epochs.giphy,
-            Provider::Klipy => &mut epochs.klipy,
-        };
-        if *seen != epoch {
-            *seen = epoch;
-            HashMap::retain(entries, |(p, _), _| *p != provider);
-            VecDeque::retain(order, |(p, _)| *p != provider);
+        if held.epochs.of(provider) != epoch {
+            follow(&mut held, provider, epoch);
         }
     }
 
     /// Hold each found GIF until an hour from `now_ms`, with the `rating` and `query` it was found
     /// at, dropping expired entries and then the oldest past the cap. A GIPHY result registers
     /// through its pingbacks, so one without them is not held; a KLIPY result registers by its
-    /// id and has none.
+    /// id and has none. `epoch` is the install epoch the search ran under. Epochs only rise, so a
+    /// search under one older than `provider`'s held epoch is stale and not held, and a newer
+    /// one is followed first, as [`Self::start_epoch`] does.
     pub(crate) fn record(
         &self,
         provider: Provider,
@@ -100,8 +98,15 @@ impl Analytics {
         rating: Rating,
         query: Option<&str>,
         now_ms: i64,
+        epoch: u64,
     ) {
         let mut held = self.held.lock().unwrap_or_else(|e| e.into_inner());
+        let held_epoch = held.epochs.of(provider);
+        match epoch.cmp(&held_epoch) {
+            std::cmp::Ordering::Less => return,
+            std::cmp::Ordering::Equal => {}
+            std::cmp::Ordering::Greater => follow(&mut held, provider, epoch),
+        }
         let Held { entries, order, .. } = &mut *held;
         for f in found {
             let pingbacks = match (&f.pingbacks, provider) {

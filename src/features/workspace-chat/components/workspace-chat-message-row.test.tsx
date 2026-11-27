@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@/test-utils";
+import { GIF_PROVIDERS } from "@/shared/lib/gif-providers";
 import type { InboxMediaAttachment, WorkspaceChatMessage } from "@/tauri/commands";
 import { formatClock } from "@/features/inbox/model";
 import type { ChatIdentity } from "./workspace-chat-body";
@@ -164,7 +165,7 @@ describe("WorkspaceChatMessageRow lightbox and attribution", () => {
       name: `GIF from Builder, ${formatClock(AT)}`,
     });
     expect(dialog.textContent).toContain("A cat waves");
-    expect(dialog.textContent).toContain("GIF · 320 × 180 · Powered by GIPHY");
+    expect(dialog.textContent).toContain(`GIF · 320 × 180 · ${GIF_PROVIDERS.giphy.poweredBy}`);
     expect(
       screen.getByRole("link", { name: "Open source page · i.giphy.com ↗" }).getAttribute("href"),
     ).toBe("https://i.giphy.com/cat.gif");
@@ -173,7 +174,7 @@ describe("WorkspaceChatMessageRow lightbox and attribution", () => {
     await waitFor(() => expect(document.activeElement).toBe(open));
   });
 
-  it("shows Powered by GIPHY under the bubble in every state", () => {
+  it("shows GIPHY's poweredBy under the bubble in every state", () => {
     const states: Array<Partial<WorkspaceChatMessage>> = [
       cached,
       held(),
@@ -186,7 +187,7 @@ describe("WorkspaceChatMessageRow lightbox and attribution", () => {
     ];
     for (const state of states) {
       const { unmount } = row(state);
-      expect(screen.getByText("Powered by GIPHY")).toBeTruthy();
+      expect(screen.getByText(GIF_PROVIDERS.giphy.poweredBy)).toBeTruthy();
       unmount();
     }
   });
@@ -202,7 +203,7 @@ describe("WorkspaceChatMessageRow lightbox and attribution", () => {
     expect(screen.queryByText(/KLIPY/)).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Open GIF: A cat waves" }));
     expect((await screen.findByRole("dialog")).textContent).toContain(
-      "GIF · 320 × 180 · via KLIPY",
+      `GIF · 320 × 180 · ${GIF_PROVIDERS.klipy.poweredBy}`,
     );
   });
 });
@@ -292,7 +293,7 @@ describe("WorkspaceChatMessageRow failed and blocked", () => {
     expect(screen.getByTestId("ibx-media-card").textContent).toContain(
       "Couldn't load this GIF. The file is over 8 MB.",
     );
-    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    fireEvent.click(screen.getByRole("button", { name: "Retry GIF: A cat waves" }));
     expect(loadWorkspaceChatMedia).toHaveBeenCalledWith("story:ws-1", 7);
     unmount();
     row({
@@ -303,7 +304,7 @@ describe("WorkspaceChatMessageRow failed and blocked", () => {
     expect(screen.getByTestId("ibx-media-card").textContent).toContain(
       "Couldn't load this GIF. i.giphy.com didn't answer.",
     );
-    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Retry/ })).toBeNull();
   });
 
   it("shows the failed card when the image won't decode", async () => {

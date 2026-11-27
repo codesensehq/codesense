@@ -18,6 +18,7 @@ vi.mock("@/tauri/commands", async (original) => ({
 
 import type { InboxMediaAttachment, WorkspaceChatMessage } from "@/tauri/commands";
 import { chatMediaLoader } from "@/features/workspace-chat/lib/chat-media-loader";
+import { cssRules } from "@/test/css-rules";
 import { fixtureMessages } from "../fixtures";
 import { formatClock } from "../model";
 import { isCachedImage, mediaReason, MessageMedia, type MediaLoader } from "./message-media";
@@ -182,7 +183,7 @@ describe.each(LOADERS)("MessageMedia with the $name loader", (c) => {
       "https://media.example/dog.gif",
     );
     expect(screen.queryByRole("figure")).toBeNull();
-    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Retry/ })).toBeNull();
   });
 });
 
@@ -261,6 +262,30 @@ describe("MessageMedia loading shimmer", () => {
     const frames = shim.slice(0, shim.indexOf("\n  }\n") + 1);
     expect(frames).toMatch(/background-color:/);
     expect(frames).not.toMatch(/opacity|filter|[^-]color:/);
+  });
+});
+
+describe("chip target size", () => {
+  it("inbox.css gives interactive chips a 24px hit area", () => {
+    const css = cssRules(readFileSync(resolve(__dirname, "../inbox.css"), "utf-8"));
+    const chip = css.get(".ibx-chip")!;
+    // The drawn chip stays as it is.
+    expect(chip.height).toBe("22px");
+    const border = parseFloat(chip.border!);
+    // A Load or Retry button, and the blocked card's source link, which fills its chip.
+    for (const [target, box] of [
+      ["button.ibx-chip", "button.ibx-chip"],
+      [".ibx-chip a", ".ibx-chip:has(a)"],
+    ] as const) {
+      expect(css.get(box)?.position, box).toBe("relative");
+      const after = css.get(`${target}::after`);
+      expect(after, target).toBeDefined();
+      expect(after!.content).toBe('""');
+      expect(after!.position).toBe("absolute");
+      // An absolute box is laid out from its container's padding edge, inside the border.
+      const [top, , bottom = top] = after!.inset!.split(/\s+/).map(parseFloat) as number[];
+      expect(22 - 2 * border - top! - bottom!, target).toBeGreaterThanOrEqual(24);
+    }
   });
 });
 
