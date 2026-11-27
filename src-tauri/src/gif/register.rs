@@ -297,10 +297,12 @@ pub(crate) struct Registration {
     pings: Mutex<HashMap<String, VecDeque<i64>>>,
     /// Held while the random id is read or made, so concurrent sends make one.
     creating: tokio::sync::Mutex<()>,
-    /// No random id call before this (ms): set by a failed one.
-    random_retry_at: Mutex<i64>,
-    /// No keychain read for a serve before this (ms): set by a read that failed.
-    key_retry_at: Mutex<i64>,
+    /// No random id call before this (GIPHY's install epoch, ms): set by a failed one. The wait
+    /// holds only under the epoch it was set in.
+    random_retry_at: Mutex<(u64, i64)>,
+    /// No keychain read for a serve before this (GIPHY's install epoch, ms): set by a read that
+    /// failed. The wait holds only under the epoch it was set in.
+    key_retry_at: Mutex<(u64, i64)>,
     /// Each provider's install epoch what is held here belongs to.
     epoch: Mutex<Epochs>,
 }
@@ -321,8 +323,8 @@ impl Registration {
             sent: std::sync::Mutex::new(HashMap::new()),
             pings: std::sync::Mutex::new(HashMap::new()),
             creating: tokio::sync::Mutex::new(()),
-            random_retry_at: std::sync::Mutex::new(0),
-            key_retry_at: std::sync::Mutex::new(0),
+            random_retry_at: std::sync::Mutex::new((0, 0)),
+            key_retry_at: std::sync::Mutex::new((0, 0)),
             epoch: std::sync::Mutex::new(Epochs::default()),
         }
     }
@@ -354,8 +356,8 @@ impl Registration {
             HashMap::retain(&mut lock(&self.sent), |(sent, ..), _| *sent != provider);
             if provider == ONLOAD_PROVIDER {
                 lock(&self.onloads).clear();
-                *lock(&self.random_retry_at) = 0;
-                *lock(&self.key_retry_at) = 0;
+                *lock(&self.random_retry_at) = (0, 0);
+                *lock(&self.key_retry_at) = (0, 0);
             }
         }
         *seen = now;
@@ -463,7 +465,8 @@ impl Registration {
         // the hour's pings, and not again within RANDOM_ID_RETRY_MS of a failure.
         let now = (self.clock)();
         let bucket_key = super::bucket_key(provider, fp);
-        if now < *lock(&self.random_retry_at) {
+        let (set_in, until) = *lock(&self.random_retry_at);
+        if set_in == epoch && now < until {
             log::info!(target: "gif", "gif registration: waiting to ask GIPHY for an install id again");
             return None;
         }
@@ -489,7 +492,7 @@ impl Registration {
             }
         };
         let Some(id) = id else {
-            self.wait_for_random_id(now);
+            self.wait_for_random_id(epoch, now);
             return None;
         };
         // Saved only if search was not turned Off, nor the key removed or replaced, meanwhile.
@@ -506,20 +509,21 @@ impl Registration {
             }
             Ok(Err(e)) => {
                 log::warn!(target: "gif", "gif registration: the install id could not be saved: {e}");
-                self.wait_for_random_id(now);
+                self.wait_for_random_id(epoch, now);
                 None
             }
             Err(e) => {
                 log::warn!(target: "gif", "gif registration: the install id write stopped: {e}");
-                self.wait_for_random_id(now);
+                self.wait_for_random_id(epoch, now);
                 None
             }
         }
     }
 
-    /// No random id call again before [`RANDOM_ID_RETRY_MS`] from `now`.
-    fn wait_for_random_id(&self, now: i64) {
-        *lock(&self.random_retry_at) = now + RANDOM_ID_RETRY_MS;
+    /// No random id call again under GIPHY's install epoch `epoch` before [`RANDOM_ID_RETRY_MS`]
+    /// from `now`.
+    fn wait_for_random_id(&self, epoch: u64, now: i64) {
+        *lock(&self.random_retry_at) = (epoch, now + RANDOM_ID_RETRY_MS);
     }
 
     /// Count one ping against `key`'s hour, or say the hour's pings are spent.
@@ -916,8 +920,10 @@ impl Registration {
         }
         if !Vec::is_empty(&due) {
             // After a failed keychain read, serves wait before reading it again, so a denied
-            // access prompt is not raised by every view; their onloads stay pending meanwhile.
-            let waiting_for_key = now < *lock(&self.key_retry_at);
+            // access prompt is not raised by every view; their onloads stay pending meanwhile. A
+            // wait set under an earlier epoch holds nothing.
+            let (set_in, until) = *lock(&self.key_retry_at);
+            let waiting_for_key = set_in == started && now < until;
             let active = if waiting_for_key {
                 Err(NoKey::Unavailable)
             } else {
@@ -932,7 +938,7 @@ impl Registration {
                 }
                 Err(NoKey::Unavailable) => {
                     if !waiting_for_key {
-                        *lock(&self.key_retry_at) = now + KEY_RETRY_MS;
+                        *lock(&self.key_retry_at) = (started, now + KEY_RETRY_MS);
                     }
                 }
                 Ok(keyed) => {
