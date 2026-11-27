@@ -245,6 +245,8 @@ import {
   type SavedPresetTree,
   type TilePlacementTarget,
   parseMosaicNode,
+  serializeMosaicNode,
+  type SavedMosaicNode,
   seedTreeFromFlat,
   buildBalancedGrid,
   reconcileMosaic,
@@ -1840,6 +1842,45 @@ export function defaultForegroundLayout(partial?: Partial<ForegroundLayout>): Fo
     // SW-EW-17: absent → null (derive depth-1 from preset/direction at render).
     root: partial?.root ?? null,
   };
+}
+
+/** A foreground layout read back from saved state: its root goes through the
+ *  kit's parse, so a leaf saved under either key loads and a malformed root
+ *  reads as none. */
+function restoredForegroundLayout(saved: unknown): ForegroundLayout {
+  const partial = (saved && typeof saved === "object" ? saved : {}) as Partial<ForegroundLayout>;
+  return defaultForegroundLayout({ ...partial, root: parseMosaicNode(partial.root) });
+}
+
+/** Every team's saved foreground layout, restored. */
+function restoredForegroundLayouts(saved: unknown): Record<string, ForegroundLayout> {
+  return Object.fromEntries(
+    Object.entries((saved ?? {}) as Record<string, unknown>).map(([k, v]) => [
+      k,
+      restoredForegroundLayout(v),
+    ]),
+  );
+}
+
+/** Every team's saved per-rail foreground layouts, restored. */
+function restoredForegroundLayoutsByRail(
+  saved: unknown,
+): Record<string, Record<string, ForegroundLayout>> {
+  return Object.fromEntries(
+    Object.entries((saved ?? {}) as Record<string, unknown>).map(([tk, byRail]) => [
+      tk,
+      restoredForegroundLayouts(byRail),
+    ]),
+  );
+}
+
+/** The saved form of foreground layouts: every root's leaves carry both keys. */
+function savedForegroundLayouts(
+  layouts: Record<string, ForegroundLayout>,
+): Record<string, Omit<ForegroundLayout, "root"> & { root: SavedMosaicNode | null }> {
+  return Object.fromEntries(
+    Object.entries(layouts).map(([k, v]) => [k, { ...v, root: serializeMosaicNode(v.root) }]),
+  );
 }
 
 /** SW-CW-7: the pickable-preset ring the hot-key cycles through, in order. The
@@ -6079,11 +6120,17 @@ function serializedViewerPrefs(state: ViewerState): Record<string, unknown> {
     navLens,
     agentsPaneHiddenTeams,
     agentsWorkspaceFilter,
-    foregroundLayout,
+    // Saved with both leaf keys, so a build that reads only `workspaceId` still opens it.
+    foregroundLayout: savedForegroundLayouts(foregroundLayout),
     // SW-EW-40: persist the per-rail foreground arrangement (railKeyByWorkspaceId
     // is runtime-only — a pure tree derivation — so it is NOT serialized here,
     // like selectedEpicDirName).
-    foregroundLayoutByRail,
+    foregroundLayoutByRail: Object.fromEntries(
+      Object.entries(foregroundLayoutByRail).map(([tk, byRail]) => [
+        tk,
+        savedForegroundLayouts(byRail),
+      ]),
+    ),
     // SW-EW-38: persist the per-team tray lens (selectedEpicDirName is
     // runtime-only — R3 — so it is deliberately NOT serialized here).
     trayMode,
@@ -6121,7 +6168,12 @@ function serializedViewerPrefs(state: ViewerState): Record<string, unknown> {
     // Remote tab focus belongs to this viewer; local focus comes from its host.
     terminalViewerFocus: state.terminalLayout.focus ?? {},
     // The sizes each workspace's tab grid was dragged to (this viewer's own).
-    terminalTabGridSizes: state.tabGridLayout,
+    terminalTabGridSizes: Object.fromEntries(
+      Object.entries(state.tabGridLayout).map(([k, v]) => [
+        k,
+        { ...v, root: serializeMosaicNode(v.root) },
+      ]),
+    ),
     statusNavExpandedPaths,
     settings,
     pipelineScope,
@@ -12581,31 +12633,13 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
           // SW-EW-3: new field — no migration, absent → {} (backward-compatible).
           // `preset` is normalized for pre-EW-4 entries (defaultForegroundLayout
           // derives it from `direction`). Expanded is the global chrome's.
-          foregroundLayout: pruneTeamKeyed(
-            Object.fromEntries(
-              Object.entries(
-                (savedForegroundLayout ?? {}) as Record<string, Partial<ForegroundLayout>>,
-              ).map(([k, v]) => [k, defaultForegroundLayout(v)]),
-            ),
-          ),
+          foregroundLayout: pruneTeamKeyed(restoredForegroundLayouts(savedForegroundLayout)),
           // SW-EW-40: new persisted nested slice — no migration, absent → {}
           // (mirrors foregroundLayout), each rail's layout restored the same way.
           // railKeyByWorkspaceId is runtime-only (R3) so it has no restore line —
           // it starts {} and syncWorkspaceFrontmatter fills it on the first tree.
           foregroundLayoutByRail: pruneTeamKeyed(
-            Object.fromEntries(
-              Object.entries(
-                (savedForegroundLayoutByRail ?? {}) as Record<
-                  string,
-                  Record<string, Partial<ForegroundLayout>>
-                >,
-              ).map(([tk, byRail]) => [
-                tk,
-                Object.fromEntries(
-                  Object.entries(byRail ?? {}).map(([rk, v]) => [rk, defaultForegroundLayout(v)]),
-                ),
-              ]),
-            ),
+            restoredForegroundLayoutsByRail(savedForegroundLayoutByRail),
           ),
           // SW-EW-38: new persisted slice — no migration, absent → {}
           // (mirrors SW-FX-8 navCollapsed). selectedEpicDirName is runtime-only
@@ -13035,6 +13069,9 @@ export function applyOwnedViewerPrefs(viewer: Record<string, unknown>, reset = f
       ]))
         viewerState.applyLayout({ kind: "focused", key: id, session: focus[id] ?? null });
     } else if (key === "terminalTabGridSizes") patch.tabGridLayout = savedTabGrids(value);
+    else if (key === "foregroundLayout") patch.foregroundLayout = restoredForegroundLayouts(value);
+    else if (key === "foregroundLayoutByRail")
+      patch.foregroundLayoutByRail = restoredForegroundLayoutsByRail(value);
     else if (key === "workspaces") {
       patch.workspaces = Object.fromEntries(
         [

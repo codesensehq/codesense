@@ -94,12 +94,18 @@ function View({ node, zoomPath }: { node: MosaicNode | null; zoomPath?: number[]
   );
 }
 
-function mount(node: MosaicNode) {
-  const view = render(<View node={node} />);
+const resetCounts = () => {
   leafRenders = {};
   leafMounts = {};
   splitRenders = {};
   splitMounts = {};
+};
+
+/** Mount `node`, then count only what later updates touch. */
+function mount(node: MosaicNode) {
+  resetCounts();
+  const view = render(<View node={node} />);
+  resetCounts();
   return {
     update: (next: MosaicNode | null, zoomPath?: number[] | null) =>
       act(() => view.rerender(<View node={next} zoomPath={zoomPath} />)),

@@ -286,9 +286,10 @@ describe("tab-grid sizes don't outlive what they size", () => {
     seedSizes();
     await useViewerStore.getState().removeTerminalTab(TEAM, "a", WS, { replace: false });
     const root = saved()?.root;
-    expect(
-      root?.kind === "split" && root.children.map((c) => c.kind === "leaf" && c.workspaceId),
-    ).toEqual(["b", "c"]);
+    expect(root?.kind === "split" && root.children.map((c) => c.kind === "leaf" && c.id)).toEqual([
+      "b",
+      "c",
+    ]);
     expect(root?.kind === "split" && root.sizes[0]).toBeCloseTo(37.5);
   });
 

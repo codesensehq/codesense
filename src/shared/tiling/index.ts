@@ -7,5 +7,7 @@
 // ---------------------------------------------------------------------------
 
 export * from "./mosaic-tree";
-export { MosaicView, type MosaicViewProps } from "./mosaic-view";
+export { MosaicView, type MosaicRenderProbe, type MosaicViewProps } from "./mosaic-view";
+export { ROOT_SPLIT_KEY, stabilizeTree, type StableNode, type StableTree } from "./stabilize-tree";
 export { TileGroup, reconcileSizes, type TileLike, type TileRenderContext } from "./tile-group";
+export * from "./zones";

@@ -33,8 +33,10 @@ describe("tiling kit guard", () => {
   it.each(["MosaicNode", "EDGE_BANDS", "resolveZoneAt", "TileDropSide"])(
     "defines %s only in the kit",
     (name) => {
+      // A declaration, not a name in an import or export list.
       const definition = new RegExp(
-        `\\b(?:type|interface|const|let|function|class|enum)\\s+${name}\\b`,
+        `^\\s*(?:export\\s+)?(?:declare\\s+)?(?:type\\s+${name}\\s*[=<]|(?:interface|class|enum)\\s+${name}\\b|(?:const|let|var)\\s+${name}\\s*[:=]|function\\s+${name}\\s*[<(])`,
+        "m",
       );
       const outside = files.filter((f) => !f.startsWith(KIT) && definition.test(read(f)));
       expect(outside).toEqual([]);

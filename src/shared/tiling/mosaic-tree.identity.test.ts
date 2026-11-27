@@ -3,11 +3,13 @@ import { describe, expect, it } from "vitest";
 
 import {
   appendLeaf,
+  evenSizes,
   moveLeaf,
   pruneLeaf,
   replaceLeafWorkspaceId,
   setNodeSizes,
   splitAt,
+  swapLeaves,
   type MosaicNode,
 } from "./mosaic-tree";
 
@@ -82,6 +84,21 @@ describe("untouched subtrees stay ===", () => {
     expect(childAt(next, 0, 1)).toBe(bc);
   });
 
+  it("swapLeaves keeps the branches neither leaf is in", () => {
+    const { root, def } = tree();
+    const next = swapLeaves(root, "a", "b");
+    expect(childAt(next, 1)).toBe(def);
+    expect(childAt(next, 0, 1, 1)).toBe(childAt(root, 0, 1, 1));
+  });
+
+  it("evenSizes keeps the siblings of the evened split", () => {
+    const { root, bc } = tree();
+    const next = evenSizes(root, [1, 1]);
+    expect(childAt(next, 0)).toBe(childAt(root, 0));
+    expect(childAt(next, 0, 1)).toBe(bc);
+    expect(childAt(next, 1, 0)).toBe(childAt(root, 1, 0));
+  });
+
   it("moveLeaf keeps the branches it neither leaves nor enters", () => {
     const { root, bc } = tree();
     const next = moveLeaf(root, "e", { targetWorkspaceId: "d", axis: "column", side: "after" });
@@ -119,6 +136,19 @@ describe("a call that changes nothing returns its input", () => {
     const { root } = tree();
     expect(replaceLeafWorkspaceId(root, "a", "a")).toBe(root);
     expect(replaceLeafWorkspaceId(root, "nope", "z")).toBe(root);
+  });
+
+  it("swapLeaves of one id twice or an absent id", () => {
+    const { root } = tree();
+    expect(swapLeaves(root, "a", "a")).toBe(root);
+    expect(swapLeaves(root, "a", "nope")).toBe(root);
+  });
+
+  it("evenSizes on an even split or a path that isn't a split", () => {
+    const { root } = tree();
+    // [1] is the even d/ef split; [0, 0] is a leaf.
+    expect(evenSizes(root, [1])).toBe(root);
+    expect(evenSizes(root, [0, 0])).toBe(root);
   });
 
   it("setNodeSizes with equal sizes, at the root and nested", () => {

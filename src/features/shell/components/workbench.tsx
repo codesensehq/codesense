@@ -12,10 +12,8 @@ import {
   DndContext,
   DragOverlay,
   PointerSensor,
-  pointerWithin,
   useSensor,
   useSensors,
-  type CollisionDetection,
   type DragEndEvent,
   type DragStartEvent,
 } from "@dnd-kit/core";
@@ -46,7 +44,7 @@ import {
 } from "@/features/viewer/lib/focus-cascade";
 import { CliDragStaleContext } from "@/features/viewer/lib/cli-drag-scope";
 import { registerRightPaneHost } from "@/features/viewer/lib/right-pane-host-registry";
-import { parseTileZoneId, unwrapDragWorkspaceId } from "@/features/viewer/lib/terminal-drag";
+import { unwrapDragWorkspaceId } from "@/features/viewer/lib/terminal-drag";
 import {
   isConsoleLayout,
   isTerminalColumnShown,
@@ -67,23 +65,11 @@ import { isPanelOverlayShown } from "../right-pane/panel-maximize-boundary";
 
 import { NoTeamTabHost } from "./no-team-tab-host";
 import { TeamCrashFallback } from "./root-crash-fallback";
+import { tileZonePriorityCollision } from "./tile-zone-collision";
 
 /** Stable empty list for the `openedTeams` selector, so a nullish slice never makes a new array
  *  (a new reference every render would re-render every subscriber). */
 const EMPTY_TEAMS: readonly string[] = Object.freeze<string[]>([]);
-
-/** SW-EW-17 / SW-EW-33: prefer a tile EDGE zone under the pointer, so a directional drop wins over
- *  the whole-grid droppable underneath. With tiles but no edge zone under the pointer (a tile's
- *  inert center, or the dragged tile's own), there is no valid drop: a workspace never drops INTO
- *  another, only splits at an edge, so the drag snaps back. The whole-grid droppable is the
- *  fallback only with no tile zones at all (an empty grid: the drop opens the first tile). */
-const tileZonePriorityCollision: CollisionDetection = (args) => {
-  const hits = pointerWithin(args);
-  const zoneHits = hits.filter((h) => parseTileZoneId(String(h.id)));
-  if (zoneHits.length > 0) return zoneHits;
-  const tilesExist = args.droppableContainers.some((c) => parseTileZoneId(String(c.id)));
-  return tilesExist ? [] : hits;
-};
 
 /** The workspace being dragged (for the ghost), and the team it was dragged in. */
 interface ActiveDrag {

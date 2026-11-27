@@ -67,7 +67,8 @@ describe("stabilizeTree", () => {
     expect(at(next, 2)).toBe(at(prev, 2));
     expect(at(next, 1, 0)).toBe(at(prev, 1, 0));
     expect(at(next, 1, 1)).not.toBe(at(prev, 1, 1));
-    expect(at(next, 1, 1).node.kind === "split" && at(next, 1, 1).node.sizes).toEqual([30, 70]);
+    const resizedNode = at(next, 1, 1).node;
+    expect(resizedNode.kind === "split" && resizedNode.sizes).toEqual([30, 70]);
     // The changed splits keep their keys, so nothing remounts.
     expect(keys(next.root)).toEqual(keys(prev.root));
   });

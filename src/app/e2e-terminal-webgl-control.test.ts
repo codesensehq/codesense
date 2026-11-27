@@ -33,7 +33,7 @@ describe("WebDriver terminal-webgl fixture control", () => {
   it("materializes one deterministic foreground mosaic leaf per pane", () => {
     const layout = createFixtureForegroundLayout(TERMINAL_WEBGL_WORKSPACE_IDS);
     const leaves = (node: NonNullable<typeof layout.root>): string[] =>
-      node.kind === "leaf" ? [node.workspaceId] : node.children.flatMap(leaves);
+      node.kind === "leaf" ? [node.id] : node.children.flatMap(leaves);
     expect(layout.root).not.toBeNull();
     expect(leaves(layout.root!)).toEqual([...TERMINAL_WEBGL_WORKSPACE_IDS]);
   });

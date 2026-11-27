@@ -99,9 +99,10 @@ describe("placeWorkspaceTile — directional", () => {
   it("leaves expanded on a directional split", () => {
     useViewerStore.getState().expandWorkspace(TEAM, A);
     expect(useViewerStore.getState().cliExpanded).toBe(true);
+    // Below B: a drop right of B, where C already sits, would be a no-op.
     useViewerStore.getState().placeWorkspaceTile(TEAM, C, {
       targetWorkspaceId: B,
-      axis: "row",
+      axis: "column",
       side: "after",
     });
     expect(useViewerStore.getState().cliExpanded).toBe(false);
