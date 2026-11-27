@@ -1087,3 +1087,73 @@ async fn chat_media_owner_same_id_stays_apart() {
     assert_eq!(owners[0].chat, None);
     assert_eq!(owners[0].message_id, inbox_id);
 }
+
+#[tokio::test]
+async fn chat_media_read_reports_blocked_while_the_team_media_is_off() {
+    let fake = FakeHost::new();
+    let store = fake.chat().clone();
+    let image =
+        |url: &str| Attachment::remote(url, "Typing cat", &Config::default(), true).unwrap();
+    let post = |attachment: Attachment, state: ChatMediaState| ChatAppend {
+        workspace_id: WS.into(),
+        from: "H1".into(),
+        from_name: "H1".into(),
+        text: String::new(),
+        kind: MessageKind::Chat,
+        content_type: None,
+        on_click: None,
+        primary_file: None,
+        media: Some(ChatAppendMedia {
+            team: team(),
+            attachment,
+            state,
+        }),
+    };
+    let mut fetched = image(TAGGED_URL);
+    fetched.state = "cached".into();
+    fetched.sha256 = Some(gif_sha());
+    let mut local = fetched.clone();
+    local.source_url = None;
+    local.source_host = None;
+    for (attachment, state) in [
+        (fetched, ChatMediaState::Cached),
+        (image(TAGGED_URL), ChatMediaState::Pending),
+        (image(TAGGED_URL), ChatMediaState::TapToLoad),
+        (local, ChatMediaState::Cached),
+    ] {
+        store.append(post(attachment, state), 1).unwrap();
+    }
+    let stored = store.read(WS, None, None).unwrap().messages;
+    let host = port(&fake);
+    let states = |view: Vec<WorkspaceChatReadMessage>| -> Vec<serde_json::Value> {
+        view.iter()
+            .map(|m| serde_json::to_value(&m.media.as_ref().unwrap().state).unwrap())
+            .collect()
+    };
+
+    fake.set_media_config(
+        "default",
+        Config {
+            remote: Remote::Off,
+            ..Config::default()
+        },
+    );
+    let off = states(read_view(&*host, WS, stored.clone()).await);
+    assert_eq!(
+        off,
+        ["blocked", "blocked", "blocked", "cached"].map(serde_json::Value::from),
+        "a URL image reads blocked whatever its stored state; a local file keeps cached"
+    );
+    assert_eq!(
+        store.read(WS, None, None).unwrap().messages,
+        stored,
+        "blocked is presented, never stored"
+    );
+
+    fake.set_media_config("default", Config::default());
+    let on = states(read_view(&*host, WS, stored.clone()).await);
+    assert_eq!(
+        on,
+        ["cached", "pending", "tapToLoad", "cached"].map(serde_json::Value::from)
+    );
+}

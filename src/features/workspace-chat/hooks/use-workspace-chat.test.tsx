@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { act, render, screen, waitFor } from "@/test-utils";
+import { act, fireEvent, render, screen, waitFor } from "@/test-utils";
 
 import type {
   WorkspaceChatMessage,
@@ -229,5 +229,136 @@ describe("SW-WC-3 · mergeMessages (dedup helper)", () => {
     const prev = [a];
     expect(mergeMessages(prev, [chatMsg(1, { text: "dup" })])).toBe(prev);
     expect(mergeMessages(prev, [])).toBe(prev);
+  });
+});
+
+describe("useWorkspaceChat media events", () => {
+  const MEDIA_EVENT = "codesense:workspace-chat-media";
+  const pendingGif = (id: number) =>
+    chatMsg(id, {
+      text: "",
+      attachments: [{ kind: "image", alt: "cat", state: "pending" }],
+      mediaState: "pending",
+    });
+  const cachedGif = (id: number) =>
+    chatMsg(id, {
+      text: "",
+      attachments: [{ kind: "image", alt: "cat", state: "cached", sha256: "d".repeat(64) }],
+      mediaState: "cached",
+    });
+
+  function MediaHost({ workspaceId }: { workspaceId: string }) {
+    const { messages, headId, reload } = useWorkspaceChat(workspaceId);
+    return (
+      <div>
+        <span data-testid="head">{headId}</span>
+        <button type="button" onClick={() => void reload()}>
+          reload
+        </button>
+        <ul>
+          {(messages ?? []).map((m) => (
+            <li key={m.messageId} data-testid="row">
+              {m.messageId}:{m.mediaState ?? "-"}
+            </li>
+          ))}
+        </ul>
+      </div>
+    );
+  }
+  const rows = () => screen.getAllByTestId("row").map((n) => n.textContent);
+
+  function deferred<T>() {
+    let resolve!: (v: T) => void;
+    const promise = new Promise<T>((r) => (resolve = r));
+    return { promise, resolve };
+  }
+
+  beforeEach(() => {
+    listeners.clear();
+    workspaceChatRead.mockReset();
+  });
+
+  it("re-reads and replaces just that message, with no new post and the head unchanged", async () => {
+    workspaceChatRead.mockResolvedValueOnce(
+      buildResult("story:ws-1", [pendingGif(1), chatMsg(2)], { headId: 2 }),
+    );
+    render(<MediaHost workspaceId="story:ws-1" />);
+    await waitFor(() => expect(rows()).toEqual(["1:pending", "2:-"]));
+    workspaceChatRead.mockResolvedValueOnce(
+      buildResult("story:ws-1", [cachedGif(1)], { headId: 2 }),
+    );
+    await act(async () => emit(MEDIA_EVENT, { workspaceId: "story:ws-1", messageId: 1 }));
+    await waitFor(() => expect(rows()).toEqual(["1:cached", "2:-"]));
+    expect(workspaceChatRead).toHaveBeenNthCalledWith(2, "story:ws-1", 0, 1);
+    expect(screen.getByTestId("head")).toHaveTextContent("2");
+  });
+
+  it("ignores a media event for another workspace", async () => {
+    workspaceChatRead.mockResolvedValueOnce(buildResult("story:ws-1", [pendingGif(1)]));
+    render(<MediaHost workspaceId="story:ws-1" />);
+    await waitFor(() => expect(rows()).toEqual(["1:pending"]));
+    await act(async () => emit(MEDIA_EVENT, { workspaceId: "story:other", messageId: 1 }));
+    expect(workspaceChatRead).toHaveBeenCalledTimes(1);
+    expect(rows()).toEqual(["1:pending"]);
+  });
+
+  it("keeps the patch when the first read lands after the event with a stale copy", async () => {
+    const first = deferred<WorkspaceChatReadResult>();
+    workspaceChatRead.mockReturnValueOnce(first.promise);
+    workspaceChatRead.mockResolvedValueOnce(buildResult("story:ws-1", [cachedGif(1)]));
+    render(<MediaHost workspaceId="story:ws-1" />);
+    await waitFor(() => expect(workspaceChatRead).toHaveBeenCalledTimes(1));
+    await act(async () => emit(MEDIA_EVENT, { workspaceId: "story:ws-1", messageId: 1 }));
+    await waitFor(() => expect(workspaceChatRead).toHaveBeenCalledTimes(2));
+    await act(async () => first.resolve(buildResult("story:ws-1", [pendingGif(1), chatMsg(2)])));
+    await waitFor(() => expect(rows()).toEqual(["1:cached", "2:-"]));
+  });
+
+  it("keeps the patch over a later full read's stale copy", async () => {
+    workspaceChatRead.mockResolvedValueOnce(buildResult("story:ws-1", [pendingGif(1)]));
+    render(<MediaHost workspaceId="story:ws-1" />);
+    await waitFor(() => expect(rows()).toEqual(["1:pending"]));
+    workspaceChatRead.mockResolvedValueOnce(buildResult("story:ws-1", [cachedGif(1)]));
+    await act(async () => emit(MEDIA_EVENT, { workspaceId: "story:ws-1", messageId: 1 }));
+    await waitFor(() => expect(rows()).toEqual(["1:cached"]));
+    workspaceChatRead.mockResolvedValueOnce(buildResult("story:ws-1", [pendingGif(1)]));
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "reload" })));
+    await waitFor(() => expect(workspaceChatRead).toHaveBeenCalledTimes(3));
+    expect(rows()).toEqual(["1:cached"]);
+  });
+
+  it("patches a message an incremental read brings in after its event", async () => {
+    workspaceChatRead.mockResolvedValueOnce(buildResult("story:ws-1", [chatMsg(1)]));
+    render(<MediaHost workspaceId="story:ws-1" />);
+    await waitFor(() => expect(rows()).toEqual(["1:-"]));
+    const nudge = deferred<WorkspaceChatReadResult>();
+    workspaceChatRead.mockReturnValueOnce(nudge.promise);
+    await act(async () =>
+      emit("codesense:workspace-chat-updated", { workspaceId: "story:ws-1", headId: 2 }),
+    );
+    workspaceChatRead.mockResolvedValueOnce(buildResult("story:ws-1", [cachedGif(2)]));
+    await act(async () => emit(MEDIA_EVENT, { workspaceId: "story:ws-1", messageId: 2 }));
+    await waitFor(() => expect(workspaceChatRead).toHaveBeenCalledTimes(3));
+    await act(async () => nudge.resolve(buildResult("story:ws-1", [pendingGif(2)])));
+    await waitFor(() => expect(rows()).toEqual(["1:-", "2:cached"]));
+    expect(screen.getByTestId("head")).toHaveTextContent("2");
+  });
+
+  it("drops the patch once a read returns the message as patched", async () => {
+    workspaceChatRead.mockResolvedValueOnce(buildResult("story:ws-1", [pendingGif(1)]));
+    render(<MediaHost workspaceId="story:ws-1" />);
+    await waitFor(() => expect(rows()).toEqual(["1:pending"]));
+    workspaceChatRead.mockResolvedValueOnce(buildResult("story:ws-1", [cachedGif(1)]));
+    await act(async () => emit(MEDIA_EVENT, { workspaceId: "story:ws-1", messageId: 1 }));
+    await waitFor(() => expect(rows()).toEqual(["1:cached"]));
+    workspaceChatRead.mockResolvedValueOnce(buildResult("story:ws-1", [cachedGif(1)]));
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "reload" })));
+    await waitFor(() => expect(workspaceChatRead).toHaveBeenCalledTimes(3));
+    // A later tap fails the image: the read's copy now shows, not the old patch.
+    workspaceChatRead.mockResolvedValueOnce(
+      buildResult("story:ws-1", [{ ...cachedGif(1), mediaState: "failed" }]),
+    );
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "reload" })));
+    await waitFor(() => expect(rows()).toEqual(["1:failed"]));
   });
 });
