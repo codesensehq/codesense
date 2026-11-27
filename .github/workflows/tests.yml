@@ -168,7 +168,10 @@ jobs:
     # hostile-frame specs serve their fixtures from the app's own viewer routes through a test of
     # the app's library (hostile_fixture_server), so the job compiles the library's tests first,
     # with rust-linux-app's system libraries and sidecars. It restores that job's dependency
-    # cache, which the nightly saves, and saves none of its own.
+    # cache, which rust.yml's scheduled run saves, and saves none of its own. rust-cache hashes
+    # every CARGO* and RUST* variable into the key, so the env below must stay rust-linux-app's
+    # exactly (rust.yml's workflow-level CARGO_PROFILE_DEV_DEBUG plus its job env), or the
+    # restore misses and the library builds cold.
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:
@@ -177,7 +180,9 @@ jobs:
       run:
         shell: bash
     env:
+      CARGO_PROFILE_DEV_DEBUG: "0"
       CARGO_INCREMENTAL: "0"
+      RUST_BACKTRACE: "1"
       CARGO_TERM_COLOR: always
     steps:
       - name: Check out source
@@ -205,7 +210,7 @@ jobs:
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: rust-linux-app
-          # This workflow has no schedule, so it never saves.
+          # This workflow has no schedule, so it never saves; rust.yml's nightly run does.
           save-if: ${{ github.event_name == 'schedule' && github.ref == 'refs/heads/main' }}
       - name: Fetch bundled binaries
         # The Linux bundle's pinned git-ai and starship, which tauri-build needs in place.
