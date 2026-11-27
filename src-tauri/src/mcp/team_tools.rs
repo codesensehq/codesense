@@ -1275,6 +1275,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_old_name_makes_the_same_edit_and_says_it_is_an_alias() {
+        let (app, home, org_root, _seen) = fixture();
+        write_content(&org_root, "web", "guide/start.md");
+        let reply = starter(
+            &app,
+            home.path(),
+            None,
+            Some(ORG),
+            Some("web"),
+            Some("guide/start.md"),
+        )
+        .await;
+        let landing = serde_json::to_value(&reply).unwrap();
+        let mut expected = landing.clone();
+        expected["data"]["alias"] = serde_json::json!(true);
+        expected["data"]["use"] = serde_json::json!(LANDING_PAGE_TOOL);
+        assert_eq!(
+            serde_json::to_value(reply.aliased(LANDING_PAGE_TOOL)).unwrap(),
+            expected
+        );
+        assert_eq!(LANDING_PAGE_TOOL, "set_team_landing_page");
+        assert_eq!(STARTER_PAGE_ALIAS, "set_team_starter_page");
+        assert_eq!(
+            team(&load(&org_root), "web")
+                .unwrap()
+                .landing_page
+                .as_deref(),
+            Some("guide/start.md")
+        );
+    }
+
+    #[tokio::test]
     async fn an_absolute_path_inside_the_team_content_is_made_relative() {
         let (app, home, org_root, _seen) = fixture();
         let abs = write_content(&org_root, "platform", "README.html");

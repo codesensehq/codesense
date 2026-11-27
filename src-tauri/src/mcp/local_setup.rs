@@ -300,6 +300,7 @@ pub(crate) mod tests {
             "archive_team",
             "delete_team",
             "set_team_parent",
+            "set_team_landing_page",
             "set_team_starter_page",
             "rename_workspace",
             "add_source_repo",

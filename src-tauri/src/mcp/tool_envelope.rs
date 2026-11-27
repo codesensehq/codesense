@@ -247,4 +247,29 @@ mod tests {
             resolved_or_envelope(ContextTarget::UnauthorizedTeam);
         assert!(matches!(short, Err(ToolEnvelope::UnauthorizedTeam)));
     }
+
+    // An old tool name's reply: the payload unchanged, plus `alias` and the name to use.
+    #[test]
+    fn an_aliased_reply_adds_alias_and_use_to_its_payload_only() {
+        #[derive(Serialize)]
+        struct Page {
+            team: &'static str,
+        }
+        let ok = ToolEnvelope::Ok(Page { team: "web" }).aliased("set_team_landing_page");
+        assert_eq!(
+            serde_json::to_value(&ok).unwrap(),
+            serde_json::json!({
+                "status": "ok",
+                "data": { "team": "web", "alias": true, "use": "set_team_landing_page" },
+            })
+        );
+        let refused = ToolEnvelope::<Page>::Validation {
+            message: "no file".into(),
+        }
+        .aliased("set_team_landing_page");
+        assert_eq!(
+            serde_json::to_value(&refused).unwrap(),
+            serde_json::json!({ "status": "validation", "data": { "message": "no file" } })
+        );
+    }
 }

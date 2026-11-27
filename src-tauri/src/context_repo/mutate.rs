@@ -2929,7 +2929,7 @@ mod tests {
         assert_eq!(parsed.teams[1].landing_page, None);
         assert_eq!(
             applied.commit_title,
-            "Set the starter page of team docs to guide/start.md"
+            "Set the landing page of team docs to guide/start.md"
         );
     }
 
@@ -2944,7 +2944,7 @@ mod tests {
         let applied = apply_registry_edit(&landing("docs", None), tmp.path()).unwrap();
         let text = String::from_utf8(applied.files[0].1.clone()).unwrap();
         assert!(!text.contains("landing_page"), "{text}");
-        assert_eq!(applied.commit_title, "Clear the starter page of team docs");
+        assert_eq!(applied.commit_title, "Clear the landing page of team docs");
     }
 
     #[test]
@@ -2964,6 +2964,11 @@ mod tests {
         ] {
             let err = apply_registry_edit(&landing("docs", Some(bad)), tmp.path()).unwrap_err();
             assert!(matches!(err, RegistryEditError::Parse(_)), "{bad:?}: {err}");
+            assert!(
+                err.to_string()
+                    .contains(&format!("landing page {bad:?} must be")),
+                "{bad:?}: {err}"
+            );
         }
     }
 

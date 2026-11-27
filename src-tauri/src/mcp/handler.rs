@@ -18009,6 +18009,7 @@ pub(crate) mod tests {
         "archive_team",
         "delete_team",
         "set_team_parent",
+        "set_team_landing_page",
         "set_team_starter_page",
         "rename_workspace",
         "add_source_repo",
@@ -20456,6 +20457,37 @@ pub(crate) mod tests {
             assert!(
                 worktrees.contains(state),
                 "live worktrees contract must describe {state}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_landing_page_tool_and_its_old_name_are_served_and_say_landing_page() {
+        let router = CodesenseHandler::served_tool_router();
+        for name in ["set_team_landing_page", "set_team_starter_page"] {
+            assert!(router.get(name).is_some(), "{name} is served");
+            assert!(EXPECTED_MCP_TOOLS.contains(&name), "{name} is listed");
+            assert!(
+                commands::interactive_gate::INTERACTIVE_VERBS.contains(&name),
+                "{name} is interactive"
+            );
+        }
+        let landing = tool_description("set_team_landing_page").unwrap();
+        assert!(landing.contains("team's landing page"), "{landing}");
+        let alias = tool_description("set_team_starter_page").unwrap();
+        assert!(
+            alias.contains("alias") && alias.contains("set_team_landing_page"),
+            "{alias}"
+        );
+        let teams = tool_description("list_orgs_teams").unwrap();
+        assert!(teams.contains("declared landing page"), "{teams}");
+        // "Starter" means a group's starter now: no tool calls the team's page that.
+        for tool in router.list_all() {
+            let description = tool.description.as_deref().unwrap_or_default();
+            assert!(
+                !description.to_lowercase().contains("starter page"),
+                "{}'s description says starter page",
+                tool.name
             );
         }
     }

@@ -41,14 +41,17 @@ describe("starterPageChoice", () => {
   });
 
   it("says why a hidden file, a parent team's file or a read-only org can't be the page", () => {
-    expect(choice(`${CONTENT}/.claude/notes.md`)).toMatchObject({ kind: "blocked" });
+    expect(choice(`${CONTENT}/.claude/notes.md`)).toEqual({
+      kind: "blocked",
+      reason: "Files in hidden folders can't be a landing page.",
+    });
     expect(choice(`${CONTENT}/.env`)).toEqual({
       kind: "blocked",
-      reason: "Hidden files can't be a starter page.",
+      reason: "Hidden files can't be a landing page.",
     });
     expect(choice("/orgs/acme/platform/content/guide.md")).toEqual({
       kind: "blocked",
-      reason: "This file is platform's. A starter page must be one of web's own files.",
+      reason: "This file is platform's. A landing page must be one of web's own files.",
     });
     const docs = { slug: "codesense/docs", org_root: "/u/codesense-docs" };
     expect(

@@ -378,9 +378,9 @@ describe("TeamsCard — virtualized list above threshold", () => {
   });
 });
 
-// ---------- Starter page ----------
+// ---------- Landing page ----------
 
-describe("TeamsCard — starter page", () => {
+describe("TeamsCard — landing page", () => {
   const expand = (name: string) =>
     fireEvent.click(screen.getByTestId(`settings-team-pill-${name}`).querySelector("button")!);
 
@@ -396,9 +396,13 @@ describe("TeamsCard — starter page", () => {
     expect(screen.getByTestId("settings-starter-page-current")).toHaveTextContent(
       "Default (README or index)",
     );
+    const field = screen.getByTestId("settings-starter-page-backend");
+    expect(field).toHaveTextContent(/^Landing page/);
+    expect(field).toHaveTextContent("Opens when you open this team's folder. Not a group starter.");
     expect(screen.queryByTestId("settings-starter-page-clear-backend")).toBeNull();
     fireEvent.click(screen.getByTestId("settings-starter-page-change-backend"));
     const input = screen.getByTestId("settings-starter-page-input-backend");
+    expect(input).toHaveAccessibleName("Landing page for backend, relative to its content folder");
     fireEvent.change(input, { target: { value: ".env" } });
     expect(screen.getByTestId("settings-starter-page-save-backend")).toBeDisabled();
     expect(input).toHaveAccessibleDescription(/Hidden files and \.\. aren't allowed/);
