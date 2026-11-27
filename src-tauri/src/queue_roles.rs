@@ -76,27 +76,33 @@ pub(crate) fn list_for(
 
 type RolesStamp = (
     (Option<FileStamp>, Vec<(OsString, Option<FileStamp>)>),
-    Option<FileStamp>,
+    Vec<Option<FileStamp>>,
 );
 
 /// Role configs read by the app's hot paths, by content folder and caller scope.
 pub(crate) static ROLE_CONFIGS: ConfigCache<(PathBuf, String), RolesStamp, Vec<RoleConfig>> =
     ConfigCache::new();
 
-/// [`list_for`], kept until the `roles/` folder, an entry in it or the team's
-/// `config/sharing.yml` moves, or [`save`] writes.
+/// [`list_for`], kept until the `roles/` folder or an entry in it moves, a file that
+/// decides what the scope admits moves (the team's own `config/sharing.yml`, and for a
+/// team scope the org's `teams.yml` and `org.yml` and each ancestor's
+/// `config/sharing.yml`), or [`save`] writes.
 pub(crate) fn list_for_cached(
     content: &Path,
     scope: &crate::context_repo::caller_scope::CallerScope,
 ) -> Result<Vec<RoleConfig>, String> {
-    let sharing = content
+    let mut files = vec![content
         .parent()
         .unwrap_or(content)
-        .join("config/sharing.yml");
+        .join("config/sharing.yml")];
+    files.extend(crate::context_repo::caller_scope::CallerScope::admission_files(scope));
     ConfigCache::get(
         &ROLE_CONFIGS,
         &(content.to_path_buf(), scope.cache_key().to_string()),
-        || (dir_stamp(&content.join("roles")), file_stamp(&sharing)),
+        || {
+            let stamps = files.iter().map(PathBuf::as_path).map(file_stamp).collect();
+            (dir_stamp(&content.join("roles")), stamps)
+        },
         || list_for(content, scope),
     )
 }
@@ -206,6 +212,39 @@ mod tests {
             vec![role],
             "a save shows at once"
         );
+    }
+
+    #[test]
+    fn list_for_cached_until_an_ancestor_sharing_changes() {
+        use crate::context_repo::inheritance::{team_view, test_fixture};
+        let _armed = crate::commands::config_cache::arm_this_thread();
+        let (_tmp, root) = test_fixture();
+        // The child reads the grand team's roles through the parent: both hops share them.
+        let share = "share:\n  - content/roles/**\n";
+        std::fs::write(root.join("grand/config/sharing.yml"), share).unwrap();
+        std::fs::write(root.join("parent/config/sharing.yml"), share).unwrap();
+        let content = root.join("grand/content");
+        let role = RoleConfig {
+            id: "reviewer".into(),
+            name: "Reviewer".into(),
+            icon: None,
+            default_handler: None,
+        };
+        save(&content, role.clone()).unwrap();
+        let child = || CallerScope::Team(team_view(&root, "acme/ctx", "child"));
+        assert_eq!(list_for_cached(&content, &child()).unwrap(), vec![role]);
+
+        // A hand edit to the middle hop's sharing, which no app event reports.
+        std::fs::write(root.join("parent/config/sharing.yml"), "share: []\n").unwrap();
+        ROLE_CONFIGS.expire();
+        assert_eq!(
+            list_for_cached(&content, &child()).unwrap(),
+            Vec::new(),
+            "the parent's sharing.yml is in the stamp, so the child's list reloads"
+        );
+        let key = (content, CallerScope::cache_key(&child()).to_string());
+        let reads = ROLE_CONFIGS.reads(&key);
+        assert_eq!((reads.stamps, reads.loads), (2, 2));
     }
 }
 
