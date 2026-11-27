@@ -567,4 +567,12 @@ async fn needs_you_count_tracks_post_read_archive() {
         .await
         .unwrap();
     assert_eq!(hub.needs_you_count(&team()), Ok(2), "an archived question is filed");
+
+    // A question posted once the projection is held counts on the next refresh.
+    let posted = ask("deploy?");
+    reported(posted);
+    refresh_inbox_with_host(app.handle(), &host, false)
+        .await
+        .unwrap();
+    assert_eq!(hub.needs_you_count(&team()), Ok(3), "a new question waits");
 }
