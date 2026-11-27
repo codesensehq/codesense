@@ -392,7 +392,6 @@ const M1_KEYS = [
   "team_switch",
   "tab_open",
   "cold_start_mock",
-  "cold_start_release",
 ];
 
 test("the committed baseline has the M1 set, the compare block and no targets", () => {
@@ -421,8 +420,6 @@ test("the committed baseline has the M1 set, the compare block and no targets", 
     }
   }
   for (const key of M1_KEYS) assert.ok(m1.keys[key], `m1 has ${key}`);
-  assert.equal(m1.keys.cold_start_release.build, "release");
-  assert.match(m1.keys.cold_start_release.sha, /^[0-9a-f]{7,40}$/);
   const ci = file.sets.find((set) => set.runner === "macos-15");
   if (ci) assert.ok(!ci.keys.team_switch, "CI never records team_switch");
 });

@@ -3,8 +3,7 @@
     "keys": [
       "open_other_team_agent_cold",
       "open_other_team_agent_warm",
-      "tab_open",
-      "cold_start_mock"
+      "tab_open"
     ],
     "tolerancePercent": 20,
     "floor": {
