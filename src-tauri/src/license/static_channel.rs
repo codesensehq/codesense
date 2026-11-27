@@ -1291,4 +1291,24 @@ mod tests {
         assert!(ch.check(app.handle(), false).await, "the manifest was read");
         assert!(!crate::flags::cached_kill(&blocked));
     }
+
+    /// A beta build honours a cached kill at boot: the local setting is on, and the kill a
+    /// manifest read cached turns tiles off for the next launch.
+    #[test]
+    fn on_a_beta_channel_a_cached_kill_turns_tiles_off_at_boot() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = serde_json::json!({ "viewer": { "settings": { "tiles": true } } });
+        std::fs::write(dir.path().join("app-state.json"), state.to_string()).unwrap();
+        assert!(crate::flags::tiles_at_boot(dir.path()), "no kill: on");
+        crate::flags::write_kill(dir.path(), true);
+        assert!(
+            !crate::flags::tiles_at_boot(dir.path()),
+            "the cached kill wins"
+        );
+        crate::flags::write_kill(dir.path(), false);
+        assert!(
+            crate::flags::tiles_at_boot(dir.path()),
+            "a cleared kill: on again"
+        );
+    }
 }

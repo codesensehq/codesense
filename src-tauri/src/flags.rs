@@ -216,13 +216,6 @@ mod tests {
         assert!(tiles_at_boot(dir.path()));
     }
 
-    /// A beta build honours a cached kill at boot.
-    #[cfg(not(cs_channel = "internal"))]
-    #[test]
-    fn on_a_beta_channel_a_cached_kill_turns_tiles_off() {
-        let dir = tempfile::tempdir().unwrap();
-        local_tiles(dir.path(), true);
-        kill_cached(dir.path());
-        assert!(!tiles_at_boot(dir.path()));
-    }
+    // A beta build honouring a cached kill at boot is tested under
+    // `license::static_channel::tests`, the module CI runs on a beta channel.
 }
