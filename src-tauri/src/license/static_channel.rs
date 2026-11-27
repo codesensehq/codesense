@@ -1158,4 +1158,35 @@ mod tests {
             "the flag is cleared after a check"
         );
     }
+
+    /// The tiles kill switch: only a literal `false` at `flags.tiles` kills, a withdrawn
+    /// manifest included. No other shape overrides, so the manifest can never turn tiles on,
+    /// and none of them stops a manifest from parsing.
+    #[test]
+    fn only_a_literal_false_at_flags_tiles_kills_tiles() {
+        // (manifest, kill)
+        for (body, kill) in [
+            (r#"{"version":"0.5.1","flags":{"tiles":false}}"#, true),
+            (
+                r#"{"version":"0.0.0","notes":"","withdrawn":"0.5.0","flags":{"tiles":false}}"#,
+                true,
+            ),
+            (r#"{"version":"0.5.1"}"#, false),
+            (r#"{"version":"0.5.1","flags":"x"}"#, false),
+            (r#"{"version":"0.5.1","flags":[]}"#, false),
+            (r#"{"version":"0.5.1","flags":5}"#, false),
+            (r#"{"version":"0.5.1","flags":true}"#, false),
+            (r#"{"version":"0.5.1","flags":null}"#, false),
+            (r#"{"version":"0.5.1","flags":{}}"#, false),
+            (r#"{"version":"0.5.1","flags":{"other":false}}"#, false),
+            (r#"{"version":"0.5.1","flags":{"tiles":true}}"#, false),
+            (r#"{"version":"0.5.1","flags":{"tiles":"false"}}"#, false),
+            (r#"{"version":"0.5.1","flags":{"tiles":0}}"#, false),
+            (r#"{"version":"0.5.1","flags":{"tiles":null}}"#, false),
+        ] {
+            let manifest: Manifest =
+                serde_json::from_str(body).unwrap_or_else(|e| panic!("{body} must parse: {e}"));
+            assert_eq!(manifest.tiles_kill(), kill, "{body}");
+        }
+    }
 }
