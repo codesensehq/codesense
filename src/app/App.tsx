@@ -42,6 +42,7 @@ import { useRightPaneMenuSync } from "@/features/shell/right-pane/panel-menu";
 import { useDashboardCommandsSync } from "@/features/dashboard/lib/dashboard-commands";
 import { useAgentMessageListener } from "@/shared/hooks/use-agent-message-listener";
 import { useRenderedDocumentBridge } from "@/shared/hooks/use-rendered-document-bridge";
+import { useMainWindowRegistry } from "@/shared/windows/use-main-window-registry";
 import { useCanvasRenderBridge } from "@/shared/hooks/use-canvas-render-bridge";
 import { useManagedSessionBridge } from "@/shared/hooks/use-managed-session-bridge";
 import { useTerminalStatusEvents } from "@/shared/hooks/use-terminal-status-events";
@@ -243,6 +244,9 @@ function App() {
   // hand the PNG sidecar path back over the bridge.
   useCanvasRenderBridge();
   useRenderedDocumentBridge();
+
+  // The window registry: `main`'s slice keeps its map of satellite-owned items.
+  useMainWindowRegistry();
 
   // SW-AW-4 (B/D): the managed task-session bridge — `ask_user` (blocking
   // question) + `signal_done` (completion) drive the sessionId-keyed managed

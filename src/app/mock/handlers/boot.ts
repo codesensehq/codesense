@@ -96,6 +96,17 @@ export function bootHandlers(scenario: MockScenario): HandlerRegistry {
       return undefined;
     },
     // SW-LN-B20: the frontend declares the local guest session; nothing to track in mock mode.
+    // The window registry: one window, `main`, which owns every item.
+    window_get_slice: () => ({
+      label: "main",
+      kind: "main",
+      version: 1,
+      layoutRef: null,
+      items: [],
+      pending: false,
+      owners: {},
+    }),
+    window_ready: () => undefined,
     set_guest_session: () => undefined,
     // SW-LN-B47: no on-disk guest marker in mock mode.
     get_guest_session: () => false,
