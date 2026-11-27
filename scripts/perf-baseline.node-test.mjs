@@ -185,6 +185,20 @@ test("case 6: an improvement on a time key passes", () => {
   assert.match(out.lines[0], /-70%/);
 });
 
+test("a key whose end state moved shows the set's and the current one", () => {
+  const out = compare(
+    baseline(),
+    current({ open_cold: ms([90, 90, 90, 90, 90], "agent-overlay") }),
+    { runner: "macos-15" },
+  );
+  assert.equal(out.exitCode, 0);
+  assert.match(
+    out.lines[0],
+    /^PASS open_cold 90ms \(p50 300, limit 360, -70%, team-switch -> agent-overlay\)$/,
+  );
+  assert.equal(out.rows[0].endState, "team-switch -> agent-overlay");
+});
+
 test("case 7: a runner with no set skips with exit 0 and never falls back to another set", () => {
   const onlyM1 = baseline({ sets: [baseline().sets[0]] });
   const out = compare(onlyM1, current({ open_cold: ms([999, 999, 999, 999, 999]) }), {

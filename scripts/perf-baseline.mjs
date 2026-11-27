@@ -13,13 +13,14 @@
  * `compare` block: `{compare: {keys, tolerancePercent, floor: {ms, fps}}, sets: [{runner, engine,
  * runs, commit, date, throttle, keys: {<key>: {unit, p50, p95|p5, samples, endState}}}]}`.
  *
- * compare: for each `compare.keys` key, the current median against the runner set's p50. A time
- * key regresses when median > p50 × (1 + tol) and median − p50 > floor.ms; an fps key when
- * median < p50 × (1 − tol) and p50 − median > floor.fps. Tolerance and floor come only from the
- * file. Prints one `PASS|FAIL` line per key and a verdict; with `$GITHUB_STEP_SUMMARY` set it
- * appends the verdict and a table there. Exit 0 when every key passes or the runner has no set,
- * 1 on any regression, 2 on an input error (a bad file or shape, a missing key, fewer than 3
- * samples, an engine mismatch, a bad argument) or any unexpected error.
+ * compare: for each `compare.keys` key, the current median against the runner set's p50. A time key
+ * regresses when median > p50 × (1 + tol) and median − p50 > floor.ms; an fps key when median < p50
+ * × (1 − tol) and p50 − median > floor.fps. Tolerance and floor come only from the file. Prints one
+ * `PASS|FAIL` line per key, with `<set's end state> -> <current>` when the two differ, and a
+ * verdict; with `$GITHUB_STEP_SUMMARY` set it appends the verdict and a table there. Exit 0 when
+ * every key passes or the runner has no set, 1 on any regression, 2 on an input error (a bad file
+ * or shape, a missing key, fewer than 3 samples, an engine mismatch, a bad argument) or any
+ * unexpected error.
  *
  * record: replaces (or adds) only that runner's set; every other set keeps its bytes. A runner
  * other than m1 never records the `M1_ONLY_KEYS` (`team_switch`): they are dropped. A key of the
@@ -189,7 +190,11 @@ export function compare(baseline, measured, { runner }) {
       : Math.min(base.p50 * (1 - tol), base.p50 - floor);
     const fail = up ? median > limit : median < limit;
     const change = (median - base.p50) / base.p50;
-    return { key, unit, median, p50: base.p50, limit, change, endState, fail };
+    // A click that now lands somewhere else (an overlay instead of a team switch) says so, so the
+    // change doesn't read as a plain speed-up.
+    const ends =
+      base.endState && base.endState !== endState ? `${base.endState} -> ${endState}` : endState;
+    return { key, unit, median, p50: base.p50, limit, change, endState: ends, fail };
   });
   const failed = rows.filter((row) => row.fail);
   const lines = rows.map(
