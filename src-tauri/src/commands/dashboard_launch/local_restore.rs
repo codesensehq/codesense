@@ -60,11 +60,14 @@ pub(crate) const TAG_LAUNCH_ROUTINE: &str = "launchRoutineKey";
 /// launch — the on-disk `PersistedLaunch.deadline_ms` is the second-best
 /// source, same contract as [`TAG_LAUNCHED_BY`].
 pub(crate) const TAG_LAUNCH_DEADLINE: &str = "launchDeadlineAt";
+/// The work item the session belongs to. A restore keeps it; `PersistedLaunch.work_item`
+/// is the second-best source.
+pub(crate) const TAG_LAUNCH_WORK_ITEM: &str = "launchWorkItem";
 /// The tag a remote tab carries; such a tab is restored by the remote path, never here.
 const TAG_REMOTE_HANDLE: &str = "remoteHandle";
 
 /// Every tag only the app writes.
-const LAUNCH_TAGS: [&str; 16] = [
+const LAUNCH_TAGS: [&str; 17] = [
     TAG_LAUNCH_HANDLE,
     TAG_LAUNCH_AGENT_REVISION,
     TAG_LAUNCH_TEAM,
@@ -81,6 +84,7 @@ const LAUNCH_TAGS: [&str; 16] = [
     TAG_LAUNCH_CWD,
     TAG_LAUNCH_ROUTINE,
     TAG_LAUNCH_DEADLINE,
+    TAG_LAUNCH_WORK_ITEM,
 ];
 
 /// Whether `key` is launch metadata only the app itself writes.
@@ -166,6 +170,10 @@ impl DashboardLaunchState {
                 TAG_LAUNCH_DEADLINE.to_string(),
                 entry.deadline_ms.map(|at| at.to_string()),
             ),
+            (
+                TAG_LAUNCH_WORK_ITEM.to_string(),
+                entry.work_item.as_ref().map(|id| id.to_string()),
+            ),
         ]);
         if let Some(launcher) = &entry.launcher {
             patch.insert(TAG_LAUNCHER.to_string(), Some(launcher.clone()));
@@ -211,6 +219,7 @@ impl DashboardLaunchState {
         // same fallback shape for the deadline.
         let persisted_deadline = self.persisted_deadline_ms(&launch.handle);
         let persisted_worktree_dir = self.persisted_worktree_dir(&launch.handle, &launch.session);
+        let persisted_work_item = self.persisted_work_item(&launch.handle, &launch.session);
         let mut inner = self.lock();
         if !Self::restorable_in(&inner, launch) {
             return false;
@@ -251,6 +260,13 @@ impl DashboardLaunchState {
         entry.meta.avatar = launch.avatar.clone();
         entry.meta.story = launch.story.clone();
         entry.routine_key = launch.routine_key.clone();
+        // A restore keeps the work item the session had, and never mints one.
+        let kept = launch.work_item.clone().or(persisted_work_item);
+        entry.work_item = crate::work_item::resolve_for_launch(
+            None,
+            entry.names_an_agent(),
+            crate::work_item::LaunchKind::Restoring(kept.as_ref()),
+        );
         entry.chat_workspace_id = launch.chat_workspace_id.clone();
         if let Some(team_key) = launch.team_key.as_deref() {
             let (org, team) = crate::commands::pty_layout::parse_team_key(team_key);
@@ -299,6 +315,9 @@ pub(crate) struct RestoredLaunch {
     /// or a tag that fell off; the restore path falls back to
     /// `PersistedLaunch.deadline_ms` in that case.
     pub deadline_ms: Option<u64>,
+    /// The work item the tab recorded, from [`TAG_LAUNCH_WORK_ITEM`]; the restore falls
+    /// back to `PersistedLaunch.work_item` without it.
+    pub work_item: Option<crate::work_item::WorkItemId>,
 }
 
 fn tag(tags: &Tags, key: &str) -> Option<String> {
@@ -343,6 +362,8 @@ pub(crate) fn restorable_launches(snapshot: &LayoutSnapshot) -> Vec<RestoredLaun
             routine_key: tag(tags, TAG_LAUNCH_ROUTINE),
             chat_workspace_id: tag(tags, "chatWorkspaceId"),
             deadline_ms: epoch_tag(tags, TAG_LAUNCH_DEADLINE),
+            work_item: tag(tags, TAG_LAUNCH_WORK_ITEM)
+                .and_then(|raw| crate::work_item::WorkItemId::parse(&raw)),
         };
         match by_handle.entry(handle) {
             Entry::Vacant(slot) => {

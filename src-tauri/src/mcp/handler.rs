@@ -8253,6 +8253,10 @@ impl CodesenseHandler {
         .await
         .map_err(|e| ErrorData::invalid_params(e, None))?;
         state.register(&handle, &session_id, Some("codesense"));
+        // The verified caller that opened it is its launcher; a person's open has none.
+        if let Some(caller) = self.connection_session() {
+            state.set_launched_by_if_absent(&handle, &caller);
+        }
         // Its inbox lives in its workspace's team, whichever team the app shows.
         if let Some(team) = crate::commands::dashboard_launch::launch_team_from_key(&ws.team_key) {
             state.set_launch_team_if_absent(&handle, team);

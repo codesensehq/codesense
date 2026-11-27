@@ -88,6 +88,11 @@ pub struct SessionRecord {
     /// records written before it was kept.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub launched_by_session: Option<String>,
+    /// The work item (`wi_…`) the session belongs to: minted by its lead's launch and
+    /// inherited by every worker below it. `None` for a plain shell, and for records written
+    /// before it was kept. A restore keeps the first one recorded.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub work_item: Option<String>,
     /// `key@revision`.
     pub agent: Option<String>,
     pub manifest_hash: Option<String>,
@@ -215,13 +220,15 @@ impl UsageStore {
                 "INSERT INTO session_record (session_id, native_session_id, org, team, handle, launched_by, agent,
                     manifest_hash, cli, cli_version, model, mcp_allow, bridge_tools, account, story_id, workspace,
                     worktree, branch, run_id, config_home, provided_skills, unavailable, recorded_at_ms,
-                    launched_by_session, handle_at_ms)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?23)
+                    launched_by_session, handle_at_ms, work_item)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?23, ?25)
                  ON CONFLICT (session_id) DO UPDATE SET
                     native_session_id = COALESCE(session_record.native_session_id, excluded.native_session_id),
                     -- The first launcher tab stands. A changed handle is stamped with when it
                     -- changed, so the record never looks as if it held the new handle earlier.
                     launched_by_session = COALESCE(session_record.launched_by_session, excluded.launched_by_session),
+                    -- The work item the launch recorded stands; a restore never mints another.
+                    work_item = COALESCE(session_record.work_item, excluded.work_item),
                     handle_at_ms = CASE WHEN session_record.handle IS excluded.handle
                         THEN COALESCE(session_record.handle_at_ms, session_record.recorded_at_ms)
                         ELSE CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER) END,
@@ -257,6 +264,7 @@ impl UsageStore {
                     unavailable,
                     r.recorded_at_ms,
                     clean(&r.launched_by_session),
+                    r.work_item,
                 ],
             )
             .map_err(db_err)?;
@@ -313,7 +321,8 @@ impl UsageStore {
             .query_row(
                 "SELECT session_id, native_session_id, org, team, handle, launched_by, agent, manifest_hash, cli,
                     cli_version, model, mcp_allow, bridge_tools, account, story_id, workspace, worktree, branch,
-                    run_id, config_home, provided_skills, unavailable, recorded_at_ms, launched_by_session
+                    run_id, config_home, provided_skills, unavailable, recorded_at_ms, launched_by_session,
+                    work_item
                  FROM session_record WHERE session_id = ?1 OR native_session_id = ?1
                  ORDER BY session_id = ?1 DESC LIMIT 1",
                 params![session_id],
@@ -345,6 +354,7 @@ impl UsageStore {
                         unavailable: serde_json::from_str(&unavailable).unwrap_or_default(),
                         recorded_at_ms: r.get(22)?,
                         launched_by_session: r.get(23)?,
+                        work_item: r.get(24)?,
                         timing: None,
                     })
                 },
@@ -623,6 +633,49 @@ mod tests {
             .read_session_record("tab-1")
             .unwrap();
         assert_eq!(back, Some(record));
+    }
+
+    #[test]
+    fn the_first_work_item_recorded_stands_through_a_rewrite() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("usage.sqlite");
+        let mut record = claude();
+        record.work_item = Some("wi_00000000000000a1".into());
+        let store = UsageStore::open(&path).unwrap();
+        store.write_session_record(&record).unwrap();
+        // A later write (a restore, a relaunch) never replaces it, and one with none keeps it.
+        record.work_item = Some("wi_00000000000000b2".into());
+        store.write_session_record(&record).unwrap();
+        record.work_item = None;
+        store.write_session_record(&record).unwrap();
+        let back = store.read_session_record("tab-1").unwrap().unwrap();
+        assert_eq!(back.work_item.as_deref(), Some("wi_00000000000000a1"));
+    }
+
+    #[test]
+    fn an_older_store_gains_the_work_item_column_without_a_version_bump() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("usage.sqlite");
+        {
+            let store = UsageStore::open(&path).unwrap();
+            store
+                .conn
+                .execute_batch("ALTER TABLE session_record DROP COLUMN work_item;")
+                .unwrap();
+            assert!(
+                !crate::session_usage::has_column(&store.conn, "session_record", "work_item")
+                    .unwrap()
+            );
+        }
+        let store = UsageStore::open(&path).unwrap();
+        assert!(
+            crate::session_usage::has_column(&store.conn, "session_record", "work_item").unwrap()
+        );
+        let version: i64 = store
+            .conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, 5, "an older build must still open this store");
     }
 
     #[test]

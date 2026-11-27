@@ -210,6 +210,10 @@ pub(crate) struct RemoteLaunchIdentity {
     /// workspace handle, so the exact receipt gate still runs.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub durable_workspace: bool,
+    /// The work item the launch belongs to, settled by the app when it reserves the launch
+    /// and kept by a restore. Not something a launcher says, so [`Self::is_empty`] ignores it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub work_item: Option<crate::work_item::WorkItemId>,
 }
 
 /// Launch `agent` in the tab `record` opens: it runs the Agent's runtime, and the
@@ -243,7 +247,10 @@ pub(crate) fn take_agent(
 
 impl RemoteLaunchIdentity {
     pub(crate) fn is_empty(&self) -> bool {
-        self == &Self::default()
+        Self {
+            work_item: None,
+            ..self.clone()
+        } == Self::default()
     }
 }
 
@@ -2318,6 +2325,16 @@ async fn reconcile(
 /// SW-AGR-12: the layout tag on a durable (routine) launch's tab, so a
 /// recovery from the layout re-homes it the same way.
 pub(crate) const TAG_REMOTE_DURABLE: &str = "remoteDurable";
+/// The layout tag naming who launched a remote tab, for a restore to keep.
+pub(crate) const TAG_REMOTE_LAUNCHED_BY: &str = "remoteLaunchedBy";
+/// The layout tag naming a remote tab's work item, for a restore to keep.
+pub(crate) const TAG_REMOTE_WORK_ITEM: &str = "remoteWorkItem";
+
+/// The work item a remote tab's layout tags recorded.
+pub(crate) fn remote_tab_work_item(tags: &Tags) -> Option<crate::work_item::WorkItemId> {
+    tags.get(TAG_REMOTE_WORK_ITEM)
+        .and_then(|raw| crate::work_item::WorkItemId::parse(raw.trim()))
+}
 
 fn remote_layout_tags(record: &RemoteShellRecord) -> Tags {
     let mut tags = Tags::new();
@@ -2348,6 +2365,13 @@ fn remote_layout_tags(record: &RemoteShellRecord) -> Tags {
     }
     if record.identity.durable_workspace {
         tags.insert(TAG_REMOTE_DURABLE.into(), "1".into());
+    }
+    // Who launched it and its work item, so a restore from the layout keeps both.
+    if let Some(launched_by) = &record.identity.launched_by {
+        tags.insert(TAG_REMOTE_LAUNCHED_BY.into(), launched_by.clone());
+    }
+    if let Some(work_item) = &record.identity.work_item {
+        tags.insert(TAG_REMOTE_WORK_ITEM.into(), work_item.to_string());
     }
     if let Some(agent) = &record.agent {
         tags.insert("remoteAgentKey".into(), agent.key());
@@ -2521,6 +2545,8 @@ async fn recover(
                 identity: RemoteLaunchIdentity {
                     if_absent,
                     durable_workspace: durable,
+                    launched_by: tab.tags.get(TAG_REMOTE_LAUNCHED_BY).cloned(),
+                    work_item: remote_tab_work_item(&tab.tags),
                     ..Default::default()
                 },
             });
@@ -2964,6 +2990,23 @@ mod tests {
                 .map(String::as_str),
             Some("1")
         );
+    }
+
+    /// A remote tab's layout keeps who launched it and its work item, for a restore.
+    #[test]
+    fn a_remote_tab_keeps_its_launcher_and_work_item_for_a_restore() {
+        let mut record = receipt_record();
+        let tags = remote_layout_tags(&record);
+        assert!(!tags.contains_key(TAG_REMOTE_LAUNCHED_BY));
+        assert_eq!(remote_tab_work_item(&tags), None);
+        record.identity.launched_by = Some("lead".into());
+        record.identity.work_item = crate::work_item::WorkItemId::parse("wi_00000000000000a1");
+        let tags = remote_layout_tags(&record);
+        assert_eq!(tags.get(TAG_REMOTE_LAUNCHED_BY).map(String::as_str), Some("lead"));
+        assert_eq!(remote_tab_work_item(&tags), record.identity.work_item);
+        let mut forged = tags.clone();
+        forged.insert(TAG_REMOTE_WORK_ITEM.into(), "not-an-id".into());
+        assert_eq!(remote_tab_work_item(&forged), None);
     }
 
     /// SW-AGR-12: the durable mark is the app's own: never over the wire, and

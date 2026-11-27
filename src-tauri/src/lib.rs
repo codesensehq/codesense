@@ -120,6 +120,8 @@ mod test_logger;
 /// sanctioned write path (one writer per record, live-max/AUTOINCREMENT id
 /// minting, atomic audit trail). See [`weft`] for the load-bearing rules.
 mod weft;
+/// Work items: minted once per lead launch, inherited by its workers.
+mod work_item;
 
 use log::LevelFilter;
 use std::sync::{Arc, RwLock};

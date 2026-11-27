@@ -160,7 +160,9 @@ pub fn resume_request(
         headed: false,
         initial_prompt: Some(brief.to_string()),
         identity: Box::new(crate::commands::pty_layout::RemoteLaunchIdentity {
-            launched_by: Some("CodeSense restore".to_string()),
+            // A restore keeps its launcher and its work item.
+            launched_by: original_launcher(tab, crate::commands::pty_layout::TAG_REMOTE_LAUNCHED_BY),
+            work_item: crate::commands::pty_layout::remote_tab_work_item(&tab.tags),
             role: tab.role.clone(),
             // A restore keeps its story (SV-CDE-83 I1).
             story: story_of(tab),
@@ -583,9 +585,21 @@ pub(crate) async fn relaunch_local(
     .await
 }
 
-/// The launch record a local relaunch of `tab` is made with. A restore keeps its story and
-/// team and continues its session's task (SV-CDE-83 I1); `launched_by` stays
-/// "CodeSense restore".
+/// Who a restore records as having restored a session; its launcher stays the original.
+pub(crate) const RESTORED_BY: &str = "CodeSense restore";
+
+/// The launcher `tab`'s launch recorded, kept by its restore.
+fn original_launcher(tab: &RestoreTab, key: &str) -> Option<String> {
+    tab.tags
+        .get(key)
+        .map(|launcher| launcher.trim())
+        .filter(|launcher| !launcher.is_empty())
+        .map(str::to_owned)
+}
+
+/// The launch record a local relaunch of `tab` is made with. A restore keeps its story,
+/// team and launcher, adds `restoredBy`, and continues its session's task,
+/// which keeps its work item.
 pub(crate) fn restore_record(
     tab: &RestoreTab,
     relaunch: &LocalRelaunch,
@@ -594,7 +608,8 @@ pub(crate) fn restore_record(
     LaunchRecord {
         meta: LaunchMeta {
             display_name: Some(tab.name.clone()),
-            launched_by: Some("CodeSense restore".to_string()),
+            launched_by: original_launcher(tab, crate::commands::dashboard_launch::TAG_LAUNCHED_BY),
+            restored_by: Some(RESTORED_BY.to_string()),
             team: Some(LaunchTeam {
                 org: relaunch.org.clone(),
                 team: relaunch.team.clone(),
@@ -932,6 +947,7 @@ mod tests {
             ("launchCwd", "/Users/me/.codesense/w/SV-1"),
             ("launchTeam", "acme:default"),
             ("launchStory", "SV-1"),
+            ("launchedBy", "lead"),
         ]);
         let relaunch = local_relaunch_of(&tab).unwrap();
         let after = DashboardLaunchState::new(4);
@@ -944,7 +960,12 @@ mod tests {
 
         let record = open().read_session_record("s-2").unwrap().unwrap();
         assert_eq!(record.story_id.as_deref(), Some("SV-1"));
-        assert_eq!(record.launched_by.as_deref(), Some("CodeSense restore"));
+        assert_eq!(record.launched_by.as_deref(), Some("lead"), "a restore keeps its launcher");
+        let restored = after.snapshot().into_iter().find(|s| s.handle == "SV-1#dev").unwrap();
+        assert_eq!(restored.meta.restored_by.as_deref(), Some(RESTORED_BY));
+        let kept = open().read_session_record("s-1").unwrap().unwrap().work_item;
+        assert!(kept.is_some(), "the first launch minted a work item");
+        assert_eq!(record.work_item, kept, "a restore keeps its work item");
         assert_eq!(resumed.story_id.as_deref(), Some("SV-1"));
         assert_eq!(
             resumed.parent_id, dev.parent_id,

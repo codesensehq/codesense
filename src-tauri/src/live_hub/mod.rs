@@ -512,7 +512,12 @@ impl LiveHub {
                 .rows
                 .iter()
                 .filter(|r| {
-                    launched_by.is_none_or(|parent| r.launched_by.as_deref() == Some(parent))
+                    launched_by.is_none_or(|parent| {
+                        crate::commands::dashboard_launch::launcher_matches(
+                            r.launched_by.as_deref(),
+                            parent,
+                        )
+                    })
                 })
                 .cloned()
                 .collect();
@@ -561,7 +566,9 @@ pub(crate) fn read_now(
     let registry = judged_registry(source, &live, true)?;
     let mut rows = listed_rows(source, &live, active.as_ref(), registry);
     if let Some(parent) = key.as_deref() {
-        rows.retain(|r| r.launched_by.as_deref() == Some(parent));
+        rows.retain(|r| {
+            crate::commands::dashboard_launch::launcher_matches(r.launched_by.as_deref(), parent)
+        });
     }
     inbox.join(&mut rows);
     Ok((rows, inbox::InboxProjection::unread(&*inbox)))

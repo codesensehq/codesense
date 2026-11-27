@@ -1228,6 +1228,7 @@ impl OpenWorkspacePort for FakePort {
         org: Option<&str>,
         initial_prompt: Option<&str>,
         view: crate::commands::mcp_workspace::SessionView,
+        _launched_by: Option<String>,
     ) -> Result<crate::commands::mcp_workspace::LaunchOutcome, String> {
         self.story_orgs
             .lock()
@@ -2970,6 +2971,7 @@ pub(crate) mod agent_opens {
             _org: Option<&str>,
             _initial_prompt: Option<&str>,
             _view: crate::commands::mcp_workspace::SessionView,
+            _launched_by: Option<String>,
         ) -> Result<crate::commands::mcp_workspace::LaunchOutcome, String> {
             panic!("an agent open never takes the legacy story path")
         }
@@ -4312,6 +4314,7 @@ mod authoring_opens {
             _org: Option<&str>,
             _initial_prompt: Option<&str>,
             _view: crate::commands::mcp_workspace::SessionView,
+            _launched_by: Option<String>,
         ) -> Result<crate::commands::mcp_workspace::LaunchOutcome, String> {
             panic!("an authoring open never takes the legacy story path")
         }

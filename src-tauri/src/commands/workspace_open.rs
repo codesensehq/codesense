@@ -1026,6 +1026,7 @@ async fn open_agent_as(
                 avatar: launch_label(req.avatar.as_deref()),
                 continues: None,
                 reviews: non_blank(req.reviews.as_deref()).map(str::to_string),
+                restored_by: None,
             },
             started_with: initial_prompt,
             // carry the budget onto the entry; `None` → no deadline
@@ -1219,6 +1220,7 @@ pub(crate) trait OpenWorkspacePort: Send + Sync {
         org: Option<&str>,
         initial_prompt: Option<&str>,
         view: super::mcp_workspace::SessionView,
+        launched_by: Option<String>,
     ) -> Result<super::mcp_workspace::LaunchOutcome, String>;
     /// The UI-active team and the host a targeted open launches through; `Err` when no
     /// team is active or the signed-in context cannot be read.
@@ -1522,6 +1524,8 @@ pub(crate) async fn open_workspace_call_for(
             org.as_deref(),
             params.initial_prompt.as_deref(),
             session_view(mode),
+            // The verified caller, so an agent's legacy open is still its launch.
+            non_blank(params.launched_by.as_deref()).map(str::to_string),
         )
         .await?;
     // SW-WA-F5 (AC-1): a visible mode surfaces the workspace as a real tab in the
@@ -1664,6 +1668,7 @@ impl OpenWorkspacePort for AppOpenWorkspacePort {
         org: Option<&str>,
         initial_prompt: Option<&str>,
         view: super::mcp_workspace::SessionView,
+        launched_by: Option<String>,
     ) -> Result<super::mcp_workspace::LaunchOutcome, String> {
         // The legacy open names no agent: the preferred built-in runs, in the story's own
         // team; a headless open runs its unattended twin, which no prompt ever blocks.
@@ -1686,7 +1691,7 @@ impl OpenWorkspacePort for AppOpenWorkspacePort {
             )
         })
         .await?;
-        let outcome = super::mcp_workspace::launch_story_session(
+        let outcome = super::mcp_workspace::launch_story_session_by(
             &self.app,
             story_id,
             Some(&story_org),
@@ -1694,6 +1699,7 @@ impl OpenWorkspacePort for AppOpenWorkspacePort {
             agent,
             None,
             view,
+            launched_by,
         )
         .await;
         super::mcp_workspace::spawn_seat_sweep(&self.app, story_id);

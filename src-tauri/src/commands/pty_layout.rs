@@ -570,12 +570,14 @@ const TAG_REMOTE_AGENT_KEY: &str = "remoteAgentKey";
 
 /// The remote launch tags only the app writes, beside the agent key: what a
 /// recovery from the layout trusts (SW-AGR-12: a durable routine launch, its
-/// prepared workspace, its launch-if-absent).
-const APP_REMOTE_TAGS: [&str; 4] = [
+/// prepared workspace, its launch-if-absent; a restore's launcher and work item).
+const APP_REMOTE_TAGS: [&str; 6] = [
     TAG_REMOTE_AGENT_KEY,
     remote_shell::TAG_REMOTE_DURABLE,
     "remotePreparedWorkspace",
     codesense_pty_core::routine_arm::TAG_LAUNCH_IF_ABSENT,
+    remote_shell::TAG_REMOTE_LAUNCHED_BY,
+    remote_shell::TAG_REMOTE_WORK_ITEM,
 ];
 
 /// Refuse a renderer tag write naming launch metadata, which only the app writes.
@@ -1283,6 +1285,8 @@ mod tests {
             "remoteDurable",
             "remotePreparedWorkspace",
             "remoteLaunchIfAbsent",
+            "remoteLaunchedBy",
+            "remoteWorkItem",
         ] {
             let forged = TagPatch::from([(key.to_string(), Some("1".to_string()))]);
             let refused = refuse_launch_tags(forged.keys()).unwrap_err();
@@ -1741,7 +1745,8 @@ pub(crate) use remote_shell::{
     arm_tab_home, authorize_human_terminal, host_home, remote_shell_tab_bound,
     remote_shell_tab_bound_for, restore_on_machine, validate_remote_shell_group, LaunchSettlement,
     LiveRemoteTab, McpInventoryEntry, RemoteLaunchIdentity, RemoteShellRecord,
-    LAUNCH_SETTLED_EVENT, LAUNCH_SETTLEMENT_TTL, TAG_REMOTE_DURABLE,
+    LAUNCH_SETTLED_EVENT, LAUNCH_SETTLEMENT_TTL, TAG_REMOTE_DURABLE, TAG_REMOTE_LAUNCHED_BY,
+    remote_tab_work_item,
 };
 
 async fn open_remote_layout_tab(
