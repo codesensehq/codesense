@@ -15,8 +15,13 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 
 use super::index::ChatIndexEntry;
-use super::model::{MessageContentType, MessageKind, MessageOnClick, HUMAN};
+use super::media::{ChatSender, MediaRefusal};
+use super::model::{MessageContentType, MessageKind, MessageOnClick, WorkspaceChatMessage, HUMAN};
+use super::send::{ChatPost, SendRefusal};
 use super::store::{ChatAppend, ChatStoreError, WorkspaceChatStore};
+
+use crate::commands::agent_inbox::InboxTeam;
+use crate::media::MediaInput;
 
 use crate::commands::workspace_registry::WorkspaceRegistryState;
 
@@ -250,8 +255,34 @@ pub async fn emit_system_message(
     append_and_emit(app, at).await
 }
 
-/// Human compose. Dashboards call this via `window.codesense.invoke`.
+/// What the person reads when their send is refused: a short sentence that says how to
+/// recover, for each refusal of their media; the engine's text otherwise. `with_media`
+/// is whether the send carried media.
+pub(crate) fn human_send_error(refusal: &SendRefusal, with_media: bool) -> String {
+    match refusal {
+        SendRefusal::Media(MediaRefusal::NoAlt) => {
+            "Add a description for the GIF, then send again.".into()
+        }
+        SendRefusal::Media(MediaRefusal::NoTeam) => {
+            "This chat has no team, so it can't send a GIF. Send text instead.".into()
+        }
+        SendRefusal::Media(MediaRefusal::Invalid(_)) => {
+            "This GIF can't be sent. Pick another one, or send text.".into()
+        }
+        SendRefusal::Store(ChatStoreError::LineTooLong) if with_media => {
+            "This message is too long to send with a GIF. Shorten it and send again.".into()
+        }
+        SendRefusal::Store(e) => e.to_string(),
+        SendRefusal::Join(e) => format!("join: {e}"),
+    }
+}
+
+/// Human compose, from the app window's chat (Tauri IPC is main-window only). `media`
+/// is one GIF by `url`, sent with `team`, the chat's team: the team is read only when
+/// the send carries media, and must be one this Mac syncs. A refused send writes
+/// nothing: no `Chat started.` row, no message, no fan-out.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn workspace_chat_send(
     app: AppHandle,
     workspace_id: String,
@@ -259,32 +290,42 @@ pub async fn workspace_chat_send(
     content_type: Option<MessageContentType>,
     on_click: Option<MessageOnClick>,
     primary_file: Option<String>,
+    media: Option<MediaInput>,
+    team: Option<InboxTeam>,
 ) -> Result<ChatSendResult, String> {
+    if text.trim().is_empty() && media.is_none() {
+        return Err(ChatStoreError::EmptyText.to_string());
+    }
     if is_archived(&app, &workspace_id) {
         return Err("workspace archived".to_string());
     }
-    let (from, from_name) = resolve_human_from(&app).await;
-    {
-        let store = app.state::<WorkspaceChatStore>();
-        if !store.is_installed() {
-            return Err("workspace chat engine not installed".to_string());
-        }
+    let store = app.state::<WorkspaceChatStore>().inner().clone();
+    if !store.is_installed() {
+        return Err("workspace chat engine not installed".to_string());
     }
-    // First-use: emit `Chat started.` as message id=1 so the thread opens
-    // with a lifecycle anchor.
-    ensure_chat_started(&app, &workspace_id).await;
-    let at = ChatAppend {
-        workspace_id,
-        from,
+    let (_, from_name) = resolve_human_from(&app).await;
+    let with_media = media.is_some();
+    let sender = ChatSender::Human {
+        team: team.filter(|_| with_media).map(Into::into),
+    };
+    let post = ChatPost {
+        workspace: workspace_id.clone(),
         from_name,
         text,
-        kind: MessageKind::Chat,
         content_type,
         on_click,
         primary_file,
-        media: None,
+        media,
     };
-    let msg = append_and_emit(&app, at).await.map_err(|e| e.to_string())?;
+    let host = crate::commands::agent_inbox::AppInboxHost::port(app.clone());
+    // First-use: `Chat started.` is message id=1, written only once the send is checked.
+    let started = ensure_chat_started(&app, &workspace_id);
+    let fanout = |m: &WorkspaceChatMessage| {
+        fire_fanout(&app, &m.workspace_id, m.message_id, m.kind, &m.from)
+    };
+    let msg = super::send::send(&host, &store, sender, post, started, fanout)
+        .await
+        .map_err(|e| human_send_error(&e, with_media))?;
     Ok(ChatSendResult {
         message_id: msg.message_id,
         created_at_ms: msg.created_at_ms,

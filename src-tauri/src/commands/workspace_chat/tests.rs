@@ -562,3 +562,408 @@ fn chat_media_sidecar_corrupt_reads_as_rows() {
         true
     );
 }
+
+/// The person's compose through the shared send core, with the fake inbox host: the
+/// checks before any write, the GIF row, its one registration and the fan-out.
+mod human_send {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    use super::super::commands::human_send_error;
+    use super::super::media::{ChatSender, MediaRefusal, MAX_ALT_BYTES, MAX_URL_BYTES};
+    use super::super::model::{ChatMediaState, MessageKind, WorkspaceChatMessage, HUMAN};
+    use super::super::send::{send, ChatPost, SendRefusal};
+    use super::super::store::{ChatAppend, ChatStoreError};
+    use crate::commands::agent_inbox::tests::{launch_team, port, FakeHost};
+    use crate::commands::agent_inbox::InboxHost;
+    use crate::context_repo::caller_scope::CallerScope;
+    use crate::media::{Config, FakeFetch, MediaInput, MediaProvider, Remote};
+
+    const WS: &str = "story:human";
+    const URL: &str = "https://media.giphy.com/media/g1/giphy.gif";
+    const GIF: &[u8] = b"GIF89a\x02\x00\x03\x00";
+
+    const NO_ALT: &str = "Add a description for the GIF, then send again.";
+    const NO_TEAM: &str = "This chat has no team, so it can't send a GIF. Send text instead.";
+    const TOO_LONG: &str =
+        "This message is too long to send with a GIF. Shorten it and send again.";
+    const CANT_SEND: &str = "This GIF can't be sent. Pick another one, or send text.";
+
+    fn gif() -> MediaInput {
+        MediaInput {
+            url: Some(URL.into()),
+            path: None,
+            alt: "Typing cat".into(),
+            provider: Some(MediaProvider::Giphy),
+            provider_id: Some("g1".into()),
+        }
+    }
+
+    fn human(team: Option<&str>) -> ChatSender {
+        ChatSender::Human {
+            team: team.map(launch_team),
+        }
+    }
+
+    fn post(text: &str, media: Option<MediaInput>) -> ChatPost {
+        ChatPost {
+            workspace: WS.into(),
+            from_name: "Sam".into(),
+            text: text.into(),
+            content_type: None,
+            on_click: None,
+            primary_file: None,
+            media,
+        }
+    }
+
+    /// Send as `sender` with the first-use anchor the app writes; the result and how
+    /// many times the fan-out ran.
+    async fn send_as(
+        fake: &Arc<FakeHost>,
+        sender: ChatSender,
+        text: &str,
+        media: Option<MediaInput>,
+    ) -> (Result<WorkspaceChatMessage, SendRefusal>, usize) {
+        let host = port(fake);
+        let store = fake.chat().clone();
+        let anchor = store.clone();
+        let started = async move {
+            anchor
+                .append_if_first(
+                    ChatAppend {
+                        workspace_id: WS.into(),
+                        from: MessageKind::SYSTEM_FROM.into(),
+                        from_name: MessageKind::SYSTEM_FROM_NAME.into(),
+                        text: "Chat started.".into(),
+                        kind: MessageKind::System,
+                        content_type: None,
+                        on_click: None,
+                        primary_file: None,
+                        media: None,
+                    },
+                    0,
+                )
+                .unwrap();
+        };
+        let fanouts = AtomicUsize::new(0);
+        let result = send(&host, &store, sender, post(text, media), started, |_| {
+            fanouts.fetch_add(1, Ordering::SeqCst);
+        })
+        .await;
+        (result, fanouts.load(Ordering::SeqCst))
+    }
+
+    /// The chat is untouched: no anchor row, no message, nothing registered.
+    fn untouched(fake: &FakeHost) {
+        assert!(!fake.chat().exists(WS), "no `Chat started.` row");
+        assert_eq!(fake.chat().head_id(WS), 0, "no message");
+        assert!(fake.media_sent_calls().is_empty(), "nothing registered");
+    }
+
+    /// A fake serving `GIF` at `URL` through a real media state.
+    fn serving() -> (Arc<FakeHost>, Arc<FakeFetch>) {
+        let fake = FakeHost::new();
+        let fetch = Arc::new(FakeFetch::default());
+        fetch.serve(URL, GIF, URL, None);
+        fake.use_media(fetch.clone());
+        (fake, fetch)
+    }
+
+    async fn settled(fake: &FakeHost, id: i64) -> WorkspaceChatMessage {
+        for _ in 0..200 {
+            let row = fake.chat().media_message(WS, id).unwrap().unwrap();
+            if row.media_state != Some(ChatMediaState::Pending) {
+                return row;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        panic!("the media fetch never finished");
+    }
+
+    #[tokio::test]
+    async fn human_gif_with_blank_text_is_stored_after_the_anchor() {
+        let fake = FakeHost::new();
+        let (sent, fanouts) = send_as(&fake, human(Some("default")), "  ", Some(gif())).await;
+        let sent = sent.unwrap();
+        assert_eq!(sent.message_id, 2, "after the first-use anchor");
+        assert_eq!(sent.from, HUMAN);
+        assert_eq!(sent.from_name, "Sam");
+        assert_eq!(sent.text, "");
+        assert_eq!(sent.media_team, Some(launch_team("default")));
+        assert!(
+            sent.attachments[0].own_sender,
+            "the person's url is this Mac's own"
+        );
+        let page = fake.chat().read(WS, None, None).unwrap();
+        assert_eq!(page.messages[0].text, "Chat started.");
+        assert_eq!(page.messages[0].kind, MessageKind::System);
+        assert_eq!(fanouts, 1, "one fan-out per accepted send");
+    }
+
+    #[tokio::test]
+    async fn human_arm_prepares_as_the_person_with_no_session_lookup() {
+        let fake = FakeHost::new();
+        let (sent, _) = send_as(&fake, human(Some("design")), "look", Some(gif())).await;
+        assert_eq!(sent.unwrap().media_team, Some(launch_team("design")));
+        let calls = fake.prepare_calls();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(
+            calls[0].team,
+            launch_team("design"),
+            "the given team's config"
+        );
+        assert!(calls[0].own, "admitted as this machine's own");
+        assert!(matches!(calls[0].scope, CallerScope::Human));
+        assert_eq!(calls[0].workspace_root, None);
+        let lookups = fake.lookups();
+        assert!(
+            lookups.is_empty(),
+            "no session lookup on \"human\": {lookups:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn session_arm_still_looks_its_sender_up() {
+        let fake = FakeHost::new();
+        fake.own_sender("H1");
+        let session = ChatSender::Session {
+            handle: "H1".into(),
+            remote: false,
+        };
+        let (sent, fanouts) = send_as(&fake, session, "look", Some(gif())).await;
+        let sent = sent.unwrap();
+        assert_eq!(sent.from, "H1");
+        assert_eq!(sent.media_team, Some(launch_team("default")));
+        let methods: Vec<_> = fake.lookups().into_iter().map(|(m, _)| m).collect();
+        for method in ["own_media_sender", "caller_scope", "caller_media_workspace"] {
+            assert!(methods.contains(&method), "{method} in {methods:?}");
+        }
+        assert_eq!(fanouts, 1);
+    }
+
+    #[tokio::test]
+    async fn blank_text_with_no_media_is_empty_text() {
+        let fake = FakeHost::new();
+        let (err, fanouts) = send_as(&fake, human(Some("default")), "  ", None).await;
+        let err = err.unwrap_err();
+        assert!(
+            matches!(err, SendRefusal::Store(ChatStoreError::EmptyText)),
+            "{err:?}"
+        );
+        assert_eq!(
+            human_send_error(&err, false),
+            ChatStoreError::EmptyText.to_string()
+        );
+        assert_eq!(fanouts, 0);
+        untouched(&fake);
+    }
+
+    #[tokio::test]
+    async fn text_only_send_ignores_its_team() {
+        for team in [Some("default"), Some("nosuch"), None] {
+            let fake = FakeHost::new();
+            let (sent, fanouts) = send_as(&fake, human(team), "hi", None).await;
+            let sent = sent.unwrap();
+            assert_eq!(sent.message_id, 2, "{team:?}: after the anchor");
+            assert_eq!(sent.media_team, None);
+            assert!(sent.attachments.is_empty());
+            assert!(fake.prepare_calls().is_empty());
+            assert_eq!(fanouts, 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn each_refused_gif_writes_nothing() {
+        let overlong_url = format!(
+            "https://media.giphy.com/media/{}/giphy.gif",
+            "a".repeat(MAX_URL_BYTES)
+        );
+        let untagged = |url: &str| MediaInput {
+            provider: None,
+            provider_id: None,
+            url: Some(url.into()),
+            ..gif()
+        };
+        let cases: Vec<(&str, Option<&str>, MediaInput, MediaRefusal)> = vec![
+            (
+                "a path",
+                Some("default"),
+                MediaInput {
+                    url: None,
+                    path: Some("cat.gif".into()),
+                    provider: None,
+                    provider_id: None,
+                    ..gif()
+                },
+                MediaRefusal::Invalid("media from the person must be a url".into()),
+            ),
+            (
+                "a bad url",
+                Some("default"),
+                untagged("not a url"),
+                MediaRefusal::Invalid(String::new()),
+            ),
+            (
+                "an empty alt",
+                Some("default"),
+                MediaInput {
+                    alt: "  ".into(),
+                    ..gif()
+                },
+                MediaRefusal::NoAlt,
+            ),
+            (
+                "an overlong alt",
+                Some("default"),
+                MediaInput {
+                    alt: "a".repeat(MAX_ALT_BYTES + 1),
+                    ..gif()
+                },
+                MediaRefusal::Invalid(format!("media.alt exceeds {MAX_ALT_BYTES} bytes")),
+            ),
+            (
+                "an overlong url",
+                Some("default"),
+                untagged(overlong_url.as_str()),
+                MediaRefusal::Invalid(format!("media.url exceeds {MAX_URL_BYTES} bytes")),
+            ),
+            (
+                "a provider without an id",
+                Some("default"),
+                MediaInput {
+                    provider_id: None,
+                    ..gif()
+                },
+                MediaRefusal::Invalid(String::new()),
+            ),
+            ("no team", None, gif(), MediaRefusal::NoTeam),
+            (
+                "an unknown team",
+                Some("nosuch"),
+                gif(),
+                MediaRefusal::NoTeam,
+            ),
+        ];
+        for (case, team, media, want) in cases {
+            let fake = FakeHost::new();
+            let (err, fanouts) = send_as(&fake, human(team), "look", Some(media)).await;
+            let SendRefusal::Media(got) = err.unwrap_err() else {
+                panic!("{case}: not a media refusal");
+            };
+            match (&want, &got) {
+                (MediaRefusal::Invalid(w), MediaRefusal::Invalid(g)) if w.is_empty() => {
+                    assert!(!g.is_empty(), "{case}");
+                }
+                _ => assert_eq!(got, want, "{case}"),
+            }
+            let copy = human_send_error(&SendRefusal::Media(got), true);
+            let want_copy = match want {
+                MediaRefusal::NoAlt => NO_ALT,
+                MediaRefusal::NoTeam => NO_TEAM,
+                MediaRefusal::Invalid(_) => CANT_SEND,
+            };
+            assert_eq!(copy, want_copy, "{case}");
+            assert_eq!(fanouts, 0, "{case}: no fan-out");
+            assert!(fake.prepare_calls().is_empty(), "{case}: nothing prepared");
+            untouched(&fake);
+        }
+    }
+
+    #[tokio::test]
+    async fn an_overlong_line_with_a_gif_reads_as_too_long() {
+        // Inside the text cap, but escaped in JSON past the log's line bound.
+        let text = "\u{1}".repeat(12_000);
+        for media in [Some(gif()), None] {
+            let fake = FakeHost::new();
+            let with_media = media.is_some();
+            let (err, fanouts) = send_as(&fake, human(Some("default")), &text, media).await;
+            let err = err.unwrap_err();
+            assert!(
+                matches!(err, SendRefusal::Store(ChatStoreError::LineTooLong)),
+                "{err:?}"
+            );
+            let want = if with_media {
+                TOO_LONG.to_string()
+            } else {
+                ChatStoreError::LineTooLong.to_string()
+            };
+            assert_eq!(human_send_error(&err, with_media), want);
+            assert_eq!(fanouts, 0);
+            untouched(&fake);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_human_gif_is_registered_once_across_the_send_and_a_read() {
+        let (fake, fetch) = serving();
+        let (sent, _) = send_as(&fake, human(Some("default")), "", Some(gif())).await;
+        let sent = sent.unwrap();
+        {
+            let calls = fake.media_sent_calls();
+            assert_eq!(calls.len(), 1);
+            let (media, stored_first) = &calls[0];
+            assert!(stored_first, "registration runs after the append");
+            assert_eq!(media.message_id, sent.message_id);
+            assert_eq!(media.chat.as_deref(), Some(WS));
+            assert_eq!(media.team, launch_team("default"));
+            assert_eq!(media.attachment.provider_id.as_deref(), Some("g1"));
+        }
+        let done = settled(&fake, sent.message_id).await;
+        assert_eq!(done.media_state, Some(ChatMediaState::Cached));
+        assert_eq!(fetch.calls(), [URL]);
+        // Reading the chat back indexes it; that registers nothing again.
+        let host = port(&fake);
+        InboxHost::index_chat_media(&*fake, WS).await;
+        let mut page = fake.chat().read(WS, None, None).unwrap();
+        super::super::media::present(&*host, WS, &mut page.messages).await;
+        assert_eq!(fake.media_sent_calls().len(), 1, "registered once");
+    }
+
+    #[tokio::test]
+    async fn with_media_off_a_human_gif_waits_for_a_tap() {
+        let (fake, fetch) = serving();
+        fake.set_media_config(
+            "default",
+            Config {
+                remote: Remote::Off,
+                ..Config::default()
+            },
+        );
+        let (sent, fanouts) = send_as(&fake, human(Some("default")), "", Some(gif())).await;
+        let sent = sent.unwrap();
+        assert_eq!(sent.media_state, Some(ChatMediaState::TapToLoad));
+        assert_eq!(fanouts, 1);
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        assert!(fetch.calls().is_empty(), "nothing fetched");
+    }
+
+    #[test]
+    fn each_refusal_reads_as_its_sentence() {
+        let media = SendRefusal::Media;
+        assert_eq!(human_send_error(&media(MediaRefusal::NoAlt), true), NO_ALT);
+        assert_eq!(
+            human_send_error(&media(MediaRefusal::NoTeam), true),
+            NO_TEAM
+        );
+        assert_eq!(
+            human_send_error(
+                &media(MediaRefusal::Invalid("media.url is not https".into())),
+                true
+            ),
+            CANT_SEND
+        );
+        assert_eq!(
+            human_send_error(&SendRefusal::Store(ChatStoreError::LineTooLong), true),
+            TOO_LONG
+        );
+        assert_eq!(
+            human_send_error(&SendRefusal::Store(ChatStoreError::LineTooLong), false),
+            ChatStoreError::LineTooLong.to_string()
+        );
+        assert_eq!(
+            human_send_error(&SendRefusal::Store(ChatStoreError::TooLong), true),
+            ChatStoreError::TooLong.to_string()
+        );
+    }
+}
