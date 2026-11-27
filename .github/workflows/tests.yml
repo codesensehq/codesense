@@ -78,8 +78,8 @@ jobs:
         run: pnpm exec playwright install --with-deps chromium
       # Real-browser layout of the agent chat in the mock backend's agents world: its boot, the
       # chat's fit at the design's pane sizes, long logs and reduced motion; and the file diff's
-      # focus ring with the app's real styles. One worker: the chat's open-time budget is
-      # measured, and parallel boots would skew it.
+      # focus ring with the app's real styles; and an image card's chip targets. One worker: the
+      # chat's open-time budget is measured, and parallel boots would skew it.
       - name: Run the mock layout specs
         run: >-
           pnpm exec playwright test -c playwright.mock.config.ts --project=chromium --workers=1
@@ -90,6 +90,7 @@ jobs:
           tests/e2e-mock/rendered-diff-focus.spec.ts
           tests/e2e-mock/needs-you-pin.spec.ts
           tests/e2e-mock/foreman-page-runtimes.spec.ts
+          tests/e2e-mock/chat-media-chip-target.spec.ts
       - name: Upload failure traces
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
