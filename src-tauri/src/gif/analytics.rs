@@ -157,4 +157,9 @@ impl Analytics {
     pub(crate) fn held_count(&self) -> usize {
         self.held.lock().unwrap().entries.len()
     }
+
+    #[cfg(test)]
+    pub(crate) fn order_len(&self) -> usize {
+        self.held.lock().unwrap().order.len()
+    }
 }
