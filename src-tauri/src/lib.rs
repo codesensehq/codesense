@@ -447,8 +447,9 @@ pub fn run() {
     // SW-XS-4: focus changes start no sync work (see `on_window_focus_changed`).
     let builder = builder.on_window_event(|window, event| {
         if matches!(event, tauri::WindowEvent::Destroyed) {
-            live_hub::drop_window(window.app_handle(), window.label());
-            commands::pty_viewer::window_destroyed(window.app_handle(), window.label());
+            let label = window.label();
+            live_hub::drop_window(window.app_handle(), label);
+            commands::pty_viewer::window_destroyed(window.app_handle(), label);
         }
         if let tauri::WindowEvent::Focused(focused) = event {
             on_window_focus_changed(window.app_handle(), *focused);

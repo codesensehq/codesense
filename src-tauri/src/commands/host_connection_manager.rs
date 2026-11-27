@@ -3964,8 +3964,8 @@ impl HostConnectionManager {
         };
         connected
             .iter()
-            .filter_map(|machine_id| self.connected_backend(machine_id).ok())
-            .map(|snapshot| snapshot.client())
+            .flat_map(|machine_id| self.connected_backend(machine_id))
+            .map(|snapshot| ConnectedBackendSnapshot::client(&snapshot))
             .collect()
     }
 

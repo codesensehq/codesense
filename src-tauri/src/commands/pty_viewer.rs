@@ -16,7 +16,7 @@ use codesense_pty_core::TerminalHost;
 use tauri::{AppHandle, Manager, Runtime};
 
 use crate::commands::host_connection_manager::{
-    HostConnectionManager, HostConnectionState, ManagerEvent,
+    ConnectedBackendSnapshot, HostConnectionManager, HostConnectionState, ManagerEvent,
 };
 use crate::terminal::session_server::{SessionServerClient, SessionServerState};
 use crate::windows::is_main;
@@ -105,7 +105,10 @@ pub(crate) fn install_id<R: Runtime>(app: &AppHandle<R>) -> InstallId {
 pub(crate) fn window_viewer<R: Runtime>(
     window: &tauri::WebviewWindow<R>,
 ) -> Result<ViewerId, String> {
-    viewer_for(window.label(), &install_id(window.app_handle()))
+    viewer_for(
+        tauri::WebviewWindow::label(window),
+        &install_id(window.app_handle()),
+    )
 }
 
 /// The viewport the window a command was called from shows sessions through.
@@ -279,19 +282,24 @@ pub(crate) fn forget_window(
             continue;
         }
         let viewer = viewer.clone();
-        let spawned = std::thread::Builder::new()
-            .name("viewer-detach".into())
-            .spawn(move || {
-                if let Err(error) = host.forget_viewer(&viewer) {
-                    log::warn!(target: "pty", "detach viewer {viewer}: {error}");
-                }
-            });
+        let spawned = spawn_named("viewer-detach", move || {
+            if let Err(error) = host.forget_viewer(&viewer) {
+                log::warn!(target: "pty", "detach viewer {viewer}: {error}");
+            }
+        });
         match spawned {
             Ok(_) => started += 1,
             Err(error) => log::warn!(target: "pty", "detach viewer: {error}"),
         }
     }
     started
+}
+
+/// Run `work` on a thread named `name`. The builder is called by path so the source guards'
+/// call graph resolves it.
+fn spawn_named(name: &str, work: impl FnOnce() + Send + 'static) -> std::io::Result<()> {
+    let builder = std::thread::Builder::name(std::thread::Builder::new(), name.to_string());
+    builder.spawn(work).map(drop)
 }
 
 /// The `Destroyed` branch: forget the closed window's viewer on every connected host, off
@@ -301,14 +309,12 @@ pub(crate) fn window_destroyed<R: Runtime>(app: &AppHandle<R>, label: &str) {
         return;
     }
     let (app, label) = (app.clone(), label.to_string());
-    let spawned = std::thread::Builder::new()
-        .name("viewer-detach".into())
-        .spawn(move || {
-            let hosts = crate::commands::pty_backend::connected_viewer_hosts(&app);
-            forget_window(boots(), hosts, &label, &install_id(&app));
-        });
+    let spawned = spawn_named("viewer-detach", move || {
+        let hosts = crate::commands::pty_backend::connected_viewer_hosts(&app);
+        forget_window(boots(), hosts, &label, &install_id(&app));
+    });
     if let Err(error) = spawned {
-        log::warn!(target: "pty", "detach viewer of {label}: {error}");
+        log::warn!(target: "pty", "detach viewer of a closed window: {error}");
     }
 }
 
@@ -345,7 +351,7 @@ pub(crate) fn sweep_host(
     let keep: Vec<ViewerId> = keep
         .iter()
         .filter(|label| !is_main(label))
-        .filter_map(|label| viewer_for(label, install).ok())
+        .flat_map(|label| viewer_for(label, install))
         .collect();
     host.forget_viewers_but(&keep, &prefix)?;
     Ok(true)
@@ -364,17 +370,15 @@ fn sweep_in_background<R: Runtime>(
     connected: impl FnOnce(&AppHandle<R>) -> Option<Arc<dyn ViewerHost>> + Send + 'static,
 ) {
     let app = app.clone();
-    let spawned = std::thread::Builder::new()
-        .name("viewer-sweep".into())
-        .spawn(move || {
-            let Some(host) = connected(&app) else {
-                return;
-            };
-            let keep = kept_labels(&app, &NoRestoredLabels);
-            if let Err(error) = sweep_host(&*host, &install_id(&app), &keep) {
-                log::warn!(target: "pty", "sweep left-behind viewers: {error}");
-            }
-        });
+    let spawned = spawn_named("viewer-sweep", move || {
+        let Some(host) = connected(&app) else {
+            return;
+        };
+        let keep = kept_labels(&app, &NoRestoredLabels);
+        if let Err(error) = sweep_host(&*host, &install_id(&app), &keep) {
+            log::warn!(target: "pty", "sweep left-behind viewers: {error}");
+        }
+    });
     if let Err(error) = spawned {
         log::warn!(target: "pty", "sweep left-behind viewers: {error}");
     }
@@ -399,8 +403,10 @@ pub(crate) fn sweep_on_connect<R: Runtime>(app: &AppHandle<R>) {
             let machine = event.machine_id.clone();
             sweep_in_background(&observed, move |app| {
                 let manager = app.try_state::<HostConnectionManager>()?;
-                let backend = manager.connected_backend(&machine).ok()?;
-                Some(backend.client() as Arc<dyn ViewerHost>)
+                let Ok(backend) = manager.connected_backend(&machine) else {
+                    return None;
+                };
+                Some(ConnectedBackendSnapshot::client(&backend) as Arc<dyn ViewerHost>)
             });
         }));
     }
