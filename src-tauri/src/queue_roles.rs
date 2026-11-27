@@ -1,9 +1,12 @@
 // SPDX-License-Identifier: MIT
 //! Shared identity for durable team queues, stored beside the team's avatar packs.
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use rmcp::schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+
+use crate::commands::config_cache::{dir_stamp, file_stamp, ConfigCache, FileStamp};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -71,6 +74,32 @@ pub(crate) fn list_for(
     Ok(out)
 }
 
+type RolesStamp = (
+    (Option<FileStamp>, Vec<(OsString, Option<FileStamp>)>),
+    Option<FileStamp>,
+);
+
+/// Role configs read by the app's hot paths, by content folder and caller scope.
+pub(crate) static ROLE_CONFIGS: ConfigCache<(PathBuf, String), RolesStamp, Vec<RoleConfig>> =
+    ConfigCache::new();
+
+/// [`list_for`], kept until the `roles/` folder, an entry in it or the team's
+/// `config/sharing.yml` moves, or [`save`] writes.
+pub(crate) fn list_for_cached(
+    content: &Path,
+    scope: &crate::context_repo::caller_scope::CallerScope,
+) -> Result<Vec<RoleConfig>, String> {
+    let sharing = content
+        .parent()
+        .unwrap_or(content)
+        .join("config/sharing.yml");
+    ROLE_CONFIGS.get(
+        &(content.to_path_buf(), scope.cache_key().to_string()),
+        || (dir_stamp(&content.join("roles")), file_stamp(&sharing)),
+        || list_for(content, scope),
+    )
+}
+
 pub fn save(content: &Path, mut config: RoleConfig) -> Result<RoleConfig, String> {
     config.id = normalize_role(&config.id)?;
     config.name = config.name.trim().to_string();
@@ -89,12 +118,14 @@ pub fn save(content: &Path, mut config: RoleConfig) -> Result<RoleConfig, String
     let yaml = serde_yaml::to_string(&config).map_err(|e| e.to_string())?;
     crate::content_engine::atomic_io::write_tmp_fsync_rename(&dest, yaml.as_bytes())
         .map_err(|e| e.to_string())?;
+    ROLE_CONFIGS.invalidate();
     Ok(config)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::context_repo::caller_scope::CallerScope;
 
     #[test]
     fn case_distinct_roles_keep_separate_settings() {
@@ -134,6 +165,46 @@ mod tests {
         role.icon = Some("builtin-chess:knight".into());
         save(tmp.path(), role.clone()).unwrap();
         assert_eq!(list(tmp.path()).unwrap(), vec![role]);
+    }
+
+    #[test]
+    fn list_for_cached_until_roles_change() {
+        let _armed = crate::commands::config_cache::arm_this_thread();
+        let tmp = tempfile::tempdir().unwrap();
+        let content = tmp.path().join("content");
+        let scope = Default::default();
+        let key = (content.clone(), CallerScope::cache_key(&scope).to_string());
+        let mut role = RoleConfig {
+            id: "reviewer".into(),
+            name: "Reviewer".into(),
+            icon: None,
+            default_handler: None,
+        };
+        save(&content, role.clone()).unwrap();
+        assert_eq!(list_for_cached(&content, &scope).unwrap(), vec![role.clone()]);
+        assert_eq!(list_for_cached(&content, &scope).unwrap(), vec![role.clone()]);
+        let reads = ROLE_CONFIGS.reads(&key);
+        assert_eq!((reads.stamps, reads.loads), (1, 1), "second read: no file read");
+
+        std::fs::write(
+            content.join("roles/reviewer.yaml"),
+            "id: reviewer\nname: Hand edited\n",
+        )
+        .unwrap();
+        ROLE_CONFIGS.expire();
+        assert_eq!(
+            list_for_cached(&content, &scope).unwrap()[0].name,
+            "Hand edited",
+            "an unreported edit shows once the window closes"
+        );
+
+        role.name = "Saved".into();
+        save(&content, role.clone()).unwrap();
+        assert_eq!(
+            list_for_cached(&content, &scope).unwrap(),
+            vec![role],
+            "a save shows at once"
+        );
     }
 }
 

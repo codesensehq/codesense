@@ -34,7 +34,7 @@ pub(crate) async fn roles_list_for<R: tauri::Runtime>(
     let (org, team) = team_key.split_once(':').ok_or("expected org:team")?;
     let ctx = route_to_context::derive_context_for(&app, org, team).await?;
     await_blocking("roles_list", move || {
-        crate::queue_roles::list_for(&content(&ctx)?, &scope)
+        crate::queue_roles::list_for_cached(&content(&ctx)?, &scope)
     })
     .await
 }
@@ -46,7 +46,7 @@ pub async fn role_save(
     config: RoleConfig,
 ) -> Result<RoleConfig, String> {
     let (org, team) = team_key.split_once(':').ok_or("expected org:team")?;
-    let ctx = route_to_context::derive_context_for(&app, org, team).await?;
+    let ctx = route_to_context::derive_context_uncached(&app, org, team).await?;
     let result = await_blocking("role_save", move || {
         crate::queue_roles::save(&content(&ctx)?, config)
     })

@@ -15,6 +15,12 @@ vi.mock("@/tauri/commands", () => ({
   }),
 }));
 
+vi.mock("@/shared/lib/local-profile-session", () => ({
+  rendererPrincipal: vi.fn(async () => "p1"),
+}));
+
+import { loadAppState } from "@/tauri/commands";
+import { usePrefsStore } from "./prefs-store";
 import {
   dashboardPrefsKey,
   readDashboardPrefs,
@@ -25,6 +31,45 @@ import {
 
 beforeEach(() => {
   store.raw = JSON.stringify({ viewer: { keep: true }, repos: ["r"] });
+  usePrefsStore.setState({ principal: null, owned: {}, ownedReady: false });
+  vi.mocked(loadAppState).mockClear();
+});
+
+describe("prefs from the live prefs store", () => {
+  const live = (dashboardPrefs: unknown, principal = "p1") =>
+    usePrefsStore.setState({ principal, owned: { dashboardPrefs }, ownedReady: true });
+
+  it("prefs reads the live prefs store and invokes load_app_state zero times once ready", async () => {
+    live({ "doc:/a.html": { data: { density: "compact" }, at: Date.now() } });
+    expect(await readDashboardPrefs("doc:/a.html")).toEqual({ density: "compact" });
+    expect(await readDashboardPrefs("doc:/b.html")).toEqual({});
+    expect(loadAppState).toHaveBeenCalledTimes(0);
+
+    // Not ready, another principal's storage, or no prefs kept yet: the file is read.
+    usePrefsStore.setState({ ownedReady: false });
+    await readDashboardPrefs("doc:/a.html");
+    live({ "doc:/a.html": { data: {}, at: Date.now() } }, "p2");
+    await readDashboardPrefs("doc:/a.html");
+    usePrefsStore.setState({ principal: "p1", owned: {}, ownedReady: true });
+    await readDashboardPrefs("doc:/a.html");
+    expect(loadAppState).toHaveBeenCalledTimes(3);
+  });
+
+  it("a prefs-topic update shows on the next prefs read", async () => {
+    live({ "doc:/a.html": { data: { density: "compact" }, at: Date.now() } });
+    expect(await readDashboardPrefs("doc:/a.html")).toEqual({ density: "compact" });
+    live({ "doc:/a.html": { data: { density: "full" }, at: Date.now() } });
+    expect(await readDashboardPrefs("doc:/a.html")).toEqual({ density: "full" });
+    expect(loadAppState).toHaveBeenCalledTimes(0);
+  });
+
+  it("a write shows on the next read before the store's update arrives", async () => {
+    live({});
+    await writeDashboardPrefs("doc:/a.html", { sort: "date" });
+    vi.mocked(loadAppState).mockClear();
+    expect(await readDashboardPrefs("doc:/a.html")).toEqual({ sort: "date" });
+    expect(loadAppState).toHaveBeenCalledTimes(0);
+  });
 });
 
 describe("dashboard prefs", () => {

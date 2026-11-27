@@ -617,6 +617,7 @@ pub fn run() {
             // background thread, because `.setup()` never blocks on the session bus.
             commands::credential_store::start_secret_store_probe();
             commands::team_resolution_cache::listen(app.handle());
+            commands::config_cache::arm();
             live_hub::start(app.handle());
             log::info!(target: "system", "CodeSense v{} starting (log_level={:?}, platform={})",
                 env!("CARGO_PKG_VERSION"), log_level, std::env::consts::OS);
@@ -1388,6 +1389,7 @@ pub fn run() {
             commands::agent_read_model::agent_read_agent,
             commands::agent_read_model::agent_dismiss_context_suggestion,
             commands::agent_read_model::agent_read_inbox,
+            commands::agent_read_model::agent_read_needs_you_count,
             commands::agent_read_model::agent_read_roles,
             commands::agent_read_model::send_inbox_as_human,
             commands::agent_read_model::list_session_inbox,

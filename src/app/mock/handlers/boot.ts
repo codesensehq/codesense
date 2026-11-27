@@ -137,6 +137,7 @@ export function bootHandlers(scenario: MockScenario): HandlerRegistry {
     // The page bridge's agents read model: nothing running, nothing queued.
     agent_read_sessions: () => [],
     agent_read_inbox: () => ({ messages: [], humanUnread: 0 }),
+    agent_read_needs_you_count: () => ({ count: 0 }),
     list_inbox_rollup: () => ({ messages: [], roles: [] }),
     agent_read_roles: () => ({ roles: [] }),
 

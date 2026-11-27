@@ -370,6 +370,42 @@ fn config_reads_edits_without_polling_or_a_cached_policy() {
 }
 
 #[test]
+fn config_sync_cached_until_config_path_noted() {
+    use tauri::Manager;
+    let _armed = crate::commands::config_cache::arm_this_thread();
+    let app = tauri::test::mock_builder()
+        .build(tauri::test::mock_context(tauri::test::noop_assets()))
+        .unwrap();
+    app.manage(crate::live_hub::LiveHub::default());
+    let team = tempfile::tempdir().unwrap();
+    let dir = team.path().join("config");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("inbox.yml"), "media: {remote: off}").unwrap();
+    assert_eq!(config_in(&dir).remote, Remote::Off);
+    assert_eq!(config_in(&dir).remote, Remote::Off);
+    let reads = CONFIGS.reads(&dir);
+    assert_eq!((reads.stamps, reads.loads), (1, 1), "second read: no file read");
+
+    std::fs::write(dir.join("inbox.yml"), "media: {remote: ask}").unwrap();
+    note_config_path(
+        app.handle(),
+        team.path(),
+        "org",
+        "team",
+        &dir.join("inbox.yml"),
+    );
+    assert_eq!(config_in(&dir).remote, Remote::Ask, "a noted write shows at once");
+
+    std::fs::write(dir.join("inbox.yml"), "media: {remote: auto, hosts: []}").unwrap();
+    CONFIGS.expire();
+    assert_eq!(
+        config_in(&dir).remote,
+        Remote::Auto,
+        "an unreported edit shows once the window closes"
+    );
+}
+
+#[test]
 fn canonical_config_edits_emit_the_existing_inbox_domain_event() {
     use tauri::{Listener, Manager};
     let app = tauri::test::mock_builder()

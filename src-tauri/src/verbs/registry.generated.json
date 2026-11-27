@@ -1198,6 +1198,9 @@
           "minLength": 1,
           "type": "string"
         },
+        "countOnly": {
+          "type": "boolean"
+        },
         "sessionId": {
           "minLength": 1,
           "type": "string"

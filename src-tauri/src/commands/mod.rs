@@ -119,6 +119,8 @@ pub mod worktree_editor;
 pub mod route_to_context;
 // The inbox and roles reads' cache of resolved teams.
 pub(crate) mod team_resolution_cache;
+// Kept config reads on the hot paths (synced teams, role configs, media policy).
+pub(crate) mod config_cache;
 // The Routines tab's commands over the routine service.
 pub mod routines;
 pub mod scratch;

@@ -245,7 +245,7 @@ pub(crate) async fn validate_story_in_context_for<R: tauri::Runtime>(
 ) -> Result<Value, String> {
     let ctx = match scope {
         crate::context_repo::caller_scope::CallerScope::Team(view) => {
-            match crate::commands::route_to_context::derive_context_for(
+            match crate::commands::route_to_context::derive_context_uncached(
                 app,
                 view.org(),
                 view.reader_team(),

@@ -440,6 +440,21 @@ impl LiveHub {
         };
         inbox.human_unread_total()
     }
+    /// `team`'s pending needs-you mail to the human: the sum of its `counts` row's
+    /// `needsYouBySender`. Errors while the team's projection is loading.
+    pub(crate) fn needs_you_count(
+        &self,
+        team: &crate::commands::dashboard_launch::LaunchTeam,
+    ) -> Result<u32, String> {
+        let inbox = {
+            let model = self.model.lock().unwrap();
+            if !model.inbox.contains_team(team) {
+                return Err("inbox projection is loading".into());
+            }
+            std::sync::Arc::clone(&model.inbox)
+        };
+        Ok(needs_you_total(&inbox, team))
+    }
     pub(crate) fn inbox_view(
         &self,
         team: &crate::commands::dashboard_launch::LaunchTeam,
@@ -471,6 +486,18 @@ impl LiveHub {
         (rows, inbox::InboxProjection::unread(&*inbox))
     }
 }
+
+/// The sum of `team`'s `counts` row `needsYouBySender`: its pending (unread,
+/// unarchived) needs-you mail to the human.
+pub(crate) fn needs_you_total(
+    projection: &inbox::InboxProjection,
+    team: &crate::commands::dashboard_launch::LaunchTeam,
+) -> u32 {
+    // Not built yet.
+    let _ = (projection, team);
+    0
+}
+
 /// The session list as it is now. Membership and liveness come from `source` when
 /// called: the registry, judged by its probe, plus this Mac's live sessions. The cached
 /// layouts only name, place and decorate the rows, and supply remote machines' tabs.

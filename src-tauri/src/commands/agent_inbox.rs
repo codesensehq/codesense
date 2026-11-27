@@ -251,6 +251,11 @@ pub(crate) trait InboxHost: Send + Sync {
     fn projected_inbox(&self, _team: &LaunchTeam) -> Option<Result<InboxView, String>> {
         None
     }
+    /// `team`'s pending needs-you mail to the human, from the projection the host keeps.
+    /// `None` when it keeps none; [`needs_you_count`] then projects the store once.
+    fn needs_you_count(&self, _team: &LaunchTeam) -> Option<Result<u32, String>> {
+        None
+    }
     fn inbox_changed(&self, changes: &InboxChanges);
     /// The live hub committed a projection pass: `changes` names, per team, the messages it
     /// re-read. Readers that refresh on the notice find those messages committed.
@@ -2537,6 +2542,31 @@ pub(crate) async fn list_messages(
     Ok(view)
 }
 
+/// `team`'s inbox projected from its store, for a host that keeps no projection.
+async fn fresh_projection(
+    host: &dyn InboxHost,
+    team: &LaunchTeam,
+) -> Result<crate::live_hub::inbox::InboxProjection, String> {
+    let batch =
+        crate::live_hub::inbox::read_batch(host.team_store(team).await?, true, vec![]).await?;
+    let mut projection = crate::live_hub::inbox::InboxProjection::default();
+    projection.apply_batch(host, &host.sessions().await?, team, batch, &[]);
+    Ok(projection)
+}
+
+/// `team`'s pending (unread, unarchived) needs-you mail to the human: its `counts`
+/// row's `needsYouBySender`, summed. Reads no message rows when the host keeps a
+/// projection.
+pub(crate) async fn needs_you_count(host: &dyn InboxHost, team: &LaunchTeam) -> Result<u32, String> {
+    match host.needs_you_count(team) {
+        Some(count) => count,
+        None => Ok(crate::live_hub::needs_you_total(
+            &fresh_projection(host, team).await?,
+            team,
+        )),
+    }
+}
+
 pub(crate) async fn list_messages_unbounded(
     host: &dyn InboxHost,
     team: &LaunchTeam,
@@ -2546,14 +2576,7 @@ pub(crate) async fn list_messages_unbounded(
 ) -> Result<InboxView, String> {
     let mut view = match host.projected_inbox(team) {
         Some(view) => view?,
-        None => {
-            let batch =
-                crate::live_hub::inbox::read_batch(host.team_store(team).await?, true, vec![])
-                    .await?;
-            let mut projection = crate::live_hub::inbox::InboxProjection::default();
-            projection.apply_batch(host, &host.sessions().await?, team, batch, &[]);
-            projection.view_parts(team).build()
-        }
+        None => fresh_projection(host, team).await?.view_parts(team).build(),
     };
     for row in &mut view.messages {
         host.present_media(team, &mut row.attachments);
@@ -3083,7 +3106,7 @@ pub(crate) async fn app_role_configs<R: tauri::Runtime>(
     let ctx =
         super::team_resolution_cache::derive_context_cached(app, &team.org, &team.team).await?;
     super::await_blocking("role_configs", move || {
-        crate::queue_roles::list_for(&super::roles::content(&ctx)?, &scope)
+        crate::queue_roles::list_for_cached(&super::roles::content(&ctx)?, &scope)
     })
     .await
 }
@@ -3446,6 +3469,15 @@ impl InboxHost for AppInboxHost {
                 .try_state::<crate::live_hub::LiveHub>()
                 .ok_or_else(|| "live hub unavailable".to_string())
                 .and_then(|hub| hub.inbox_view(team)),
+        )
+    }
+    fn needs_you_count(&self, team: &LaunchTeam) -> Option<Result<u32, String>> {
+        use tauri::Manager;
+        Some(
+            self.app
+                .try_state::<crate::live_hub::LiveHub>()
+                .ok_or_else(|| "live hub unavailable".to_string())
+                .and_then(|hub| hub.needs_you_count(team)),
         )
     }
     fn inbox_event(&self, event: InboxEvent) {

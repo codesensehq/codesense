@@ -514,3 +514,59 @@ async fn each_invalidating_event_drops_the_entries() {
         assert_eq!(f.counts(), (i + 2, i + 2), "{event}: dropped the entry");
     }
 }
+
+/// `derive_context_for` itself answers from the app's cache: a second resolve of a
+/// team reads no file, and a moved registry is re-read once after the window.
+#[tokio::test]
+async fn derive_for_second_call_reads_no_file() {
+    use crate::commands::route_to_context::derive_context_for;
+    struct FixtureHome(Arc<CountingDisk>, PathBuf);
+    impl Disk for FixtureHome {
+        fn stamp(&self, _: &Path, user_id: u64, org: &str, team: &str) -> Stamp {
+            self.0.stamp(&self.1, user_id, org, team)
+        }
+        fn resolve(&self, _: &Path, user_id: u64, org: &str, team: &str) -> ContextResolution {
+            self.0.resolve(&self.1, user_id, org, team)
+        }
+    }
+    let mut f = Fixture::new();
+    f.cache = TeamResolutionCache::with_disk(
+        Arc::new(FixtureHome(f.disk.clone(), f.home().to_path_buf())),
+        f.clock.clock(),
+    );
+    let app = mock_app(&f);
+
+    assert!(is_ok(
+        &derive_context_for(app.handle(), ORG, "backend").await.unwrap(),
+        "backend"
+    ));
+    assert_eq!(f.counts(), (1, 1), "the first call fills");
+    assert!(is_ok(
+        &derive_context_for(app.handle(), ORG, "backend").await.unwrap(),
+        "backend"
+    ));
+    assert_eq!(f.counts(), (1, 1), "the second call reads no file");
+
+    write_teams(f.home(), "teams:\n  - name: frontend\n");
+    f.clock.advance(MAX_AGE);
+    assert!(matches!(
+        derive_context_for(app.handle(), ORG, "backend").await.unwrap(),
+        ContextResolution::Unauthorized
+    ));
+    assert_eq!(f.counts(), (3, 2), "the moved stamp re-read the registry once");
+}
+
+/// `derive_context_for` reads through the cache whenever the app manages it, and the app
+/// always does: setup manages it, listens for its events and arms the config caches.
+/// Only test apps built without setup read uncached.
+#[test]
+fn the_app_manages_the_cache_and_listens_at_setup() {
+    let lib = include_str!("../../lib.rs");
+    for wiring in [
+        ".manage(commands::team_resolution_cache::TeamResolutionCache::default())",
+        "commands::team_resolution_cache::listen(app.handle());",
+        "commands::config_cache::arm();",
+    ] {
+        assert!(lib.contains(wiring), "lib.rs no longer has {wiring}");
+    }
+}

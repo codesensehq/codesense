@@ -1,17 +1,10 @@
 // SPDX-License-Identifier: MIT
-import { create } from "zustand";
 import { configurationPrepare } from "@/tauri/commands";
 import { rendererPrincipal } from "@/shared/lib/local-profile-session";
 import { liveHub, type LiveHub, type HubSnapshot } from "./live-hub";
+import { usePrefsStore, type PrefsState } from "./prefs-store";
 
-export type PrefsState = Record<string, unknown> & { viewer?: Record<string, unknown> };
-export const usePrefsStore = create<{
-  principal: string | null;
-  global: PrefsState;
-  owned: PrefsState;
-  globalReady: boolean;
-  ownedReady: boolean;
-}>(() => ({ principal: null, global: {}, owned: {}, globalReady: false, ownedReady: false }));
+export { usePrefsStore, type PrefsState };
 
 export function prefsFromView(view: HubSnapshot): PrefsState {
   const result: PrefsState = {};

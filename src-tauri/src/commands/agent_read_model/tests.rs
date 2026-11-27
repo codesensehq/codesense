@@ -30,6 +30,10 @@ struct FakeHost {
     remote: super::super::dashboard_launch::DashboardLaunchState,
     remote_online: std::sync::atomic::AtomicBool,
     projected: Mutex<Option<InboxView>>,
+    /// How many times a read asked for the projected inbox view.
+    projected_reads: std::sync::atomic::AtomicU32,
+    /// When set, the count the host's projection answers for `needs_you_count`.
+    needs_you: Mutex<Option<u32>>,
     role_dirs: Mutex<std::collections::HashMap<String, PathBuf>>,
     /// The saved agent and story each handle was launched with (`launch_thread`).
     threads: Mutex<std::collections::HashMap<String, (String, Option<String>)>>,
@@ -44,6 +48,8 @@ impl FakeHost {
         Arc::new(FakeHost {
             dir: tempfile::tempdir().unwrap(),
             projected: Mutex::default(),
+            projected_reads: Default::default(),
+            needs_you: Mutex::default(),
             role_dirs: Mutex::default(),
             threads: Mutex::default(),
             recorded: Mutex::default(),
@@ -70,7 +76,15 @@ impl FakeHost {
 
 #[async_trait::async_trait]
 impl InboxHost for FakeHost {
+    fn needs_you_count(&self, team: &LaunchTeam) -> Option<Result<u32, String>> {
+        (team.team == "default")
+            .then(|| *self.needs_you.lock().unwrap())
+            .flatten()
+            .map(Ok)
+    }
     fn projected_inbox(&self, team: &LaunchTeam) -> Option<Result<InboxView, String>> {
+        self.projected_reads
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         if team.team != "default" {
             return None;
         }
@@ -3012,4 +3026,29 @@ async fn story_filter_walk_reads_every_matching_row_once() {
     }
     assert!(budget_cut, "the 64 KB budget ended a page before its limit");
     assert_eq!(seen, seeded, "every matching row once, newest first");
+}
+
+#[tokio::test]
+async fn needs_you_count_only_reads_counts_row() {
+    use crate::commands::agent_inbox::needs_you_count;
+    use inbox::MessageKind::{NeedsYou, Update};
+    use std::sync::atomic::Ordering;
+    let host = FakeHost::new();
+    // A host that keeps a projection answers from its counts row: no rows are listed.
+    *host.needs_you.lock().unwrap() = Some(3);
+    assert_eq!(needs_you_count(&*host, &team("default")).await, Ok(3));
+    assert_eq!(host.projected_reads.load(Ordering::SeqCst), 0, "no inbox view built");
+
+    // A host that keeps none projects the store once and counts the pending
+    // (unread, unarchived) needs-you mail to the human.
+    let design = host.store("design");
+    insert_kind(&design, "decide?", Some(NeedsYou), None);
+    insert_kind(&design, "pick one?", Some(NeedsYou), None);
+    insert_kind(&design, "merged", Some(Update), None);
+    let read = insert_kind(&design, "seen?", Some(NeedsYou), None);
+    inbox::inbox_mark_read(&design, read, HUMAN).unwrap();
+    let archived = insert_kind(&design, "filed?", Some(NeedsYou), None);
+    inbox::inbox_mark_archived_many(&design, &[archived]).unwrap();
+    assert_eq!(needs_you_count(&*host, &team("design")).await, Ok(2));
+    assert_eq!(host.projected_reads.load(Ordering::SeqCst), 0);
 }
