@@ -824,6 +824,17 @@ pub trait TerminalDomain: Send + Sync {
 
     /// Kill every entry of `workspace`, which then disappears.
     fn close_workspace(&self, workspace: &WorkspaceKey) -> Result<(), LayoutError>;
+
+    /// Forget `viewer`: it never owns a session's size again, and each session
+    /// it owned is resized to its next owner. No session ends.
+    fn detach_viewer(&self, viewer: &ViewerId) -> Result<(), LayoutError>;
+
+    /// Forget `viewer`'s view of `session` only (its size and scroll hint).
+    fn detach_view(&self, viewer: &ViewerId, session: &PtySessionId) -> Result<(), LayoutError>;
+
+    /// Forget every viewer whose id starts with `prefix` except those in
+    /// `keep`. An empty prefix forgets none.
+    fn retain_viewers(&self, keep: &[ViewerId], prefix: &str) -> Result<(), LayoutError>;
 }
 
 /// Whether a session's agent has an inbox waiter on its host: one is waiting now, or for

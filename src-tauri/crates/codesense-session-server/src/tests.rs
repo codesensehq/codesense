@@ -1060,6 +1060,17 @@ fn open_entry_in(
     session: &str,
     placement: codesense_pty_core::layout::Placement,
 ) {
+    open_entry_running(server, app, session, placement, sh("sleep 60"));
+}
+
+/// A layout entry placed as `placement` open in `app`, running `intent`.
+fn open_entry_running(
+    server: &TestServer,
+    app: &mut TestClient,
+    session: &str,
+    placement: codesense_pty_core::layout::Placement,
+    intent: SpawnIntent,
+) {
     use codesense_pty_core::layout::{OpenTab, WorkspaceDescriptor};
     let request = OpenTab {
         cwd: None,
@@ -1085,11 +1096,95 @@ fn open_entry_in(
         .open_tab(
             request,
             Box::new(move || {
-                app.spawn(server, sh("sleep 60"), registration(&id, None, false));
+                app.spawn(server, intent, registration(&id, None, false));
                 Ok(())
             }),
         )
         .expect("tab opened");
+}
+
+/// The viewer detach requests: a host advertises them, and forgetting a
+/// window's viewer (`DetachViewer`), its view of one session (`DetachView`) or
+/// every viewer under a prefix but those kept (`RetainViewers`) hands the
+/// PTY's size back to `app`. Another prefix leaves the viewer alone.
+#[test]
+fn viewer_detach_requests_hand_the_size_back_to_app() {
+    use codesense_pty_core::domain::WorkspaceKey;
+    let server = TestServer::start();
+    let (mut app, greeted) = TestClient::open(server.root(), hello_for(server.root()));
+    assert!(greeted
+        .expect("greeted")
+        .supports(&codesense_host_proto::Capability::ViewerDetachV1));
+    open_entry_running(
+        &server,
+        &mut app,
+        "vd-1",
+        codesense_pty_core::layout::Placement::Tab,
+        sh(r#"while read line; do printf 'SIZE-%s=%s\n' "$line" "$(stty size)"; done"#),
+    );
+    let size_is = |app: &mut TestClient, mark: &str, size: &str| {
+        app.write("vd-1", &format!("{mark}\r")).unwrap();
+        app.output_until("vd-1", &format!("SIZE-{mark}={size}"));
+    };
+    let resize = |app: &mut TestClient, viewer: &str, cols: u16, rows: u16| {
+        app.call(Request::Resize {
+            viewer: ViewerId::new(viewer),
+            session: "vd-1".into(),
+            cols,
+            rows,
+        })
+        .unwrap();
+    };
+    // A window's viewer focuses the session and takes its size.
+    let take = |app: &mut TestClient, viewer: &str| {
+        app.call(Request::SetActive {
+            viewer: ViewerId::new(viewer),
+            workspace: WorkspaceKey::new("root:acme/app"),
+            session: Some("vd-1".into()),
+        })
+        .unwrap();
+        resize(app, viewer, 200, 60);
+    };
+    resize(&mut app, "app", 100, 30);
+    size_is(&mut app, "1", "30 100");
+
+    take(&mut app, "app:i1:pane-x");
+    size_is(&mut app, "2", "60 200");
+    assert_eq!(
+        app.call(Request::DetachViewer {
+            viewer: ViewerId::new("app:i1:pane-x"),
+        }),
+        Ok(Reply::Done)
+    );
+    size_is(&mut app, "3", "30 100");
+
+    take(&mut app, "app:i1:pane-y");
+    assert_eq!(
+        app.call(Request::DetachView {
+            viewer: ViewerId::new("app:i1:pane-y"),
+            session: "vd-1".into(),
+        }),
+        Ok(Reply::Done)
+    );
+    size_is(&mut app, "4", "30 100");
+
+    take(&mut app, "app:i1:pane-z");
+    assert_eq!(
+        app.call(Request::RetainViewers {
+            keep: vec![],
+            prefix: "app:i2:".into(),
+        }),
+        Ok(Reply::Done)
+    );
+    size_is(&mut app, "5", "60 200");
+    assert_eq!(
+        app.call(Request::RetainViewers {
+            keep: vec![ViewerId::new("app:i1:pane-y")],
+            prefix: "app:i1:".into(),
+        }),
+        Ok(Reply::Done)
+    );
+    size_is(&mut app, "6", "30 100");
 }
 
 /// Another app's claim never takes a live app's sessions; and a layout

@@ -166,6 +166,11 @@ pub enum Capability {
     ServerStatusV1,
     /// Self-reported resources, by one-shot read or connection-owned watch.
     MachineStatsV1,
+    /// Forgets a viewer, or one viewer's view of a session (`DetachViewer`,
+    /// `DetachView`), and every viewer under a prefix but those kept
+    /// (`RetainViewers`), so a closed window never owns a session's size
+    /// again. Gated by this capability alone (no protocol-minor bump).
+    ViewerDetachV1,
     #[serde(other)]
     Unsupported,
 }
@@ -674,6 +679,40 @@ mod tests {
         assert_eq!(hello.server_id, "");
         assert!(hello.capabilities.is_empty());
         assert!(!hello.supports(&Capability::Terminals));
+    }
+
+    /// Viewer detach rides on its capability alone: it round-trips by name, a
+    /// reader that predates it hides it as `Unsupported`, and the protocol
+    /// minor stays where it was.
+    #[test]
+    fn viewer_detach_is_a_capability_without_a_minor_bump() {
+        let wire = serde_json::to_value(Capability::ViewerDetachV1).unwrap();
+        assert_eq!(wire, serde_json::json!("viewer_detach_v1"));
+        let back: Capability = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(back, Capability::ViewerDetachV1);
+
+        #[derive(Debug, PartialEq, Deserialize)]
+        #[serde(rename_all = "snake_case")]
+        enum OlderCapability {
+            MachineStatsV1,
+            #[serde(other)]
+            Unsupported,
+        }
+        let old: Vec<OlderCapability> =
+            serde_json::from_value(serde_json::json!(["machine_stats_v1", wire])).unwrap();
+        assert_eq!(
+            old,
+            [
+                OlderCapability::MachineStatsV1,
+                OlderCapability::Unsupported
+            ]
+        );
+
+        let mut hello = host_hello();
+        assert!(!hello.supports(&Capability::ViewerDetachV1));
+        hello.capabilities.push(Capability::ViewerDetachV1);
+        assert!(hello.supports(&Capability::ViewerDetachV1));
+        assert_eq!(PROTO_MINOR, 18);
     }
 
     /// An incompatible host's hello still names its process, for a restart.

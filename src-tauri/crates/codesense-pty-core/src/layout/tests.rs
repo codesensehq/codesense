@@ -739,6 +739,119 @@ fn the_pty_size_follows_the_most_recently_active_viewer() {
     );
 }
 
+/// The viewers the host still holds, sorted.
+fn viewers_of(m: &LayoutModel) -> Vec<String> {
+    let mut ids: Vec<String> = m
+        .lock()
+        .unwrap()
+        .viewers
+        .keys()
+        .map(|id| id.as_str().to_string())
+        .collect();
+    ids.sort();
+    ids
+}
+
+#[test]
+fn retain_viewers_detach_viewer_hands_the_size_back() {
+    let m = model();
+    open(&m, "app", "w", "a");
+    assert_eq!(
+        m.request_size(&viewer("app"), &sid("a"), 100, 30),
+        (100, 30)
+    );
+    // A second window's viewer focuses the session and takes its size.
+    m.set_active(&viewer("app:i1:pane-x"), &ws("w"), Some(&sid("a")))
+        .unwrap();
+    assert_eq!(
+        m.request_size(&viewer("app:i1:pane-x"), &sid("a"), 200, 60),
+        (200, 60)
+    );
+
+    // Its window closes: the size returns to `app`, and the viewer is gone.
+    let effects = m.detach_viewer(&viewer("app:i1:pane-x")).unwrap();
+    assert_eq!(effects.resize, vec![(sid("a"), 100, 30)]);
+    assert!(effects.events.is_empty() && effects.kill.is_empty());
+    assert!(!viewers_of(&m).contains(&"app:i1:pane-x".to_string()));
+    // `app` resizing again is never overruled by the detached viewer.
+    assert_eq!(m.request_size(&viewer("app"), &sid("a"), 90, 20), (90, 20));
+    // Detaching it again, or a viewer the host never saw, changes nothing.
+    assert!(m
+        .detach_viewer(&viewer("app:i1:pane-x"))
+        .unwrap()
+        .resize
+        .is_empty());
+    assert_eq!(layout_of(&m, "w").map(|l| l.tabs.len()), Some(1));
+}
+
+#[test]
+fn retain_viewers_detach_view_forgets_one_session_only() {
+    let m = model();
+    open(&m, "app", "w", "a");
+    open(&m, "app", "w", "b");
+    m.request_size(&viewer("app"), &sid("a"), 100, 30);
+    m.request_size(&viewer("app"), &sid("b"), 100, 30);
+    let pane = viewer("app:i1:pane-x");
+    m.set_active(&pane, &ws("w"), Some(&sid("a"))).unwrap();
+    m.request_size(&pane, &sid("a"), 200, 60);
+    m.request_size(&pane, &sid("b"), 200, 60);
+    m.set_view_hint(
+        &pane,
+        &sid("a"),
+        ViewHint {
+            scroll_from_bottom: 7,
+        },
+    )
+    .unwrap();
+
+    let effects = m.detach_view(&pane, &sid("a")).unwrap();
+    assert_eq!(effects.resize, vec![(sid("a"), 100, 30)]);
+    // The viewer keeps `b`'s size and its focus; `a`'s hint is gone.
+    assert_eq!(
+        m.request_size(&viewer("app"), &sid("b"), 100, 30),
+        (200, 60)
+    );
+    let view = snapshot(&m, "app:i1:pane-x", "boot").viewer;
+    assert!(!view.views.contains_key(&sid("a")));
+    assert_eq!(view.active[&ws("w")], sid("a"));
+}
+
+#[test]
+fn retain_viewers_sweeps_only_the_prefix_and_spares_kept_viewers() {
+    let m = model();
+    open(&m, "app", "w", "a");
+    for id in [
+        "app",
+        "dashboard",
+        "app:i1:pane-x",
+        "app:i1:pane-y",
+        "app:i2:pane-x",
+    ] {
+        m.request_size(&viewer(id), &sid("a"), 80, 24);
+    }
+    // The most recently active viewer is a crashed window's.
+    m.set_active(&viewer("app:i1:pane-x"), &ws("w"), Some(&sid("a")))
+        .unwrap();
+    m.request_size(&viewer("app:i1:pane-x"), &sid("a"), 200, 60);
+
+    let effects = m
+        .retain_viewers(&[viewer("app:i1:pane-y")], "app:i1:")
+        .unwrap();
+    assert_eq!(effects.resize, vec![(sid("a"), 80, 24)]);
+    assert_eq!(
+        viewers_of(&m),
+        ["app", "app:i1:pane-y", "app:i2:pane-x", "dashboard", "v"],
+        "`app`, `dashboard`, another install's viewers and kept ones stay"
+    );
+
+    // An empty keep set sweeps every viewer under the prefix, and no others.
+    m.retain_viewers(&[], "app:i1:").unwrap();
+    assert_eq!(viewers_of(&m), ["app", "app:i2:pane-x", "dashboard", "v"]);
+    // An empty prefix would match everything, so it sweeps nothing.
+    m.retain_viewers(&[], "").unwrap();
+    assert_eq!(viewers_of(&m), ["app", "app:i2:pane-x", "dashboard", "v"]);
+}
+
 #[test]
 fn only_tabs_and_opening_sessions_hold_their_scrollback() {
     let m = model();

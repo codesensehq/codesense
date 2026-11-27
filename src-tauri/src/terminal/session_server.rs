@@ -2226,6 +2226,13 @@ impl SessionServerClient {
         )
     }
 
+    /// Whether this server forgets a viewer on request (`DetachViewer`,
+    /// `DetachView`, `RetainViewers`). One that predates it is never asked:
+    /// it would answer "unsupported request".
+    pub(crate) fn supports_viewer_detach(&self) -> bool {
+        self.hello.supports(&Capability::ViewerDetachV1)
+    }
+
     pub(crate) fn supports_machine_stats(&self) -> bool {
         self.hello.supports(&Capability::MachineStatsV1)
             && !self.machine_stats_unsupported.load(Ordering::Acquire)
@@ -4397,6 +4404,36 @@ impl TerminalDomain for SessionServerClient {
     fn close_workspace(&self, workspace: &WorkspaceKey) -> Result<(), LayoutError> {
         self.layout_done(Request::CloseWorkspace {
             workspace: workspace.clone(),
+        })
+    }
+
+    // A server without viewer detach is never asked, so it detaches nothing.
+    fn detach_viewer(&self, viewer: &ViewerId) -> Result<(), LayoutError> {
+        if !self.supports_viewer_detach() {
+            return Ok(());
+        }
+        self.layout_done(Request::DetachViewer {
+            viewer: viewer.clone(),
+        })
+    }
+
+    fn detach_view(&self, viewer: &ViewerId, session: &PtySessionId) -> Result<(), LayoutError> {
+        if !self.supports_viewer_detach() {
+            return Ok(());
+        }
+        self.layout_done(Request::DetachView {
+            viewer: viewer.clone(),
+            session: session.clone(),
+        })
+    }
+
+    fn retain_viewers(&self, keep: &[ViewerId], prefix: &str) -> Result<(), LayoutError> {
+        if !self.supports_viewer_detach() {
+            return Ok(());
+        }
+        self.layout_done(Request::RetainViewers {
+            keep: keep.to_vec(),
+            prefix: prefix.to_string(),
         })
     }
 }
