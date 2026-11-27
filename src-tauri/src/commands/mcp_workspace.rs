@@ -509,16 +509,23 @@ async fn establish_story_worktree(
             )
         })?;
 
-    // The same idempotent ownership registration as interactive opens, without the
-    // `branch` stamp: the story doc lives in the canonical clone, which an open leaves
-    // unchanged.
-    crate::commands::content_engine::establish_worktree_story_link_unstamped(
-        app.clone(),
-        dir.to_string_lossy().to_string(),
-        record.story_source_path.to_string_lossy().to_string(),
-        record.story_id.clone(),
-        record.source_repo.to_string(),
-    )
+    // The same idempotent ownership registration as interactive opens. It never writes
+    // the story doc, which lives in the canonical clone; the open reports its own drift.
+    let app = app.clone();
+    crate::commands::await_blocking("establish_story_worktree", move || {
+        // RI-2-ALLOW: minted on the blocking pool inside `await_blocking`; the
+        // `&BlockingCtx` gates the establishment body, as the Tauri command does.
+        crate::commands::async_helpers::with_blocking(|ctx| {
+            crate::commands::content_engine::establish_worktree_story_link_blocking(
+                ctx,
+                &app,
+                &dir.to_string_lossy(),
+                &record.story_source_path.to_string_lossy(),
+                &record.story_id,
+                &record.source_repo.to_string(),
+            )
+        })
+    })
     .await
     .map_err(|e| format!("{HYDRATION_FAILED_PREFIX}: establish failed: {e}"))?;
 
@@ -803,7 +810,10 @@ fn reconcile_on_open_core(
 /// and the worktree's HEAD branch (`head`, `None` on a detached or unreadable HEAD),
 /// produce the drift to report. `Some` only when the two differ; a story already on
 /// its worktree's branch reports `None`, with no noisy "X → X" line.
-fn reconcile_report(from: Option<String>, head: Option<String>) -> Option<BranchReconcile> {
+pub(crate) fn reconcile_report(
+    from: Option<String>,
+    head: Option<String>,
+) -> Option<BranchReconcile> {
     let to = head?;
     if from.as_deref() == Some(to.as_str()) {
         return None;

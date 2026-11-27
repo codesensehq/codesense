@@ -582,6 +582,11 @@ impl FrontmatterCache {
         self.entries.contains_key(path)
     }
 
+    /// The entry indexed at `path`, if any.
+    pub fn entry_at(&self, path: &Path) -> Option<&CacheEntry> {
+        self.entries.get(path)
+    }
+
     // ----- Incremental update (T8) -----------------------------------------
 
     #[allow(dead_code)]

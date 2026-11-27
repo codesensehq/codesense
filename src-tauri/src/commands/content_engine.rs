@@ -5385,9 +5385,20 @@ fn build_link_record(
     Some((codesense_home, user_id, record))
 }
 
+/// What linking a worktree to its story reports: whether the worktree's setup has
+/// completed, and the branch drift between the story's recorded `branch` and the
+/// worktree's HEAD (`null` when they agree or HEAD is unreadable).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EstablishLinkResult {
+    pub setup_complete: bool,
+    pub reconciled: Option<crate::commands::mcp_workspace::BranchReconcile>,
+}
+
 /// Register durable story ownership and essential wiring without hydrating context.
 /// Reopen preserves existing bytes, setup state, baselines, and receipts.
-/// Stamps the story doc's `branch` from the worktree's HEAD, as the frontend expects.
+/// The story doc lives in the canonical context clone, so the link never writes it:
+/// it reports the worktree's branch against the story's recorded one instead.
 #[tauri::command]
 pub async fn establish_worktree_story_link(
     app: tauri::AppHandle,
@@ -5395,48 +5406,7 @@ pub async fn establish_worktree_story_link(
     story_source_path: String,
     story_id: String,
     source_repo: String,
-) -> Result<bool, String> {
-    establish_worktree_story_link_with(
-        app,
-        code_repo_path,
-        story_source_path,
-        story_id,
-        source_repo,
-        true,
-    )
-    .await
-}
-
-/// [`establish_worktree_story_link`] without the `branch` stamp, for the MCP open path:
-/// the story doc lives in the canonical context clone, which an open leaves unchanged.
-pub(crate) async fn establish_worktree_story_link_unstamped(
-    app: tauri::AppHandle,
-    code_repo_path: String,
-    story_source_path: String,
-    story_id: String,
-    source_repo: String,
-) -> Result<bool, String> {
-    establish_worktree_story_link_with(
-        app,
-        code_repo_path,
-        story_source_path,
-        story_id,
-        source_repo,
-        false,
-    )
-    .await
-}
-
-/// The one offload both registrations share; `stamp` says whether the story doc's
-/// `branch` is written.
-async fn establish_worktree_story_link_with(
-    app: tauri::AppHandle,
-    code_repo_path: String,
-    story_source_path: String,
-    story_id: String,
-    source_repo: String,
-    stamp: bool,
-) -> Result<bool, String> {
+) -> Result<EstablishLinkResult, String> {
     // Keep all registration and essential wiring I/O off the command executor.
     crate::commands::async_helpers::await_blocking("establish_worktree_story_link", move || {
         // RI-2-ALLOW: minted on the blocking pool inside `await_blocking` (the
@@ -5444,18 +5414,51 @@ async fn establish_worktree_story_link_with(
         // establishment body below so it can never be called back on a
         // command worker without this proof-of-off-plane.
         crate::commands::async_helpers::with_blocking(|ctx| {
-            establish_worktree_story_link_blocking(
+            let setup_complete = establish_worktree_story_link_blocking(
                 ctx,
                 &app,
                 &code_repo_path,
                 &story_source_path,
                 &story_id,
                 &source_repo,
-                stamp,
-            )
+            )?;
+            let from = recorded_story_branch(&app, Path::new(&story_source_path), &story_id);
+            Ok(EstablishLinkResult {
+                setup_complete,
+                reconciled: link_branch_report(from, Path::new(&code_repo_path)),
+            })
         })
     })
     .await
+}
+
+/// The story's recorded branch from the frontmatter cache, by the precedence the open
+/// reconcile reads (`branch` → `branch_name` → `dev_branch`). The story is found by
+/// path, else by id; a miss is `None`.
+fn recorded_story_branch(
+    app: &tauri::AppHandle,
+    story_path: &Path,
+    story_id: &str,
+) -> Option<String> {
+    use crate::install::frontmatter_cache::{FrontmatterCache, SharedFrontmatterCache};
+    let shared = app.try_state::<SharedFrontmatterCache>()?;
+    let cache = FrontmatterCache::snapshot(&shared);
+    let entry = match cache.entry_at(story_path) {
+        Some(entry) => entry,
+        None => cache.single_by_story_id(story_id).ok()?,
+    };
+    entry.story_branch().map(str::to_string)
+}
+
+/// The branch drift a link reports: the story's recorded branch (`from`) against the
+/// branch the worktree at `code_path` is on. It only reads; `None` when they agree or
+/// HEAD is detached or unreadable.
+pub(crate) fn link_branch_report(
+    from: Option<String>,
+    code_path: &Path,
+) -> Option<crate::commands::mcp_workspace::BranchReconcile> {
+    let head = crate::commands::worktree::current_branch_of_worktree(code_path);
+    crate::commands::mcp_workspace::reconcile_report(from, head)
 }
 
 /// Register durable story ownership and admit explicit lifecycle operations,
@@ -5527,15 +5530,15 @@ fn stamps_story_branch(home: &Path, principal: &Principal, code_path: &Path) -> 
         .is_some_and(WorktreeStoryRecord::is_seat)
 }
 
-/// Disk-touching registration and wiring run only on the blocking pool.
-fn establish_worktree_story_link_blocking(
+/// Disk-touching registration and wiring run only on the blocking pool. Shared by the
+/// frontend's command and the MCP open path; it never writes the story doc.
+pub(crate) fn establish_worktree_story_link_blocking(
     _ctx: &crate::commands::async_helpers::BlockingCtx,
     app: &tauri::AppHandle,
     code_repo_path: &str,
     story_source_path: &str,
     story_id: &str,
     source_repo: &str,
-    stamp: bool,
 ) -> Result<bool, String> {
     let story_path = PathBuf::from(story_source_path);
     let code_path = PathBuf::from(code_repo_path);
@@ -5550,9 +5553,6 @@ fn establish_worktree_story_link_blocking(
     let principal = Principal::from(user_id);
     let setup_complete = register_story_workspace(&codesense_home, &principal, record)?;
     crate::commands::managed_worktree_config::write(&code_path, &codesense_home);
-    if stamp && stamps_story_branch(&codesense_home, &principal, &code_path) {
-        let _ = write_story_branch(app, &story_path, &code_path);
-    }
 
     // Publish registration readiness to the existing workspace roster.
     crate::commands::worktree::emit_worktree_changed(app);
