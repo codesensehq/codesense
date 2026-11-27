@@ -1046,7 +1046,10 @@ export interface InboxMediaAttachment {
   alt: string;
   sourceUrl?: string;
   sourceHost?: string;
-  state: "cached" | "pending" | "blocked" | "failed";
+  /** `tapToLoad` (held until someone loads it) and `loading` (loading on its own) are the
+   *  workspace chat's states as its media bubble shows them; the inbox reads `pending` for
+   *  a held image. */
+  state: "cached" | "pending" | "blocked" | "failed" | "tapToLoad" | "loading";
   reason?: string;
   retryable?: boolean;
   /** The provider whose host the bytes finally came from; missing on an old message. */

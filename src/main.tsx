@@ -207,6 +207,21 @@ function renderApp(): void {
     });
     return;
   }
+  // `dev:mock` only: `?harness=chat-media` mounts a workspace chat with one image post per
+  // media state.
+  if (
+    import.meta.env.MODE === "mock" &&
+    new URLSearchParams(window.location.search).get("harness") === "chat-media"
+  ) {
+    void import("./app/mock/chat-media-harness").then(({ ChatMediaHarness }) => {
+      ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
+        <ThemeProvider attribute="class" defaultTheme="dark" enableSystem>
+          <ChatMediaHarness />
+        </ThemeProvider>,
+      );
+    });
+    return;
+  }
   ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
     <React.StrictMode>
       <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
