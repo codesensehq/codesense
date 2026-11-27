@@ -8,11 +8,7 @@ import type { TerminalAiStatus } from "@/shared/lib/terminal-ai-status";
 import { markOfAgentStatus, markOfTerminalStatus } from "@/shared/lib/status-mark";
 import type { AgentStatus } from "@/shared/lib/agent-status-config";
 import { formatMarkLabel } from "@/shared/lib/terminal-dot-words";
-import {
-  EMPTY_TERMINAL_LAYOUT,
-  sessionTarget,
-  type TerminalLayoutProjection,
-} from "@/shared/lib/terminal-layout-projection";
+import { sessionTarget } from "@/shared/lib/terminal-layout-projection";
 import { useViewerStore } from "@/shared/stores/viewer-store";
 import type { AgentSessionRow } from "@/tauri/commands";
 
@@ -74,15 +70,14 @@ export function detectSessionAgent(
       >
     >,
   sessionId: string,
-  layout = useViewerStore.getState().terminalLayout,
+  placed: boolean = !!sessionTarget(useViewerStore.getState().terminalLayout, sessionId),
 ): ReturnType<typeof detectedAgentCli> {
   if (state.exitBySession?.[sessionId]) return null;
   const activity = state.activityBySession?.[sessionId];
   if (activity && activity.freshness !== "current") {
     // Missing instrumentation on an admitted host is different from lost liveness.
     const process = state.processAgentBySession?.[sessionId];
-    if (activity.freshness === "recovering" || !process || !sessionTarget(layout, sessionId))
-      return null;
+    if (activity.freshness === "recovering" || !process || !placed) return null;
     return { cli: process, processOnly: true };
   }
   const snapshot = activity?.snapshot;
@@ -98,22 +93,16 @@ export function detectSessionAgent(
 export function isRunningAgent(
   state: Parameters<typeof detectSessionAgent>[0],
   sessionId: string,
-  layout?: TerminalLayoutProjection,
+  placed?: boolean,
 ): boolean {
-  const cli = detectSessionAgent(state, sessionId, layout)?.cli;
+  const cli = detectSessionAgent(state, sessionId, placed)?.cli;
   return isRegisteredAgentRuntime(cli);
 }
 
 export function useRunningAgent(sessionId: string): boolean {
   // Only whether the layout holds the session matters, so a layout edit elsewhere is no redraw.
   const placed = useViewerStore((s) => !!sessionTarget(s.terminalLayout, sessionId));
-  return useAgentStateStore((s) =>
-    isRunningAgent(
-      s,
-      sessionId,
-      placed ? useViewerStore.getState().terminalLayout : EMPTY_TERMINAL_LAYOUT,
-    ),
-  );
+  return useAgentStateStore((s) => isRunningAgent(s, sessionId, placed));
 }
 
 /** A session's agent identity, retained for history and offline presentation.

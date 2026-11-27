@@ -1850,7 +1850,8 @@ const WorkspaceTerminalBody = memo(function WorkspaceTerminalBody({
           </PaneViewsContext.Provider>
         ) : (
           mountedIds.map((id) => {
-            const view = paneViews.get(id);
+            // The store's own view keeps its identity while equal, so the memo can skip.
+            const view = paneStore.get(id);
             return view ? <TerminalPane key={id} view={view} /> : null;
           })
         )}

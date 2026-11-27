@@ -12,7 +12,7 @@
  * Profiler callbacks fire only in dev React: these are seam tests, never run on the packaged build.
  */
 import { act, cleanup, fireEvent, render } from "@/test-utils";
-import { DndContext } from "@dnd-kit/core";
+import { DndContext, type DragEndEvent } from "@dnd-kit/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const h = vi.hoisted(() => ({
@@ -149,6 +149,8 @@ import { rememberTerminalSize } from "@/shared/lib/terminal-open";
 import { useOrgStore } from "@/shared/stores/org-store";
 import { useViewerStore, effectiveMosaicRoot } from "@/shared/stores/viewer-store";
 import { reconcilePresetTree, type MosaicNode } from "@/shared/tiling";
+import { dropWorkspace } from "../lib/tray-reorder-drag";
+import { tileZoneId } from "../lib/terminal-drag";
 import { installTerminalLayoutHarness, seedTerminalTabs } from "@/test/terminal-layout-harness";
 import { useTerminalDisplayWarm } from "../hooks/use-terminal-display-warm";
 import { WorkspaceTerminalPanels, type FrameProbe } from "./workspace-terminal-panels";
@@ -166,7 +168,10 @@ const s = () => useViewerStore.getState();
 const flush = () => act(async () => new Promise((r) => setTimeout(r, 20)));
 const sessionOf = (id: string) => `s-${id}`;
 
-/** The frame probe: commits and mounts per frame id since the last `reset`. */
+/** The frame probe: commits and mounts per frame id since the last `reset`. The counts cover each
+ *  frame's own render only, not its descendants': subscriptions below the frame (avatar packs, the
+ *  tab captions' inbox counts, the tab bar's reads) can still redraw for an unrelated tile, and a
+ *  later change owns them and widens this probe to a `Profiler` around the whole frame. */
 const probe = (() => {
   const renders = new Map<string, number>();
   const mounts = new Map<string, number>();
@@ -219,9 +224,13 @@ function seed() {
   for (const id of TILES) addWorkspace(TEAM, id, id === "w1" ? GRID_TABS : undefined);
 }
 
+const dragEnd: { current: ((event: DragEndEvent) => void) | null } = { current: null };
+
 function renderApp(teamHidden = false) {
+  const onDragEnd = (event: DragEndEvent) => dropWorkspace(TEAM, event.active.id, event.over?.id);
+  dragEnd.current = onDragEnd;
   return render(
-    <DndContext>
+    <DndContext onDragEnd={onDragEnd}>
       <DisplayWarm />
       <div data-xterm-host data-repo-path="/repo">
         <WorkspaceTerminalPanels
@@ -296,8 +305,51 @@ const currentRoot = () =>
 
 const frames = (ids: string[]) => ids.map((id) => `tile:${id}`);
 
+const leaf = (id: string): MosaicNode => ({ kind: "leaf", id });
+const evenly = (n: number) => Array.from({ length: n }, () => 100 / n);
+
+/** The node at `path` (the root for `[]`). */
+const nodeAtPath = (root: MosaicNode, path: number[]) =>
+  path.reduce<MosaicNode>((n, i) => (n.kind === "split" ? n.children[i] : n), root);
+
+/** Sizes of the split at `path` that differ from its current ones and match its child count. */
+function resizedSizes(root: MosaicNode, path: number[]): number[] {
+  const node = nodeAtPath(root, path);
+  if (node.kind !== "split") throw new Error("not a split");
+  const n = node.children.length;
+  return node.children.map((_, i) => (i === 0 ? 40 : 60 / (n - 1)));
+}
+
+/** Eight tiles in a custom mosaic: two rows, the second holding w3, w4 and a nested split of
+ *  w5-w8 right of w4, where w9 will be inserted. */
+function seedNestedMosaic() {
+  const row = (children: MosaicNode[]): MosaicNode => ({
+    kind: "split",
+    axis: "row",
+    children,
+    sizes: evenly(children.length),
+  });
+  const column = (children: MosaicNode[]): MosaicNode => ({
+    kind: "split",
+    axis: "column",
+    children,
+    sizes: evenly(children.length),
+  });
+  const root = column([
+    row([leaf("w1"), leaf("w2")]),
+    row([leaf("w3"), leaf("w4"), column([leaf("w5"), leaf("w6"), row([leaf("w7"), leaf("w8")])])]),
+  ]);
+  useViewerStore.setState((st) => ({
+    foregroundLayout: {
+      ...st.foregroundLayout,
+      [TEAM]: { sizes: [], direction: "row", preset: "custom", root },
+    },
+  }));
+}
+
 describe("the frame probe on today's CLI workspace (8 tiles)", () => {
   it("adding a tile draws only the new tile and the split it joins", async () => {
+    seedNestedMosaic();
     renderApp();
     await flush();
     expect(probe.mounted("tile:")).toEqual(frames(TILES).sort());
@@ -320,12 +372,15 @@ describe("the frame probe on today's CLI workspace (8 tiles)", () => {
     expect(outside.length).toBeGreaterThan(0);
     expect(probe.rendered("tile:").filter((id) => outside.includes(id.slice(5)))).toEqual([]);
     expect(probe.mounted("tile:").filter((id) => outside.includes(id.slice(5)))).toEqual([]);
+    // The tiles whose index in the split shifted (a nested split among them) stay mounted.
+    expect(probe.mounted("tile:")).toEqual(frames([NEW_TILE]));
     expect(probe.mounts.get(`tile:${NEW_TILE}`)).toBe(1);
     // Not the proof (the frame holds no terminal), but the display count is exactly one more.
     expect(h.created - constructed).toBe(1);
   });
 
   it("committing one split's sizes draws no frame outside that split and mounts none", async () => {
+    seedNestedMosaic();
     renderApp();
     await flush();
     act(() => {
@@ -344,9 +399,15 @@ describe("the frame probe on today's CLI workspace (8 tiles)", () => {
     const inside = leavesUnder(root, path);
     probe.reset();
 
-    act(() => s().setForegroundNodeSizes(TEAM, path, [70, 30]));
+    const sizes = resizedSizes(root, path);
+    expect(sizes).toHaveLength((split as { children: MosaicNode[] }).children.length);
+    expect(sizes).not.toEqual((split as { sizes: number[] }).sizes);
+
+    act(() => s().setForegroundNodeSizes(TEAM, path, sizes));
     await flush();
 
+    // The commit landed, so the assertions below can fail.
+    expect((nodeAtPath(currentRoot(), path) as { sizes: number[] }).sizes).toEqual(sizes);
     expect(probe.mounted("tile:")).toEqual([]);
     expect(probe.rendered("tile:").filter((id) => !inside.includes(id.slice(5)))).toEqual([]);
   });
@@ -397,8 +458,11 @@ describe("the subscription probe: no hook of an unrelated tile changes", () => {
     expect(unrelatedChanges(touched)).toEqual([]);
 
     h.changes = {};
-    act(() => s().setForegroundNodeSizes(TEAM, parentPathOf(root, NEW_TILE)!, [60, 40]));
+    const path = parentPathOf(root, NEW_TILE)!;
+    const sizes = resizedSizes(root, path);
+    act(() => s().setForegroundNodeSizes(TEAM, path, sizes));
     await flush();
+    expect((nodeAtPath(currentRoot(), path) as { sizes: number[] }).sizes).toEqual(sizes);
     expect(unrelatedChanges(touched)).toEqual([]);
   });
 });
@@ -435,6 +499,8 @@ describe("the tab grid's cells", () => {
     const root = reconcilePresetTree(undefined, "columns", GRID_TABS, Infinity, Infinity)!;
     act(() => s().setTabGridSizes(TEAM, "w1", "columns", root, [], [10, 20, 30, 40]));
     await flush();
+    const saved = Object.values(s().tabGridLayout).map((entry) => entry.root);
+    expect(saved.map((node) => (node as { sizes: number[] }).sizes)).toEqual([[10, 20, 30, 40]]);
     expect(probe.rendered("cell:")).toEqual([]);
     expect(probe.mounted("cell:")).toEqual([]);
   });
@@ -456,7 +522,7 @@ describe("a drag in progress", () => {
       (zone) => zone.getAttribute("data-drop-side"),
     );
 
-  it("shows zones on every other tile, none on its own, and clears them on drop", async () => {
+  it("shows zones on every other tile, none on its own, and clears them on cancel", async () => {
     renderApp();
     await flush();
     expect(zonesOn("w2")).toEqual([]);
@@ -467,11 +533,10 @@ describe("a drag in progress", () => {
     await flush();
 
     expect(zonesOn("w1")).toEqual([]);
-    for (const id of TILES.slice(1)) {
-      const sides = zonesOn(id);
-      expect(sides.length, id).toBeGreaterThan(0);
-      expect(sides.length, id).toBeLessThanOrEqual(4);
-    }
+    // w2 is w1's right neighbour in the first row: dropping w1 on w2's left edge changes nothing,
+    // so that one zone is not offered and the other three are.
+    expect(zonesOn("w2").sort()).toEqual(["bottom", "right", "top"]);
+    for (const id of TILES.slice(2)) expect(zonesOn(id).length, id).toBeGreaterThan(0);
     // A drag start may redraw every frame (a per-tile zone subscription would end that): the
     // bound is that none mounts.
     expect(probe.mounted("tile:")).toEqual([]);
@@ -481,6 +546,31 @@ describe("a drag in progress", () => {
     await flush();
     for (const id of TILES) expect(zonesOn(id), id).toEqual([]);
     expect(probe.mounted("tile:")).toEqual([]);
+  });
+
+  it("drops on a shown zone and the tile lands on that side", async () => {
+    renderApp();
+    await flush();
+    handleOf("w1").focus();
+    fireEvent.keyDown(handleOf("w1"), { code: "Space", key: " " });
+    await flush();
+    expect(zonesOn("w2")).toContain("right");
+
+    // The drop the workbench's DndContext would deliver for that zone.
+    const drop = dragEnd.current!;
+    act(() =>
+      drop({
+        active: { id: "w1" },
+        over: { id: tileZoneId("w2", "right") },
+      } as unknown as DragEndEvent),
+    );
+    fireEvent.keyDown(document, { code: "Escape", key: "Escape" });
+    await flush();
+
+    const root = currentRoot();
+    const siblings = leavesUnder(root, parentPathOf(root, "w2")!);
+    expect(siblings.indexOf("w1")).toBe(siblings.indexOf("w2") + 1);
+    for (const id of TILES) expect(zonesOn(id), id).toEqual([]);
   });
 });
 
@@ -514,8 +604,11 @@ describe("a team switch (a warm team's tiles stay mounted)", () => {
     expect(probe.mounted("tile:").length).toBe(TILES.length + 2);
     probe.reset();
 
+    // The active team moves with the props, as the workbench's switch does.
+    act(() => useOrgStore.setState({ activeTeamName: "other" }));
     rerender(view(false));
     await flush();
+    act(() => useOrgStore.setState({ activeTeamName: "default" }));
     rerender(view(true));
     await flush();
 

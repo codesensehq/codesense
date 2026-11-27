@@ -28,6 +28,10 @@ function sameView(a: object, b: object): boolean {
  *
  * The owner publishes every render. A view equal to the key's last one keeps its identity, so a
  * subscriber's snapshot is unchanged and it does not redraw.
+ *
+ * Limit: it publishes during the owner's render, which is safe only while nothing renders the
+ * owner in a transition or under Suspense. A render React throws away would leave the store
+ * holding views that never committed, and a child that redraws for its own reason would read them.
  */
 export class KeyedViewStore<V extends object> {
   private views: ReadonlyMap<string, V> = new Map();

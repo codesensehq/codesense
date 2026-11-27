@@ -39,6 +39,22 @@ export function useFaceTags(teamKey: string | null): ReadonlyMap<string, number>
   );
 }
 
+/** The team of each session whose tab is open. A running tab wins over a minimized one. */
+function teamBySession(
+  minimized: TerminalTabIndex,
+  running: TerminalTabIndex,
+): Record<string, string> {
+  const teamOf: Record<string, string> = {};
+  for (const index of [minimized, running]) {
+    for (const [team, byWorkspace] of Object.entries(index)) {
+      for (const tabs of Object.values(byWorkspace)) {
+        for (const tab of tabs) if (tab.sessionId) teamOf[tab.sessionId] = team;
+      }
+    }
+  }
+  return teamOf;
+}
+
 /** The inputs {@link faceTagsFor} reads, all from the stores. */
 export interface FaceTagInput {
   sessions: readonly AgentSessionRow[] | null;
@@ -57,14 +73,7 @@ export function faceTagsFor(
   input: FaceTagInput,
 ): ReadonlyMap<string, number> {
   const { running, minimized, ...rest } = input;
-  const teamOf: Record<string, string> = {};
-  for (const index of [minimized, running]) {
-    for (const [team, byWorkspace] of Object.entries(index)) {
-      for (const tabs of Object.values(byWorkspace)) {
-        for (const tab of tabs) if (tab.sessionId) teamOf[tab.sessionId] = team;
-      }
-    }
-  }
+  const teamOf = teamBySession(minimized, running);
   return faceTags(teamKey, { ...rest, teamOf });
 }
 
@@ -72,17 +81,9 @@ export function faceTagsFor(
  *  a layout edit that leaves the tabs' teams alone does not redraw its readers. */
 function useTabTeamBySession(): Readonly<Record<string, string>> {
   return useViewerStore(
-    useShallow((s) => {
-      const teamOf: Record<string, string> = {};
-      for (const index of [selectMinimizedTerminalTabIndex(s), selectRunningTerminalTabIndex(s)]) {
-        for (const [team, byWorkspace] of Object.entries(index)) {
-          for (const tabs of Object.values(byWorkspace)) {
-            for (const tab of tabs) if (tab.sessionId) teamOf[tab.sessionId] = team;
-          }
-        }
-      }
-      return teamOf;
-    }),
+    useShallow((s) =>
+      teamBySession(selectMinimizedTerminalTabIndex(s), selectRunningTerminalTabIndex(s)),
+    ),
   );
 }
 

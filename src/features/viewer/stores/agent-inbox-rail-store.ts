@@ -7,7 +7,7 @@ import {
 import { isRegisteredAgentRuntime } from "@/shared/lib/agent-runtimes";
 import type { AgentRuntime } from "@/tauri/commands";
 import { useAgentStateStore } from "@/shared/stores/agent-state-store";
-import { EMPTY_TERMINAL_LAYOUT, sessionTarget } from "@/shared/lib/terminal-layout-projection";
+import { sessionTarget } from "@/shared/lib/terminal-layout-projection";
 import { useViewerStore } from "@/shared/stores/viewer-store";
 import { create } from "zustand";
 import { useShallow } from "zustand/react/shallow";
@@ -105,11 +105,7 @@ export function useTabAgentCli(sessionId: string): {
   const claimed = useAgentInboxRailStore((s) => !!s.bySession[sessionId] || !!s.pending[sessionId]);
   return useAgentStateStore(
     useShallow((agent) => {
-      const detected = detectSessionAgent(
-        agent,
-        sessionId,
-        placed ? useViewerStore.getState().terminalLayout : EMPTY_TERMINAL_LAYOUT,
-      );
+      const detected = detectSessionAgent(agent, sessionId, placed);
       const cli = isRegisteredAgentRuntime(detected?.cli) ? detected.cli : null;
       const pending =
         cli !== null && !claimed && unclaimedHandCoverOf(agent, sessionId, detected) === "pending";
