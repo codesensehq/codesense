@@ -57,9 +57,11 @@ impl Drop for ArmedHere {
 }
 
 fn armed() -> bool {
-    // Not built yet: nothing is kept.
-    let _ = (&ARMED, Ordering::Relaxed);
-    false
+    #[cfg(test)]
+    if ARMED_HERE.with(std::cell::Cell::get) {
+        return true;
+    }
+    ARMED.load(Ordering::Relaxed)
 }
 
 /// Drop every config cache's entries. Called on each of the invalidating events.

@@ -493,9 +493,12 @@ pub(crate) fn needs_you_total(
     projection: &inbox::InboxProjection,
     team: &crate::commands::dashboard_launch::LaunchTeam,
 ) -> u32 {
-    // Not built yet.
-    let _ = (projection, team);
-    0
+    projection.counts(team)["needsYouBySender"]
+        .as_object()
+        .into_iter()
+        .flat_map(|by_sender| by_sender.values())
+        .filter_map(serde_json::Value::as_u64)
+        .sum::<u64>() as u32
 }
 
 /// The session list as it is now. Membership and liveness come from `source` when

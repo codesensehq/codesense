@@ -317,8 +317,15 @@ pub(crate) async fn derive_context_for<R: tauri::Runtime>(
     org: &str,
     team: &str,
 ) -> Result<ContextResolution, String> {
-    // Not built yet: every call reads the registry.
-    derive_context_uncached(app, org, team).await
+    // App setup always manages the cache (`lib.rs`, with its `listen`); only a test app
+    // built without setup has none and reads uncached.
+    if app
+        .try_state::<super::team_resolution_cache::TeamResolutionCache>()
+        .is_none()
+    {
+        return derive_context_uncached(app, org, team).await;
+    }
+    super::team_resolution_cache::derive_context_cached(app, org, team).await
 }
 
 /// [`derive_context_for`] read from disk every call, for the writers: a team's content
