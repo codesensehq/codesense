@@ -39,7 +39,7 @@ vi.mock("@/tauri/commands", () => ({
   probeWorktreeConfig: vi.fn(),
   getWorktreeConfig: vi.fn(),
   checkBranchExists: vi.fn().mockResolvedValue(true),
-  establishWorktreeStoryLink: vi.fn().mockResolvedValue(undefined),
+  establishWorktreeStoryLink: vi.fn().mockResolvedValue({ setupComplete: true, reconciled: null }),
   // SW-GW-8: a nav story open folds its session into the trusted registry (AC-1).
   dashboardRegisterSession: vi.fn().mockResolvedValue(undefined),
   // SW-WB-1: reconcile-path commands.
@@ -241,7 +241,7 @@ function reset() {
   resolveWorktreeParamsMock
     .mockReset()
     .mockResolvedValue({ branchName: "feat/34-9-worktree-gate", startPoint: null });
-  establishLinkMock.mockReset().mockResolvedValue(true);
+  establishLinkMock.mockReset().mockResolvedValue({ setupComplete: true, reconciled: null });
 }
 
 describe("ensureWorktree — store hit", () => {
@@ -312,7 +312,7 @@ describe("ensureWorktree — on-disk detection", () => {
     findOnDiskMock.mockResolvedValue({ path: "/wt/retry-register", branch: "feat/retry" });
     establishLinkMock
       .mockRejectedValueOnce(new Error("registration unavailable"))
-      .mockResolvedValueOnce(true);
+      .mockResolvedValueOnce({ setupComplete: true, reconciled: null });
     await expect(useViewerStore.getState().ensureWorktree(repo, storyFile)).rejects.toThrow(
       "registration unavailable",
     );
@@ -347,7 +347,7 @@ describe("ensureWorktree — on-disk detection", () => {
         ],
       },
     }));
-    establishLinkMock.mockResolvedValue(false);
+    establishLinkMock.mockResolvedValue({ setupComplete: false, reconciled: null });
     await expect(useViewerStore.getState().ensureWorktree(repo, storyFile)).resolves.toBe(
       "/wt/persisted",
     );
@@ -376,7 +376,7 @@ describe("ensureWorktree — on-disk detection", () => {
         ],
       },
     }));
-    let release!: (complete: boolean) => void;
+    let release!: (link: { setupComplete: boolean; reconciled: null }) => void;
     establishLinkMock.mockReturnValue(
       new Promise((resolve) => {
         release = resolve;
@@ -384,7 +384,7 @@ describe("ensureWorktree — on-disk detection", () => {
     );
     const opening = useViewerStore.getState().ensureWorktree(repo, storyFile);
     useViewerStore.getState().closeWorkspace(repo, storyId);
-    release(false);
+    release({ setupComplete: false, reconciled: null });
     await expect(opening).rejects.toThrow("cancelled");
     expect(runSetupPhaseMock).not.toHaveBeenCalled();
     expect(useViewerStore.getState().workspaces[repo].some((w) => w.id === storyId)).toBe(false);
@@ -392,7 +392,7 @@ describe("ensureWorktree — on-disk detection", () => {
 
   it("recovers incomplete setup on an existing worktree without recreating it", async () => {
     findOnDiskMock.mockResolvedValue({ path: "/wt/retry-setup", branch: "feat/retry" });
-    establishLinkMock.mockResolvedValue(false);
+    establishLinkMock.mockResolvedValue({ setupComplete: false, reconciled: null });
     runSetupPhaseMock
       .mockRejectedValueOnce(new Error("setup failed"))
       .mockResolvedValueOnce({ worktreePath: "/wt/retry-setup", results: [] });
@@ -734,6 +734,24 @@ describe("ensureWorktree — SW-TS-4 establish link", () => {
     );
   });
 
+  it("hands setupWorktree the link's setupComplete, so a rehydrated worktree still runs setup", async () => {
+    findOnDiskMock.mockResolvedValue(null);
+    probeMock.mockResolvedValue({ status: { kind: "present" }, config: baseConfig });
+    establishLinkMock.mockResolvedValue({
+      setupComplete: false,
+      reconciled: { from: "feat/old", to: "feat/34-9-worktree-gate" },
+    });
+    let created: unknown;
+    setupMock.mockImplementation(async (options: { onCreated?: () => unknown }) => {
+      created = await options.onCreated?.();
+      return { worktreePath: "/wt/feat-34-9-worktree-gate", results: [] };
+    });
+
+    await useViewerStore.getState().ensureWorktree(repo, storyFile);
+
+    expect(created).toBe(false);
+  });
+
   it("re-asserts the link + re-derives for an already-on-disk worktree (AC-4)", async () => {
     findOnDiskMock.mockResolvedValue({
       path: "/wt/on-disk",
@@ -760,7 +778,9 @@ describe("ensureWorktree — SW-TS-4 establish link", () => {
     probeMock.mockResolvedValue({ status: { kind: "present" }, config: baseConfig });
     setupMock.mockResolvedValue({ worktreePath: "/wt/feat-34-9-worktree-gate", results: [] });
     let release!: () => void;
-    establishLinkMock.mockReturnValue(new Promise<void>((r) => (release = r)));
+    establishLinkMock.mockReturnValue(
+      new Promise((r) => (release = () => r({ setupComplete: true, reconciled: null }))),
+    );
 
     const opening = useViewerStore.getState().ensureWorktree(repo, storyFile);
     await vi.waitFor(() => expect(establishLinkMock).toHaveBeenCalledOnce());
@@ -2810,9 +2830,19 @@ describe("reconcileWorktreeBranch (SW-WB-1)", () => {
     expect(res.mode).toBe("noop");
     expect(switchBranchMock).not.toHaveBeenCalled();
     expect(removeWorktreeMock).not.toHaveBeenCalled();
-    // Re-stamps dev_branch even on noop so a stale frontmatter value (e.g. an
-    // out-of-band `git switch`) is corrected and the chip clears.
+    // Re-links even on noop, for the worktree's branch report.
     expect(establishLinkMock).toHaveBeenCalled();
+  });
+
+  it("reports the worktree branch without re-stamping", async () => {
+    seedWorkspace();
+    listWorktreesMock.mockResolvedValue([{ path: OLD_PATH, branch: INTENT, head_sha: "abc" }]);
+    const reconciled = { from: "feat/old", to: INTENT };
+    establishLinkMock.mockResolvedValue({ setupComplete: true, reconciled });
+
+    const res = await useViewerStore.getState().reconcileWorktreeBranch(repo, storyFile);
+
+    expect(res).toEqual({ path: OLD_PATH, mode: "noop", reconciled });
   });
 
   it("finds the worktree when git spells its path C:/x/ and the workspace has C:\\x", async () => {
@@ -2825,7 +2855,7 @@ describe("reconcileWorktreeBranch (SW-WB-1)", () => {
     const res = await useViewerStore.getState().reconcileWorktreeBranch(repo, storyFile);
 
     // Found and already on the intended branch, so nothing is recreated.
-    expect(res).toEqual({ path: "C:\\x", mode: "noop" });
+    expect(res).toEqual({ path: "C:\\x", mode: "noop", reconciled: null });
     expect(removeWorktreeMock).not.toHaveBeenCalled();
   });
 
@@ -2840,7 +2870,7 @@ describe("reconcileWorktreeBranch (SW-WB-1)", () => {
     // Same path preserved (session kept); switch called with repo, old path, intent.
     expect(switchBranchMock).toHaveBeenCalledWith(CLONE, OLD_PATH, INTENT);
     expect(res.path).toBe(OLD_PATH);
-    // Re-link fires so dev_branch re-stamps and the chip clears.
+    // Re-link fires so the worktree record follows the switch.
     expect(establishLinkMock).toHaveBeenCalled();
     // Never prunes the worktree on a migrate.
     expect(removeWorktreeMock).not.toHaveBeenCalled();
@@ -2864,7 +2894,7 @@ describe("reconcileWorktreeBranch (SW-WB-1)", () => {
     expect(removeWorktreeMock).toHaveBeenCalledWith(CLONE, OLD_PATH, false);
     expect(ensureSpy).toHaveBeenCalledWith(repo, storyFile);
     expect(switchBranchMock).not.toHaveBeenCalled();
-    // Re-stamps dev_branch on the fresh worktree so the chip clears.
+    // Re-links the fresh worktree for its branch report.
     expect(establishLinkMock).toHaveBeenCalled();
   });
 

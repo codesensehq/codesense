@@ -555,6 +555,92 @@ describe("MetadataBand", () => {
     );
   });
 
+  it("hides the legacy mismatch chip once Reconcile succeeds, without writing the story", async () => {
+    reconcileWorktreeBranch.mockReset();
+    reconcileWorktreeBranch.mockResolvedValue({
+      path: "/wt/old",
+      mode: "noop",
+      reconciled: { from: "feat/intended", to: "feat/observed" },
+    });
+    applyMetadataEdit.mockClear();
+    // The reloaded doc still has no `branch`: nothing wrote it.
+    getMetadataModel.mockResolvedValue(
+      model({
+        fields: {
+          type: "story",
+          status: "in-progress",
+          branch_name: "feat/intended",
+          dev_branch: "feat/observed",
+        },
+      }),
+    );
+    const { unmount } = renderBand(false);
+    await screen.findByLabelText("branch mismatch");
+    fireEvent.click(screen.getByRole("button", { name: /Reconcile/i }));
+
+    await waitFor(() => expect(screen.queryByLabelText("branch mismatch")).not.toBeInTheDocument());
+    expect(applyMetadataEdit).not.toHaveBeenCalled();
+
+    // A reload shows it again.
+    unmount();
+    renderBand(false);
+    expect(await screen.findByLabelText("branch mismatch")).toBeInTheDocument();
+  });
+
+  it("shows the legacy mismatch chip again when the story's branches change", async () => {
+    reconcileWorktreeBranch.mockReset();
+    reconcileWorktreeBranch.mockResolvedValue({
+      path: "/wt/old",
+      mode: "noop",
+      reconciled: { from: "feat/intended", to: "feat/observed" },
+    });
+    const legacy = (devBranch: string) =>
+      model({
+        fields: {
+          type: "story",
+          status: "in-progress",
+          branch_name: "feat/intended",
+          dev_branch: devBranch,
+        },
+      });
+    getMetadataModel.mockResolvedValue(legacy("feat/observed"));
+    renderBand(false);
+    await screen.findByLabelText("branch mismatch");
+    fireEvent.click(screen.getByRole("button", { name: /Reconcile/i }));
+    await waitFor(() => expect(screen.queryByLabelText("branch mismatch")).not.toBeInTheDocument());
+
+    // Same file, a different branch pair: the hidden mismatch was the old one.
+    getMetadataModel.mockResolvedValue(legacy("feat/elsewhere"));
+    act(() => {
+      useFileRefreshStore.getState().bumpFileRefresh(REPO, new Set([FILE]));
+    });
+    expect(await screen.findByLabelText("branch mismatch")).toBeInTheDocument();
+  });
+
+  it("keeps the legacy mismatch chip when Reconcile fails", async () => {
+    reconcileWorktreeBranch.mockReset();
+    reconcileWorktreeBranch.mockRejectedValue(new Error("unavailable: the switch was refused"));
+    applyMetadataEdit.mockClear();
+    toastError.mockClear();
+    getMetadataModel.mockResolvedValue(
+      model({
+        fields: {
+          type: "story",
+          status: "in-progress",
+          branch_name: "feat/intended",
+          dev_branch: "feat/observed",
+        },
+      }),
+    );
+    renderBand(false);
+    await screen.findByLabelText("branch mismatch");
+    fireEvent.click(screen.getByRole("button", { name: /Reconcile/i }));
+
+    await waitFor(() => expect(toastError).toHaveBeenCalled());
+    expect(screen.getByLabelText("branch mismatch")).toBeInTheDocument();
+    expect(applyMetadataEdit).not.toHaveBeenCalled();
+  });
+
   it("offers Recreate (discards) when a dirty migrate is refused (SW-WB-1 AC-7)", async () => {
     toastError.mockClear();
     reconcileWorktreeBranch.mockReset();

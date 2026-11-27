@@ -293,6 +293,7 @@ import { findWorkspaceRepoBySlug } from "@/shared/lib/build-synthetic-repo";
 import { trackWorktreeEstablish } from "@/shared/lib/worktree/pending-establish";
 import { rootWatchKey } from "@/shared/lib/worktree-watch-key";
 import {
+  type BranchReconcile,
   checkBranchExists,
   checkWorktreeDirty,
   getWorktreeUnpublishedContext,
@@ -3523,7 +3524,13 @@ export interface ViewerState {
      *  wired to the "Recreate (discards local changes)" affordance the caller
      *  offers after a blocked migrate. Never silently discards on its own. */
     opts?: { forceRecreate?: boolean },
-  ) => Promise<{ path: string; mode: "recreate" | "migrate" | "noop" }>;
+  ) => Promise<{
+    path: string;
+    mode: "recreate" | "migrate" | "noop";
+    /** The worktree's branch against the story's recorded one, from the last
+     *  re-link; `null` when they agree or the re-link failed. */
+    reconciled: BranchReconcile | null;
+  }>;
   /** F-6 AC-8: set/clear the no-local-clone-attached prompt. The optional
    *  `retry` callback fires automatically once the user attaches a clone
    *  (see `noClonePromptRetry` for details).
@@ -10985,9 +10992,9 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
         !isMidFlightClose("ready workspace reconciliation") &&
         readTeamKeyed(get().workspaces, teamKey, []).some((w) => w === existing);
       try {
-        const complete = await registration;
+        const { setupComplete } = await registration;
         if (!stillCurrent()) throw failedStepError("Worktree open cancelled", "cancelled");
-        if (complete !== false) return existing.cwd;
+        if (setupComplete) return existing.cwd;
       } catch (error) {
         if (!stillCurrent()) throw error;
         set((s) => ({
@@ -11236,7 +11243,7 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
       // Legacy persisted rows lack the canonical slug. Resolve it through the
       // tracked repository above before checking their durable registration.
       if (existing && !existing.sourceRepoSlug) {
-        const complete = await establishStoryWorktree(existing.cwd);
+        const { setupComplete } = await establishStoryWorktree(existing.cwd);
         throwIfCancelled();
         if (
           isMidFlightClose("legacy ready reconciliation") ||
@@ -11244,7 +11251,7 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
         ) {
           throw failedStepError("Worktree open cancelled", "cancelled");
         }
-        if (complete !== false) return existing.cwd;
+        if (setupComplete) return existing.cwd;
         set((s) => ({
           workspaces: updateTeamKeyed(
             s.workspaces,
@@ -11324,9 +11331,9 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
           status: "creating",
         });
         try {
-          const complete = await establishStoryWorktree(onDisk.path);
+          const { setupComplete } = await establishStoryWorktree(onDisk.path);
           throwIfCancelled();
-          if (complete === false) {
+          if (!setupComplete) {
             await runWorktreeSetupPhase({
               repoPath: resolvedSourceRepoPath,
               orgRoot,
@@ -11529,7 +11536,7 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
       // Both setup modes share one awaited registration attempt.
       let establishment: Promise<boolean> | undefined;
       const establishOnce = (): Promise<boolean> => {
-        establishment ??= establishStoryWorktree(worktreePath);
+        establishment ??= establishStoryWorktree(worktreePath).then((link) => link.setupComplete);
         return establishment;
       };
 
@@ -11818,7 +11825,7 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
     const sourceRepoPath = ws?.sourceRepoPath;
     if (!sourceRepoPath || !ws?.cwd) {
       const path = await get().ensureWorktree(teamKey, normalized);
-      return { path, mode: "recreate" };
+      return { path, mode: "recreate", reconciled: null };
     }
     const oldPath = ws.cwd;
 
@@ -11834,15 +11841,18 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
     const storyId = (content ? parseStoryIdFromFrontmatter(content) : null) ?? ws.storyId ?? "";
     const slug = ws.sourceRepoSlug ?? deriveSourceRepoSlug(sourceRepoPath);
 
-    // Re-assert the worktree→story link, which re-stamps the canonical `branch`
-    // frontmatter (SW-OR-1b; formerly `dev_branch`) to the worktree's live branch.
-    // AWAITED (not fire-and-forget) so the caller's model reload sees the fresh
-    // `branch` and the mismatch chip clears deterministically (the chip is
-    // suppressed once `branch` is present) instead of racing an in-flight write.
-    const reStamp = (cwd: string) =>
-      establishWorktreeStoryLink(cwd, normalized, storyId, slug).catch((e: unknown) => {
-        logger.warn("viewer", `reconcile re-link failed (non-fatal): ${getErrorMessage(e)}`);
-      });
+    // Re-assert the worktree→story link so the worktree record is registered at
+    // its (possibly new) path, and take its branch report. The link never writes
+    // the story doc (it lives in the canonical context clone), so the story's
+    // `branch` keeps its value; the report says where the worktree is.
+    const relink = (cwd: string): Promise<BranchReconcile | null> =>
+      establishWorktreeStoryLink(cwd, normalized, storyId, slug).then(
+        (link) => link.reconciled,
+        (e: unknown) => {
+          logger.warn("viewer", `reconcile re-link failed (non-fatal): ${getErrorMessage(e)}`);
+          return null;
+        },
+      );
 
     const worktrees = await listWorktrees(sourceRepoPath);
     const entry = worktrees.find((w) => samePath(w.path, oldPath));
@@ -11850,15 +11860,19 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
     // Recreate: close the old workspace (kill PTYs — no WIP to preserve here),
     // prune the old worktree if it still exists, re-establish fresh via
     // `ensureWorktree` (single source of truth for create + link + derive + open),
-    // then re-stamp so `dev_branch` reflects the new branch. Closing FIRST is
+    // then re-link for the new worktree's branch report. Closing FIRST is
     // load-bearing: it evicts the "ready" record so `ensureWorktree` can't fast-
     // path-return the stale cwd.
-    const recreate = async (): Promise<{ path: string; mode: "recreate" }> => {
+    const recreate = async (): Promise<{
+      path: string;
+      mode: "recreate";
+      reconciled: BranchReconcile | null;
+    }> => {
       if (entry) await removeWorktree(sourceRepoPath, oldPath, false);
       get().closeWorkspace(teamKey, workspaceId, { killTerminals: true });
       const path = await get().ensureWorktree(teamKey, normalized);
-      await reStamp(path);
-      return { path, mode: "recreate" };
+      const reconciled = await relink(path);
+      return { path, mode: "recreate", reconciled };
     };
 
     // Forced recreate (AC-7): the user chose "discard local changes" after a
@@ -11868,12 +11882,11 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
     // Stale cwd (worktree gone) → recreate fresh.
     if (!entry) return recreate();
 
-    // Already on the intended branch → the frontmatter `dev_branch` may still be
-    // stale (e.g. a prior out-of-band `git switch`). Re-stamp it so the chip
-    // clears, then noop.
+    // Already on the intended branch → nothing to move. Re-link to report the
+    // worktree's branch against the story's recorded one, then noop.
     if (branchRefMatches(entry.branch, intent)) {
-      await reStamp(oldPath);
-      return { path: oldPath, mode: "noop" };
+      const reconciled = await relink(oldPath);
+      return { path: oldPath, mode: "noop", reconciled };
     }
 
     // DIRTY → migrate in place: preserve the running session + uncommitted WIP.
@@ -11882,9 +11895,9 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
     const { dirty } = await checkWorktreeDirty(oldPath);
     if (dirty) {
       const res = await switchWorktreeBranch(sourceRepoPath, oldPath, intent);
-      await reStamp(res.worktree_path);
+      const reconciled = await relink(res.worktree_path);
       set((s) => ({ worktreeEstablishTick: s.worktreeEstablishTick + 1 }));
-      return { path: res.worktree_path, mode: "migrate" };
+      return { path: res.worktree_path, mode: "migrate", reconciled };
     }
 
     // CLEAN → recreate at the branch-derived path + clean up the orphan.

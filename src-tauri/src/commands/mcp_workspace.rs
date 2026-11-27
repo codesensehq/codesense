@@ -509,16 +509,23 @@ async fn establish_story_worktree(
             )
         })?;
 
-    // The same idempotent ownership registration as interactive opens, without the
-    // `branch` stamp: the story doc lives in the canonical clone, which an open leaves
-    // unchanged.
-    crate::commands::content_engine::establish_worktree_story_link_unstamped(
-        app.clone(),
-        dir.to_string_lossy().to_string(),
-        record.story_source_path.to_string_lossy().to_string(),
-        record.story_id.clone(),
-        record.source_repo.to_string(),
-    )
+    // The same idempotent ownership registration as interactive opens. It never writes
+    // the story doc, which lives in the canonical clone; the open reports its own drift.
+    let app = app.clone();
+    crate::commands::await_blocking("establish_story_worktree", move || {
+        // RI-2-ALLOW: minted on the blocking pool inside `await_blocking`; the
+        // `&BlockingCtx` gates the establishment body, as the Tauri command does.
+        crate::commands::async_helpers::with_blocking(|ctx| {
+            crate::commands::content_engine::establish_worktree_story_link_blocking(
+                ctx,
+                &app,
+                &dir.to_string_lossy(),
+                &record.story_source_path.to_string_lossy(),
+                &record.story_id,
+                &record.source_repo.to_string(),
+            )
+        })
+    })
     .await
     .map_err(|e| format!("{HYDRATION_FAILED_PREFIX}: establish failed: {e}"))?;
 
@@ -803,7 +810,10 @@ fn reconcile_on_open_core(
 /// and the worktree's HEAD branch (`head`, `None` on a detached or unreadable HEAD),
 /// produce the drift to report. `Some` only when the two differ; a story already on
 /// its worktree's branch reports `None`, with no noisy "X → X" line.
-fn reconcile_report(from: Option<String>, head: Option<String>) -> Option<BranchReconcile> {
+pub(crate) fn reconcile_report(
+    from: Option<String>,
+    head: Option<String>,
+) -> Option<BranchReconcile> {
     let to = head?;
     if from.as_deref() == Some(to.as_str()) {
         return None;
@@ -2716,6 +2726,7 @@ fn managed_usage_owner(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::git_fixture::{committed_repo, fn_source, porcelain};
 
     /// A story open passes the configured start point through and otherwise leaves the
     /// base to the repo's default branch, resolved only when the branch is new.
@@ -3741,41 +3752,6 @@ mod tests {
 
     // ---- The open reconcile reports a drift and writes nothing ---------------
 
-    /// A git repo at `dir` born on `branch`, with `files` in its one commit.
-    fn committed_repo(dir: &Path, branch: &str, files: &[(&str, &str)]) -> git2::Oid {
-        let mut opts = git2::RepositoryInitOptions::new();
-        opts.initial_head(branch);
-        let repo = git2::Repository::init_opts(dir, &opts).unwrap();
-        let mut index = repo.index().unwrap();
-        for (name, text) in files {
-            std::fs::write(dir.join(name), text).unwrap();
-            index.add_path(Path::new(name)).unwrap();
-        }
-        index.write().unwrap();
-        let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
-        let sig = git2::Signature::now("t", "t@example.com").unwrap();
-        repo.commit(Some("HEAD"), &sig, &sig, "init", &tree, &[])
-            .unwrap()
-    }
-
-    /// What `git status --porcelain` would list at `dir`, untracked files included.
-    fn porcelain(dir: &Path) -> Vec<String> {
-        let repo = git2::Repository::open(dir).unwrap();
-        let mut opts = git2::StatusOptions::new();
-        opts.include_untracked(true);
-        let statuses = repo.statuses(Some(&mut opts)).unwrap();
-        statuses
-            .iter()
-            .map(|s| s.path().expect("utf-8 status path").to_string())
-            .collect()
-    }
-
-    /// The source of the function whose signature starts with `signature` in `source`.
-    fn fn_source<'a>(source: &'a str, signature: &str) -> &'a str {
-        let start = source.find(signature).unwrap();
-        &source[start..start + source[start..].find("\n}\n").unwrap()]
-    }
-
     /// An open whose story records another branch than the worktree's HEAD reports the
     /// drift, on that open and on every later one, and leaves the story doc in the
     /// canonical clone byte for byte as it was.
@@ -3850,14 +3826,15 @@ mod tests {
     }
 
     /// Every MCP-side registration (open, hydrate, seat) goes through
-    /// `establish_story_worktree`, which never stamps the story's `branch`. The Tauri
-    /// command the frontend calls still stamps, and both still record the link.
+    /// `establish_story_worktree`, which registers through the same blocking body as the
+    /// Tauri command the frontend calls. No variant stamps the story's `branch`: the one
+    /// body has no flag and no writer, and the command only reports the branch.
     #[test]
     fn mcp_open_establishes_without_the_branch_stamp() {
-        let squish = |s: &str| s.split_whitespace().collect::<String>();
+        let squash = crate::test_support::source_guard::squashed;
         let workspace = include_str!("mcp_workspace.rs");
         let establish = fn_source(workspace, "async fn establish_story_worktree(");
-        assert!(establish.contains("establish_worktree_story_link_unstamped("));
+        assert!(establish.contains("establish_worktree_story_link_blocking("));
         assert!(!establish.contains("establish_worktree_story_link("));
         let hydrate = fn_source(
             workspace,
@@ -3873,31 +3850,21 @@ mod tests {
         let seat = fn_source(workspace, "async fn ensure_seat_worktree(");
         assert!(!seat.contains("establish_worktree_story_link"));
 
+        // `no_caller_stamps_the_canonical_clone` (content_engine.rs) checks the writer and
+        // the stamping variants are gone.
         let engine = include_str!("content_engine.rs");
-        let command = squish(fn_source(
+        let command = squash(fn_source(
             engine,
             "pub async fn establish_worktree_story_link(",
         ));
-        assert!(command.contains("establish_worktree_story_link_with("));
-        assert!(command.contains(",true") && !command.contains(",false"));
-        let unstamped = squish(fn_source(
+        assert!(command.contains("establish_worktree_story_link_blocking("));
+        assert!(command.contains("link_branch_report("));
+        let blocking = squash(fn_source(
             engine,
-            "pub(crate) async fn establish_worktree_story_link_unstamped(",
-        ));
-        assert!(unstamped.contains("establish_worktree_story_link_with("));
-        assert!(unstamped.contains(",false") && !unstamped.contains(",true"));
-        let with = squish(fn_source(
-            engine,
-            "async fn establish_worktree_story_link_with(",
-        ));
-        assert!(with.contains("establish_worktree_story_link_blocking("));
-        assert!(with.contains("&source_repo,stamp,)"));
-        let blocking = squish(fn_source(
-            engine,
-            "fn establish_worktree_story_link_blocking(",
+            "pub(crate) fn establish_worktree_story_link_blocking(",
         ));
         assert!(blocking.contains("register_story_workspace("));
-        assert!(blocking.contains("ifstamp&&stamps_story_branch("));
+        assert!(!blocking.contains("stamp"));
     }
 
     /// A story index across orgs: `(org, story_id, team)` rows, looked up the way the app

@@ -168,9 +168,9 @@ impl CacheEntry {
     /// `branch` → `branch_name` → `dev_branch` (first present + non-blank). Going
     /// forward a story records just `branch`; the legacy `branch_name` (intended)
     /// and `dev_branch` (observed) are read only as a fallback for docs authored
-    /// before the merge — never written by new code. Drives both worktree
-    /// creation and the reconcile-on-open stamp, so intent and observation
-    /// collapse to one value. `None` when all three are absent/blank ⇒ the
+    /// before the merge — never written by new code. Drives worktree creation and
+    /// is the `from` that the open and link reconciles report against the
+    /// worktree's branch. `None` when all three are absent/blank ⇒ the
     /// resolver falls back to `{branch_prefix}{story_id}`.
     pub fn story_branch(&self) -> Option<&str> {
         [
@@ -580,6 +580,11 @@ impl FrontmatterCache {
     /// double-projects a story or un-drops a stale epic the floor filtered.
     pub fn indexes_path(&self, path: &Path) -> bool {
         self.entries.contains_key(path)
+    }
+
+    /// The entry indexed at `path`, if any.
+    pub fn entry_at(&self, path: &Path) -> Option<&CacheEntry> {
+        self.entries.get(path)
     }
 
     // ----- Incremental update (T8) -----------------------------------------
@@ -1776,6 +1781,20 @@ mod tests {
             open_tags: Default::default(),
             mtime: 0,
         }
+    }
+
+    #[test]
+    fn entry_at_finds_an_indexed_path_only() {
+        let mut cache = FrontmatterCache::new();
+        let entry = story_branch_entry(Some("feat/x"), None, None);
+        cache.upsert_entry(entry.path.clone(), entry);
+        assert_eq!(
+            cache
+                .entry_at(Path::new("/tmp/s.md"))
+                .and_then(CacheEntry::story_branch),
+            Some("feat/x")
+        );
+        assert!(cache.entry_at(Path::new("/tmp/other.md")).is_none());
     }
 
     #[test]

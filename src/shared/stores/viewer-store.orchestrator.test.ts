@@ -34,7 +34,7 @@ vi.mock("@/tauri/commands", () => ({
   readFile: vi.fn().mockResolvedValue("# Story\n"),
   probeWorktreeConfig: vi.fn(),
   getWorktreeConfig: vi.fn(),
-  establishWorktreeStoryLink: vi.fn().mockResolvedValue(undefined),
+  establishWorktreeStoryLink: vi.fn().mockResolvedValue({ setupComplete: true, reconciled: null }),
   // SW-GW-8: a nav story open folds its session into the trusted registry (AC-1).
   dashboardRegisterSession: vi.fn().mockResolvedValue(undefined),
 }));

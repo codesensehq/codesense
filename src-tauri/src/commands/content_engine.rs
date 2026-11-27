@@ -5385,9 +5385,20 @@ fn build_link_record(
     Some((codesense_home, user_id, record))
 }
 
+/// What linking a worktree to its story reports: whether the worktree's setup has
+/// completed, and the branch drift between the story's recorded `branch` and the
+/// worktree's HEAD (`null` when they agree or HEAD is unreadable).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EstablishLinkResult {
+    pub setup_complete: bool,
+    pub reconciled: Option<crate::commands::mcp_workspace::BranchReconcile>,
+}
+
 /// Register durable story ownership and essential wiring without hydrating context.
 /// Reopen preserves existing bytes, setup state, baselines, and receipts.
-/// Stamps the story doc's `branch` from the worktree's HEAD, as the frontend expects.
+/// The story doc lives in the canonical context clone, so the link never writes it:
+/// it reports the worktree's branch against the story's recorded one instead.
 #[tauri::command]
 pub async fn establish_worktree_story_link(
     app: tauri::AppHandle,
@@ -5395,48 +5406,7 @@ pub async fn establish_worktree_story_link(
     story_source_path: String,
     story_id: String,
     source_repo: String,
-) -> Result<bool, String> {
-    establish_worktree_story_link_with(
-        app,
-        code_repo_path,
-        story_source_path,
-        story_id,
-        source_repo,
-        true,
-    )
-    .await
-}
-
-/// [`establish_worktree_story_link`] without the `branch` stamp, for the MCP open path:
-/// the story doc lives in the canonical context clone, which an open leaves unchanged.
-pub(crate) async fn establish_worktree_story_link_unstamped(
-    app: tauri::AppHandle,
-    code_repo_path: String,
-    story_source_path: String,
-    story_id: String,
-    source_repo: String,
-) -> Result<bool, String> {
-    establish_worktree_story_link_with(
-        app,
-        code_repo_path,
-        story_source_path,
-        story_id,
-        source_repo,
-        false,
-    )
-    .await
-}
-
-/// The one offload both registrations share; `stamp` says whether the story doc's
-/// `branch` is written.
-async fn establish_worktree_story_link_with(
-    app: tauri::AppHandle,
-    code_repo_path: String,
-    story_source_path: String,
-    story_id: String,
-    source_repo: String,
-    stamp: bool,
-) -> Result<bool, String> {
+) -> Result<EstablishLinkResult, String> {
     // Keep all registration and essential wiring I/O off the command executor.
     crate::commands::async_helpers::await_blocking("establish_worktree_story_link", move || {
         // RI-2-ALLOW: minted on the blocking pool inside `await_blocking` (the
@@ -5444,18 +5414,62 @@ async fn establish_worktree_story_link_with(
         // establishment body below so it can never be called back on a
         // command worker without this proof-of-off-plane.
         crate::commands::async_helpers::with_blocking(|ctx| {
-            establish_worktree_story_link_blocking(
+            let setup_complete = establish_worktree_story_link_blocking(
                 ctx,
                 &app,
                 &code_repo_path,
                 &story_source_path,
                 &story_id,
                 &source_repo,
-                stamp,
-            )
+            )?;
+            let recorded = recorded_story_branch(&app, Path::new(&story_source_path), &story_id);
+            Ok(EstablishLinkResult {
+                setup_complete,
+                reconciled: recorded
+                    .and_then(|from| link_branch_report(from, Path::new(&code_repo_path))),
+            })
         })
     })
     .await
+}
+
+/// The story's recorded branch from the app's frontmatter cache; see
+/// [`story_branch_in`]. `None` when there is no cache.
+fn recorded_story_branch(
+    app: &tauri::AppHandle,
+    story_path: &Path,
+    story_id: &str,
+) -> Option<Option<String>> {
+    use crate::install::frontmatter_cache::{FrontmatterCache, SharedFrontmatterCache};
+    let shared = app.try_state::<SharedFrontmatterCache>()?;
+    story_branch_in(&FrontmatterCache::snapshot(&shared), story_path, story_id)
+}
+
+/// The story's recorded branch, by the precedence the open reconcile reads (`branch` →
+/// `branch_name` → `dev_branch`): `Some(None)` for a story that records none. The story
+/// is found by path, else by id. A miss is `None`, so the link reports no drift for a
+/// story it can't find, as the open does.
+fn story_branch_in(
+    cache: &crate::install::frontmatter_cache::FrontmatterCache,
+    story_path: &Path,
+    story_id: &str,
+) -> Option<Option<String>> {
+    let entry = match cache.entry_at(story_path) {
+        Some(entry) => entry,
+        None => cache.single_by_story_id(story_id).ok()?,
+    };
+    Some(entry.story_branch().map(str::to_string))
+}
+
+/// The branch drift a link reports: the story's recorded branch (`from`) against the
+/// branch the worktree at `code_path` is on. It only reads; `None` when they agree or
+/// HEAD is detached or unreadable.
+pub(crate) fn link_branch_report(
+    from: Option<String>,
+    code_path: &Path,
+) -> Option<crate::commands::mcp_workspace::BranchReconcile> {
+    let head = crate::commands::worktree::current_branch_of_worktree(code_path);
+    crate::commands::mcp_workspace::reconcile_report(from, head)
 }
 
 /// Register durable story ownership and admit explicit lifecycle operations,
@@ -5515,27 +5529,15 @@ pub(crate) fn register_story_workspace(
     Ok(record.setup_complete)
 }
 
-/// Whether registering the worktree at `code_path` may stamp its story's `branch`
-/// frontmatter from the worktree's HEAD. A seat worktree is on its own branch (or
-/// detached), so it never re-points the story's branch; a record that can't be read is
-/// treated as the story's base worktree, as before seats existed.
-fn stamps_story_branch(home: &Path, principal: &Principal, code_path: &Path) -> bool {
-    !worktree_index::read_record(home, principal, code_path)
-        .ok()
-        .flatten()
-        .as_ref()
-        .is_some_and(WorktreeStoryRecord::is_seat)
-}
-
-/// Disk-touching registration and wiring run only on the blocking pool.
-fn establish_worktree_story_link_blocking(
+/// Disk-touching registration and wiring run only on the blocking pool. Shared by the
+/// frontend's command and the MCP open path; it never writes the story doc.
+pub(crate) fn establish_worktree_story_link_blocking(
     _ctx: &crate::commands::async_helpers::BlockingCtx,
     app: &tauri::AppHandle,
     code_repo_path: &str,
     story_source_path: &str,
     story_id: &str,
     source_repo: &str,
-    stamp: bool,
 ) -> Result<bool, String> {
     let story_path = PathBuf::from(story_source_path);
     let code_path = PathBuf::from(code_repo_path);
@@ -5550,91 +5552,11 @@ fn establish_worktree_story_link_blocking(
     let principal = Principal::from(user_id);
     let setup_complete = register_story_workspace(&codesense_home, &principal, record)?;
     crate::commands::managed_worktree_config::write(&code_path, &codesense_home);
-    if stamp && stamps_story_branch(&codesense_home, &principal, &code_path) {
-        let _ = write_story_branch(app, &story_path, &code_path);
-    }
 
     // Publish registration readiness to the existing workspace roster.
     crate::commands::worktree::emit_worktree_changed(app);
 
     Ok(setup_complete)
-}
-
-/// Pure core of [`write_story_branch`] (unit-testable, no I/O): compute the
-/// byte-preserving `branch` rewrite, returning `Some(updated)` only when it
-/// actually changes the content and `None` when the branch is already recorded
-/// (byte-identical) — the idempotency gate the caller skips the write on.
-///
-/// SW-OR-1b: targets the unified canonical `branch` key (was `dev_branch` under
-/// SW-GS-35). Legacy `branch_name`/`dev_branch` lines in older docs are left
-/// untouched — only the `branch` line is inserted/updated.
-fn story_branch_rewrite(
-    format: crate::commands::pipeline_format::PipelineFileFormat,
-    content: &str,
-    branch: &str,
-) -> Option<String> {
-    let updated =
-        crate::commands::pipeline_format::rewrite_field(format, content, "branch", branch);
-    (updated != content).then_some(updated)
-}
-
-/// SW-GS-35 / SW-OR-1b: write the worktree's current git branch into the story
-/// doc's **canonical `branch`** frontmatter — byte-preservingly — so a *pulled*
-/// story is self-describing and a reviewer sees the branch to check out without
-/// asking the author. The value then rides the normal publish/pull path (it's
-/// plain frontmatter). Its one caller is the frontend's establish command; the MCP
-/// open path registers without it and never writes the story doc.
-///
-/// Returns `Some(branch)` (the value written) when a write actually happened, and
-/// `None` when nothing was written.
-///
-/// Three guarantees baked in:
-/// - **Idempotent:** a byte-identical rewrite performs NO write — no mtime bump,
-///   no spurious diff, no redundant sync wave on re-establish/re-open ⇒ `None`.
-/// - **Fail-safe:** a detached HEAD / unreadable branch (`None`) leaves any prior
-///   `branch` intact — a good value is never blanked ⇒ `None`.
-/// - **Non-disruptive:** the write is watcher-suppressed (the story doc lives in
-///   a watched content dir; an un-suppressed write would enqueue a redundant
-///   team-wide fan-out). Best-effort: a read/write failure is logged, never fatal
-///   to the caller (the branch stamp is an additive convenience).
-fn write_story_branch(
-    app: &tauri::AppHandle,
-    story_path: &Path,
-    code_path: &Path,
-) -> Option<String> {
-    // Fail-safe: only write when a branch is actually readable.
-    let branch = crate::commands::worktree::current_branch_of_worktree(code_path)?;
-    let format = crate::commands::pipeline_format::format_of(story_path);
-    let content = match std::fs::read_to_string(story_path) {
-        Ok(c) => c,
-        Err(e) => {
-            log::warn!(
-                target: "content_engine::sync::wave",
-                "branch write-back: read {} failed: {e}",
-                story_path.display()
-            );
-            return None;
-        }
-    };
-    // Idempotency: `None` when the branch is already recorded (byte-identical
-    // rewrite) ⇒ no write at all.
-    let updated = story_branch_rewrite(format, &content, &branch)?;
-    let write = match app.try_state::<crate::commands::watch::WatcherState>() {
-        Some(ws) => {
-            let handle = ws.dispatcher.suppression_handle();
-            write_tmp_fsync_rename_suppressed(story_path, updated.as_bytes(), &handle)
-        }
-        None => crate::content_engine::write_tmp_fsync_rename(story_path, updated.as_bytes()),
-    };
-    if let Err(e) = write {
-        log::warn!(
-            target: "content_engine::sync::wave",
-            "branch write-back: write {} failed: {e}",
-            story_path.display()
-        );
-        return None;
-    }
-    Some(branch)
 }
 
 /// The record repointed at a moved story's new location. Pure.
@@ -6603,7 +6525,7 @@ mod tests {
     }
 
     #[test]
-    fn a_seat_registration_keeps_its_seat_and_never_stamps_the_story_branch() {
+    fn a_seat_registration_keeps_its_seat() {
         let home = tempfile::tempdir().unwrap();
         let (base, seat) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
         let principal = Principal::from(42);
@@ -6619,10 +6541,7 @@ mod tests {
                 story.clone(),
             )
         };
-        // No record yet, and the story's base worktree: the branch is stamped as before.
-        assert!(stamps_story_branch(home.path(), &principal, base.path()));
         register_story_workspace(home.path(), &principal, record(base.path())).unwrap();
-        assert!(stamps_story_branch(home.path(), &principal, base.path()));
 
         let mut seated = record(seat.path());
         seated.seat = Some(worktree_index::SeatRecord {
@@ -6638,7 +6557,111 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(after.seat, seated.seat);
-        assert!(!stamps_story_branch(home.path(), &principal, seat.path()));
+    }
+
+    /// Linking a worktree from the UI to a story whose `branch` differs reports the
+    /// drift and leaves the story doc in the canonical clone byte for byte as it was.
+    #[test]
+    fn ui_link_leaves_the_canonical_clone_clean() {
+        use crate::commands::mcp_workspace::BranchReconcile;
+        use crate::test_support::git_fixture::{committed_repo, porcelain};
+        const DOC: &str = "---\nstatus: todo\nbranch: feat/old\n---\n# Story\n";
+        let clone = tempfile::tempdir().unwrap();
+        committed_repo(clone.path(), "main", &[("S-1.md", DOC)]);
+        let story = clone.path().join("S-1.md");
+        let worktree = tempfile::tempdir().unwrap();
+        let oid = committed_repo(worktree.path(), "feat/new", &[]);
+
+        // A repeat link reports the drift again: nothing wrote `branch:` in between.
+        for _ in 0..2 {
+            assert_eq!(
+                link_branch_report(Some("feat/old".into()), worktree.path()),
+                Some(BranchReconcile {
+                    from: Some("feat/old".into()),
+                    to: "feat/new".into(),
+                })
+            );
+        }
+        assert_eq!(
+            link_branch_report(None, worktree.path()),
+            Some(BranchReconcile {
+                from: None,
+                to: "feat/new".into(),
+            })
+        );
+        assert_eq!(
+            link_branch_report(Some("feat/new".into()), worktree.path()),
+            None
+        );
+        git2::Repository::open(worktree.path())
+            .unwrap()
+            .set_head_detached(oid)
+            .unwrap();
+        assert_eq!(
+            link_branch_report(Some("feat/old".into()), worktree.path()),
+            None
+        );
+        assert_eq!(porcelain(clone.path()), Vec::<String>::new());
+        assert_eq!(std::fs::read_to_string(&story).unwrap(), DOC);
+    }
+
+    /// The link finds the story's recorded branch by path, else by id, and a story the
+    /// cache doesn't know is a miss rather than a story that records no branch.
+    #[test]
+    fn the_link_reads_the_recorded_branch_by_path_then_id() {
+        use crate::install::frontmatter_cache::FrontmatterCache;
+        let tmp = tempfile::tempdir().unwrap();
+        let epic = tmp.path().join("general").join("content").join("epic");
+        std::fs::create_dir_all(&epic).unwrap();
+        let story = epic.join("TR-1-a.md");
+        std::fs::write(
+            &story,
+            "---\ntype: story\nstory_id: TR-1\nstatus: ready\nsource_repo: local/fixture-api\nbranch_name: feat/intended\ndev_branch: feat/observed\n---\n# TR-1\n",
+        )
+        .unwrap();
+        let cold = epic.join("TR-2-b.md");
+        std::fs::write(
+            &cold,
+            "---\ntype: story\nstory_id: TR-2\nstatus: ready\nsource_repo: local/fixture-api\n---\n# TR-2\n",
+        )
+        .unwrap();
+        let shared = FrontmatterCache::shared(FrontmatterCache::new());
+        FrontmatterCache::ensure_story_indexed(&shared, &story, "TR-1").unwrap();
+        FrontmatterCache::ensure_story_indexed(&shared, &cold, "TR-2").unwrap();
+        let cache = FrontmatterCache::snapshot(&shared);
+
+        let intended = Some(Some("feat/intended".to_string()));
+        assert_eq!(story_branch_in(&cache, &story, ""), intended);
+        assert_eq!(
+            story_branch_in(&cache, &epic.join("moved.md"), "TR-1"),
+            intended
+        );
+        assert_eq!(story_branch_in(&cache, &cold, "TR-2"), Some(None));
+        assert_eq!(story_branch_in(&cache, &epic.join("gone.md"), ""), None);
+        assert_eq!(story_branch_in(&cache, &epic.join("gone.md"), "TR-9"), None);
+    }
+
+    /// No establish path can write the story doc: the writer, the seat check that gated
+    /// it and the flag that chose it are gone from the production source.
+    #[test]
+    fn no_caller_stamps_the_canonical_clone() {
+        let production =
+            crate::test_support::source_guard::production_text(include_str!("content_engine.rs"));
+        let squash = crate::test_support::source_guard::squashed;
+        let code = squash(&production);
+        for gone in [
+            "fn write_story_branch(",
+            "fn story_branch_rewrite(",
+            "fn stamps_story_branch(",
+            "stamp: bool",
+            "establish_worktree_story_link_with(",
+            "establish_worktree_story_link_unstamped(",
+        ] {
+            assert!(
+                !code.contains(&squash(gone)),
+                "{gone} is still in content_engine.rs"
+            );
+        }
     }
 
     #[test]
@@ -6654,57 +6677,6 @@ mod tests {
         assert!(validate_team_activation_profile(&profile, 41).is_err());
         assert!(validate_team_activation_profile(&profile, 0).is_err());
         validate_team_activation_profile(&profile, 42).unwrap();
-    }
-
-    // ---- SW-GS-35 / SW-OR-1b: `branch` write-back idempotency core ---------
-
-    #[test]
-    fn story_branch_rewrite_inserts_then_is_idempotent() {
-        use crate::commands::pipeline_format::PipelineFileFormat;
-        let md = "---\nstatus: todo\nsource_repo: org/repo\n---\n# Title\n";
-        // First write inserts → Some(updated).
-        let updated = story_branch_rewrite(PipelineFileFormat::Markdown, md, "feat/SW-OR-1b-foo")
-            .expect("insert changes content");
-        assert!(updated.contains("branch: feat/SW-OR-1b-foo"));
-        // Idempotent: same value on the updated doc → None (no write).
-        assert!(
-            story_branch_rewrite(PipelineFileFormat::Markdown, &updated, "feat/SW-OR-1b-foo")
-                .is_none(),
-            "same-value rewrite must be a no-op"
-        );
-    }
-
-    #[test]
-    fn story_branch_rewrite_updates_on_branch_change() {
-        use crate::commands::pipeline_format::PipelineFileFormat;
-        // A different branch is a real change → Some(updated), stale gone.
-        let md = "---\nstatus: todo\nbranch: feat/old\n---\n# Title\n";
-        let updated = story_branch_rewrite(PipelineFileFormat::Markdown, md, "fix/new")
-            .expect("changed branch rewrites");
-        assert!(updated.contains("fix/new"));
-        assert!(!updated.contains("feat/old"), "stale branch removed");
-    }
-
-    #[test]
-    fn story_branch_rewrite_leaves_legacy_fields_untouched() {
-        use crate::commands::pipeline_format::PipelineFileFormat;
-        // SW-OR-1b: the stamp writes ONLY the canonical `branch` line. Legacy
-        // `branch_name`/`dev_branch` in an older doc are left verbatim (additive,
-        // no migration) — readers prefer `branch` via `story_branch()`.
-        let md = "---\nstatus: todo\nbranch_name: feat/legacy-intended\ndev_branch: feat/legacy-observed\n---\n# Title\n";
-        let updated = story_branch_rewrite(PipelineFileFormat::Markdown, md, "feat/new-observed")
-            .expect("inserting `branch` changes content");
-        // `branch` inserted with the live/observed value...
-        assert!(updated.contains("branch: feat/new-observed"));
-        // ...and BOTH legacy fields survive verbatim (not touched, not migrated).
-        assert!(
-            updated.contains("branch_name: feat/legacy-intended"),
-            "legacy branch_name left untouched"
-        );
-        assert!(
-            updated.contains("dev_branch: feat/legacy-observed"),
-            "legacy dev_branch left untouched"
-        );
     }
 
     // ---- SLW-CO-8: epic dev-env parallel fan-out + terminal completion ----

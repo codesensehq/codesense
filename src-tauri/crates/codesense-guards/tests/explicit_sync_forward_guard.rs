@@ -374,8 +374,6 @@ fn workspace_creation_and_reconciles_enqueue_no_forward_wave() {
         "ensure_epic_workspace",
         "ensure_epic_workspace_inner",
         "establish_worktree_story_link",
-        "establish_worktree_story_link_unstamped",
-        "establish_worktree_story_link_with",
         "establish_worktree_story_link_blocking",
         "register_story_workspace",
         "reconcile_worktrees_on_launch",
