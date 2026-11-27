@@ -149,12 +149,12 @@ function installClock(page: Page) {
         const tabs = document.querySelectorAll(
           '[role="tab"][aria-selected="true"][data-testid^="terminal-tab-"]',
         );
-        const drawn = [...tabs].some((tab) => {
+        const anyDrawn = [...tabs].some((tab) => {
           const session = tab.getAttribute("data-testid")!.slice("terminal-tab-".length);
           const term = document.querySelector(`[data-terminal-session-id="${session}"]`);
           return shown(tab) && shown(term) && shown(term.querySelector(".xterm-screen"));
         });
-        return drawn ? "team-view" : null;
+        return anyDrawn ? "team-view" : null;
       };
       // A live tab: the routines schedule, with its first row painted.
       const schedule = () =>
