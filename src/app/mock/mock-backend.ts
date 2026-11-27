@@ -33,6 +33,7 @@ import { paneHandlers } from "./handlers/panes";
 import { contextQueryHandlers } from "./handlers/context-query";
 import { sessionTimerHandlers } from "./handlers/session-timers";
 import { recordsHandlers } from "./handlers/records";
+import { needsYouHandlers } from "./handlers/needs-you";
 import { notesHandlers } from "./handlers/notes";
 import { sourceDiffHandlers } from "./handlers/source-diff";
 import { MockEventBus } from "./mock-events";
@@ -174,5 +175,6 @@ export function createMockBackend(
   if (new URLSearchParams(search).get("harness") === "live-hub")
     Object.assign(handlers, liveHubFixture(events));
   Object.assign(handlers, recordsHandlers(events, { ...handlers }));
+  Object.assign(handlers, needsYouHandlers({ ...handlers }));
   return createInvokeRouter(handlers);
 }
