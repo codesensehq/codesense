@@ -228,6 +228,21 @@ describe("mediaReason with no team", () => {
   });
 });
 
+describe("mediaReason for a still image", () => {
+  it("names a PNG an image on its card, as its Load button does", () => {
+    render(
+      <MessageMedia
+        a={image({ mime: "image/png", state: "tapToLoad", reason: "sender", sha256: undefined })}
+        loader={chatMediaLoader(chatMessage)}
+      />,
+    );
+    const card = screen.getByTestId("ibx-media-card");
+    expect(card.textContent).toContain("Image · from another person's machine");
+    expect(card.textContent).not.toContain("GIF");
+    expect(screen.getByRole("button", { name: /^Load Image from/ })).toBeTruthy();
+  });
+});
+
 describe("MessageMedia loading shimmer", () => {
   it("pulses a loading figure only when motion is allowed", () => {
     const css = readFileSync(resolve(__dirname, "../inbox.css"), "utf-8");
