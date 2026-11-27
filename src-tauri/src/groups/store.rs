@@ -72,7 +72,9 @@ pub enum StoreError {
     /// The file can't be read, so it is never written.
     Unreadable,
     /// The write's `baseRev` is not the head; nothing changed.
-    Conflict { current_revision: u64 },
+    Conflict {
+        current_revision: u64,
+    },
     /// The tree holds a ref or a split the store refuses; nothing changed.
     InvalidTree(String),
     /// No such group.
@@ -291,7 +293,9 @@ impl GroupStore {
     /// part a symlink.
     fn checked_path(&self, path: PathBuf) -> Result<PathBuf, StoreError> {
         if path.parent() != Some(self.group_dir().as_path()) {
-            return Err(StoreError::Refused("the path leaves the group folder".into()));
+            return Err(StoreError::Refused(
+                "the path leaves the group folder".into(),
+            ));
         }
         self.check_folders()?;
         match std::fs::symlink_metadata(&path) {
@@ -311,7 +315,9 @@ impl GroupStore {
         let mut at = self.scratch_root.clone();
         for component in relative.components() {
             let Component::Normal(part) = component else {
-                return Err(StoreError::Refused("the group folder is not normalized".into()));
+                return Err(StoreError::Refused(
+                    "the group folder is not normalized".into(),
+                ));
             };
             at.push(part);
             match std::fs::symlink_metadata(&at) {
@@ -359,7 +365,9 @@ fn tree_problem(node: &SavedNode) -> Option<String> {
     match node {
         SavedNode::Leaf { id, workspace_id } => {
             if id != workspace_id {
-                return Some(format!("a leaf's id {id:?} and workspaceId {workspace_id:?} differ"));
+                return Some(format!(
+                    "a leaf's id {id:?} and workspaceId {workspace_id:?} differ"
+                ));
             }
             leaf_ref_problem(id, Layer::Private)
         }
@@ -441,7 +449,9 @@ fn repair(node: &serde_json::Value, dropped: &mut Vec<String>) -> Option<Option<
                 return None;
             }
             let id = object.get("id").and_then(serde_json::Value::as_str);
-            let workspace_id = object.get("workspaceId").and_then(serde_json::Value::as_str);
+            let workspace_id = object
+                .get("workspaceId")
+                .and_then(serde_json::Value::as_str);
             match (id, workspace_id) {
                 (Some(id), Some(workspace_id))
                     if id == workspace_id && leaf_ref_problem(id, Layer::Private).is_none() =>

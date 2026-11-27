@@ -147,12 +147,7 @@ fn properties(
     schema
         .get("properties")
         .and_then(serde_json::Value::as_object)
-        .map(|props| {
-            props
-                .iter()
-                .map(|(k, v)| (k.clone(), v.clone()))
-                .collect()
-        })
+        .map(|props| props.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
 }
 
 /// A schema as a TS type expression.

@@ -51,7 +51,9 @@ pub fn leaf_ref_problem(leaf: &str, layer: Layer) -> Option<String> {
             )),
         };
     }
-    Some(format!("{leaf:?}: not a tile ref (agent:, doc:, a workspace or a terminal tab id)"))
+    Some(format!(
+        "{leaf:?}: not a tile ref (agent:, doc:, a workspace or a terminal tab id)"
+    ))
 }
 
 /// A team or agent name: `[a-z0-9][a-z0-9._-]{0,63}`.
@@ -87,7 +89,10 @@ fn doc_path_problem(leaf: &str, path: &str) -> Option<String> {
     if path.contains(':') {
         return refuse("the doc path holds a scheme or drive letter");
     }
-    if path.split('/').any(|segment| matches!(segment, "" | "." | "..")) {
+    if path
+        .split('/')
+        .any(|segment| matches!(segment, "" | "." | ".."))
+    {
         return refuse("the doc path is not normalized (an empty, . or .. segment)");
     }
     None

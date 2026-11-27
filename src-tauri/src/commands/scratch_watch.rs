@@ -270,8 +270,14 @@ mod tests {
         let root = Path::new("/home/users/42/scratch");
         let group = root.join("orgs/acme/plans/config/groups/main.json");
         assert!(is_group_file(root, &group));
-        assert!(is_group_file(root, &root.join("orgs/acme/plans/config/groups/.gitignore")));
-        assert!(is_group_file(root, &root.join("orgs/acme/plans/config/groups")));
+        assert!(is_group_file(
+            root,
+            &root.join("orgs/acme/plans/config/groups/.gitignore")
+        ));
+        assert!(is_group_file(
+            root,
+            &root.join("orgs/acme/plans/config/groups")
+        ));
         assert!(content_change_payload(&group).is_none());
         for other in [
             "orgs/acme/plans/config/profile.json",
@@ -281,7 +287,10 @@ mod tests {
         ] {
             assert!(!is_group_file(root, &root.join(other)), "{other}");
         }
-        assert!(!is_group_file(root, Path::new("/elsewhere/orgs/a/b/config/groups/x.json")));
+        assert!(!is_group_file(
+            root,
+            Path::new("/elsewhere/orgs/a/b/config/groups/x.json")
+        ));
     }
 
     #[test]

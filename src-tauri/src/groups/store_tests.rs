@@ -145,14 +145,23 @@ fn concurrent_writers_are_linearizable_by_rev() {
         .collect();
     all.sort_unstable();
     assert_eq!(all, (1..=(2 * EACH) as u64).collect::<Vec<_>>());
-    assert_eq!(store(&home, true).load("shared").unwrap().file.rev, 2 * EACH as u64);
+    assert_eq!(
+        store(&home, true).load("shared").unwrap().file.rev,
+        2 * EACH as u64
+    );
 }
 
 #[test]
 fn the_rev_is_read_from_the_file_so_it_carries_on_after_a_restart() {
     let tmp = tempdir().unwrap();
-    assert_eq!(store(tmp.path(), true).commit("main", 0, put(leaf("ws-1"))), Ok(1));
-    assert_eq!(store(tmp.path(), true).commit("main", 1, put(leaf("ws-2"))), Ok(2));
+    assert_eq!(
+        store(tmp.path(), true).commit("main", 0, put(leaf("ws-1"))),
+        Ok(1)
+    );
+    assert_eq!(
+        store(tmp.path(), true).commit("main", 1, put(leaf("ws-2"))),
+        Ok(2)
+    );
     let restarted = store(tmp.path(), true);
     assert_eq!(restarted.load("main").unwrap().file.rev, 2);
     assert_eq!(
@@ -178,7 +187,10 @@ fn a_recreate_continues_from_the_tombstone_so_an_old_base_rev_never_passes() {
     );
     assert_eq!(s.load("main"), Err(StoreError::NotFound));
     assert!(s.list().unwrap().is_empty(), "list skips tombstones");
-    assert_eq!(s.commit("main", 2, Change::Delete), Err(StoreError::NotFound));
+    assert_eq!(
+        s.commit("main", 2, Change::Delete),
+        Err(StoreError::NotFound)
+    );
     for stale in [0, 1, 2] {
         assert_eq!(
             s.commit("main", stale, put(leaf("ws-3"))),
@@ -190,7 +202,10 @@ fn a_recreate_continues_from_the_tombstone_so_an_old_base_rev_never_passes() {
     }
     assert_eq!(s.commit("main", 3, put(leaf("ws-3"))), Ok(4));
     assert_eq!(s.load("main").unwrap().file.rev, 4);
-    assert_eq!(s.commit("never", 0, Change::Delete), Err(StoreError::NotFound));
+    assert_eq!(
+        s.commit("never", 0, Change::Delete),
+        Err(StoreError::NotFound)
+    );
 }
 
 // 1.2 atomic writes, repair, the version gate.
@@ -250,12 +265,22 @@ fn repair_on_load_is_in_memory_and_reaches_the_file_with_the_next_write() {
     );
     assert_eq!(loaded.file.root, Some(repaired.clone()));
     assert_eq!(loaded.file.rev, 1, "a load never bumps the rev");
-    assert_eq!(s.list().unwrap()[0].file.as_ref().unwrap().root, Some(repaired.clone()));
-    assert_eq!(std::fs::read(&path).unwrap(), bytes, "a load writes nothing");
+    assert_eq!(
+        s.list().unwrap()[0].file.as_ref().unwrap().root,
+        Some(repaired.clone())
+    );
+    assert_eq!(
+        std::fs::read(&path).unwrap(),
+        bytes,
+        "a load writes nothing"
+    );
 
     assert_eq!(s.commit("main", 1, put(repaired.clone())), Ok(2));
     let written = s.load("main").unwrap();
-    assert_eq!(written.file.rev, 2, "the repair bumps rev once, with the write");
+    assert_eq!(
+        written.file.rev, 2,
+        "the repair bumps rev once, with the write"
+    );
     assert_eq!(written.file.root, Some(repaired));
     assert!(written.dropped.is_empty());
 }
@@ -320,10 +345,12 @@ fn unreadable_files() -> Vec<(&'static str, Vec<u8>)> {
         ),
         (
             "bad-split",
-            json(serde_json::json!({ "version": 2, "owner": "group", "rev": 4, "root": {
-                "kind": "split", "axis": "row", "sizes": [100],
-                "children": [{ "kind": "leaf", "id": "ws-1", "workspaceId": "ws-1" }]
-            }})),
+            json(
+                serde_json::json!({ "version": 2, "owner": "group", "rev": 4, "root": {
+                    "kind": "split", "axis": "row", "sizes": [100],
+                    "children": [{ "kind": "leaf", "id": "ws-1", "workspaceId": "ws-1" }]
+                }}),
+            ),
         ),
         (
             "bad-tombstone",
@@ -361,7 +388,11 @@ fn an_unreadable_or_newer_file_is_listed_as_cant_be_read_and_never_written() {
                 "{id} delete at {base}"
             );
         }
-        assert_eq!(&std::fs::read(file_of(tmp.path(), id)).unwrap(), bytes, "{id}");
+        assert_eq!(
+            &std::fs::read(file_of(tmp.path(), id)).unwrap(),
+            bytes,
+            "{id}"
+        );
     }
 }
 
@@ -376,17 +407,28 @@ fn a_refused_tree_writes_nothing_and_says_why() {
     for (tree, says) in [
         (leaf("doc:../x"), "doc:../x"),
         (mismatched, "differ"),
-        (split(Axis::Row, vec![leaf("ws-1")], vec![100.0]), "two or more"),
+        (
+            split(Axis::Row, vec![leaf("ws-1")], vec![100.0]),
+            "two or more",
+        ),
         (
             split(Axis::Row, vec![leaf("ws-1"), leaf("ws-2")], vec![100.0]),
             "one size per child",
         ),
         (
-            split(Axis::Row, vec![leaf("ws-1"), leaf("ws-2")], vec![-1.0, 101.0]),
+            split(
+                Axis::Row,
+                vec![leaf("ws-1"), leaf("ws-2")],
+                vec![-1.0, 101.0],
+            ),
             "finite",
         ),
         (
-            split(Axis::Row, vec![leaf("ws-1"), leaf("ws-2")], vec![f64::NAN, 50.0]),
+            split(
+                Axis::Row,
+                vec![leaf("ws-1"), leaf("ws-2")],
+                vec![f64::NAN, 50.0],
+            ),
             "finite",
         ),
     ] {
@@ -409,7 +451,11 @@ fn profile_b_never_sees_profile_a_and_nothing_is_staged_or_pushed() {
     assert_eq!(a.commit("other", 0, put(leaf("ws-2"))), Ok(1));
     assert!(b.list().unwrap().is_empty());
     assert_eq!(b.load("main"), Err(StoreError::NotFound));
-    assert_eq!(b.commit("main", 0, put(leaf("ws-3"))), Ok(1), "B's own file");
+    assert_eq!(
+        b.commit("main", 0, put(leaf("ws-3"))),
+        Ok(1),
+        "B's own file"
+    );
     assert_eq!(a.load("main").unwrap().file.root, Some(leaf("ws-1")));
     assert_eq!(a.list().unwrap().len(), 2);
 
@@ -427,7 +473,10 @@ fn profile_b_never_sees_profile_a_and_nothing_is_staged_or_pushed() {
 fn group_files_are_owner_only() {
     use std::os::unix::fs::PermissionsExt;
     let tmp = tempdir().unwrap();
-    assert_eq!(store(tmp.path(), true).commit("main", 0, put(leaf("ws-1"))), Ok(1));
+    assert_eq!(
+        store(tmp.path(), true).commit("main", 0, put(leaf("ws-1"))),
+        Ok(1)
+    );
     let mode = std::fs::metadata(file_of(tmp.path(), "main"))
         .unwrap()
         .permissions()
@@ -457,14 +506,23 @@ fn a_refused_id_writes_nothing() {
         long.as_str(),
     ] {
         assert!(
-            matches!(s.commit(id, 0, put(leaf("ws-1"))), Err(StoreError::InvalidId(_))),
+            matches!(
+                s.commit(id, 0, put(leaf("ws-1"))),
+                Err(StoreError::InvalidId(_))
+            ),
             "{id:?}"
         );
         assert!(
-            matches!(s.commit(id, 0, Change::Delete), Err(StoreError::InvalidId(_))),
+            matches!(
+                s.commit(id, 0, Change::Delete),
+                Err(StoreError::InvalidId(_))
+            ),
             "{id:?}"
         );
-        assert!(matches!(s.load(id), Err(StoreError::InvalidId(_))), "{id:?}");
+        assert!(
+            matches!(s.load(id), Err(StoreError::InvalidId(_))),
+            "{id:?}"
+        );
     }
     assert!(snapshot(tmp.path()).is_empty(), "nothing written");
     assert_eq!(s.commit(&"a".repeat(64), 0, put(leaf("ws-1"))), Ok(1));
@@ -485,8 +543,14 @@ fn a_symlinked_folder_or_file_is_refused_and_written_through_never() {
     let target = outside.path().join("target.json");
     std::fs::write(&target, b"theirs").unwrap();
     std::os::unix::fs::symlink(&target, dir.join("main.json")).unwrap();
-    assert!(matches!(s.commit("main", 0, put(leaf("ws-1"))), Err(StoreError::Refused(_))));
-    assert!(matches!(s.commit("main", 0, Change::Delete), Err(StoreError::Refused(_))));
+    assert!(matches!(
+        s.commit("main", 0, put(leaf("ws-1"))),
+        Err(StoreError::Refused(_))
+    ));
+    assert!(matches!(
+        s.commit("main", 0, Change::Delete),
+        Err(StoreError::Refused(_))
+    ));
     assert!(matches!(s.load("main"), Err(StoreError::Refused(_))));
     assert_eq!(s.list().unwrap()[0].file, Err(UNREADABLE));
     assert_eq!(std::fs::read(&target).unwrap(), b"theirs");
@@ -496,7 +560,10 @@ fn a_symlinked_folder_or_file_is_refused_and_written_through_never() {
     std::fs::remove_file(dir.join(".gitignore")).unwrap();
     std::fs::remove_dir(&dir).unwrap();
     std::os::unix::fs::symlink(outside.path(), &dir).unwrap();
-    assert!(matches!(s.commit("new", 0, put(leaf("ws-1"))), Err(StoreError::Refused(_))));
+    assert!(matches!(
+        s.commit("new", 0, put(leaf("ws-1"))),
+        Err(StoreError::Refused(_))
+    ));
     assert!(matches!(s.list(), Err(StoreError::Refused(_))));
     assert!(matches!(s.load("new"), Err(StoreError::Refused(_))));
     std::fs::remove_file(&dir).unwrap();
@@ -505,14 +572,21 @@ fn a_symlinked_folder_or_file_is_refused_and_written_through_never() {
     let config = dir.parent().unwrap();
     std::fs::remove_dir_all(config).unwrap();
     std::os::unix::fs::symlink(outside.path(), config).unwrap();
-    assert!(matches!(s.commit("new", 0, put(leaf("ws-1"))), Err(StoreError::Refused(_))));
+    assert!(matches!(
+        s.commit("new", 0, put(leaf("ws-1"))),
+        Err(StoreError::Refused(_))
+    ));
     let mut left: Vec<_> = std::fs::read_dir(outside.path())
         .unwrap()
         .flatten()
         .map(|e| e.file_name())
         .collect();
     left.sort();
-    assert_eq!(left, vec![std::ffi::OsString::from("target.json")], "nothing written outside");
+    assert_eq!(
+        left,
+        vec![std::ffi::OsString::from("target.json")],
+        "nothing written outside"
+    );
 }
 
 // 1.4 the saved leaf's keys.
@@ -640,12 +714,22 @@ fn opening_the_space_excludes_group_files_and_writes_the_folder_gitignore() {
     assert_eq!(dir, file_of(tmp.path(), "x").parent().unwrap());
     let exclude = std::fs::read_to_string(exclude_of(tmp.path())).unwrap();
     assert_eq!(exclude.lines().filter(|l| *l == GROUPS_EXCLUDE).count(), 1);
-    assert_eq!(std::fs::read_to_string(dir.join(".gitignore")).unwrap(), "*\n");
-    assert_eq!(store(tmp.path(), true).commit("main", 0, put(leaf("ws-1"))), Ok(1));
+    assert_eq!(
+        std::fs::read_to_string(dir.join(".gitignore")).unwrap(),
+        "*\n"
+    );
+    assert_eq!(
+        store(tmp.path(), true).commit("main", 0, put(leaf("ws-1"))),
+        Ok(1)
+    );
     assert!(group_statuses(tmp.path()).is_empty());
     // The exclude alone keeps the status clean.
     std::fs::remove_file(dir.join(".gitignore")).unwrap();
-    assert!(group_statuses(tmp.path()).is_empty(), "{:?}", group_statuses(tmp.path()));
+    assert!(
+        group_statuses(tmp.path()).is_empty(),
+        "{:?}",
+        group_statuses(tmp.path())
+    );
 }
 
 #[test]
@@ -696,7 +780,10 @@ fn a_read_only_git_folder_fails_the_exclude_but_not_the_open() {
     assert!(opened.unwrap().is_some(), "the open does not fail");
     assert_eq!(committed, Ok(1));
     assert_eq!(after, before, "the exclude write failed");
-    assert!(group_statuses(tmp.path()).is_empty(), "the folder's .gitignore keeps it clean");
+    assert!(
+        group_statuses(tmp.path()).is_empty(),
+        "the folder's .gitignore keeps it clean"
+    );
 }
 
 // 1.7 and 1.8 the flag-off rule.
@@ -721,9 +808,21 @@ fn written_profile(home: &Path) {
 /// Every entry point this story ships, with the flag off.
 fn call_every_entry_point_flag_off(home: &Path) {
     let s = store(home, false);
-    for (id, base) in [("main", 1), ("main", 0), ("new", 0), ("gone", 2), ("repair", 1)] {
-        assert_eq!(s.commit(id, base, put(leaf("ws-9"))), Err(StoreError::TilesOff));
-        assert_eq!(s.commit(id, base, Change::Delete), Err(StoreError::TilesOff));
+    for (id, base) in [
+        ("main", 1),
+        ("main", 0),
+        ("new", 0),
+        ("gone", 2),
+        ("repair", 1),
+    ] {
+        assert_eq!(
+            s.commit(id, base, put(leaf("ws-9"))),
+            Err(StoreError::TilesOff)
+        );
+        assert_eq!(
+            s.commit(id, base, Change::Delete),
+            Err(StoreError::TilesOff)
+        );
     }
     let _ = s.load("repair");
     let _ = s.load("main");
@@ -753,7 +852,10 @@ fn with_the_flag_off_no_entry_point_writes_and_the_profile_is_byte_identical() {
 
     let fresh = tempdir().unwrap();
     call_every_entry_point_flag_off(fresh.path());
-    assert!(snapshot(fresh.path()).is_empty(), "a new profile stays empty");
+    assert!(
+        snapshot(fresh.path()).is_empty(),
+        "a new profile stays empty"
+    );
 }
 
 #[test]
