@@ -595,7 +595,7 @@ fn original_launcher(tab: &RestoreTab, key: &str) -> Option<String> {
     tab.tags
         .get(key)
         .map(|launcher| launcher.trim())
-        .filter(|launcher| !launcher.is_empty())
+        .filter(|launcher| !str::is_empty(launcher))
         .map(str::to_owned)
 }
 

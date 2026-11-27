@@ -1355,13 +1355,13 @@ pub(crate) fn launcher_matches(recorded: Option<&str>, filter: &str) -> bool {
     }
     let slug = |name: &str| {
         name.split(|c: char| !c.is_alphanumeric())
-            .filter(|part| !part.is_empty())
+            .filter(|part| !str::is_empty(part))
             .map(str::to_lowercase)
             .collect::<Vec<_>>()
             .join("-")
     };
     match (legacy_name(recorded), routine_id(filter)) {
-        (Some(name), Some(id)) => !name.is_empty() && slug(name) == id,
+        (Some(name), Some(id)) => !str::is_empty(name) && slug(name) == id,
         _ => false,
     }
 }

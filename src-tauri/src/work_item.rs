@@ -30,9 +30,7 @@ impl WorkItemId {
     pub fn parse(raw: &str) -> Option<Self> {
         let digits = raw.strip_prefix(PREFIX)?;
         (digits.len() == DIGITS
-            && digits
-                .bytes()
-                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)))
+            && str::bytes(digits).all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)))
         .then(|| WorkItemId(raw.to_string()))
     }
 
