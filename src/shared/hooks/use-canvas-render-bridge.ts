@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { useEffect } from "react";
+import { isMainWindow } from "@/shared/lib/current-window";
 import { listenScoped } from "@/shared/windows/listen-scoped";
 
 import { safeUnlisten } from "@/shared/lib/tauri-listeners";
@@ -74,6 +75,7 @@ export async function runCanvasRenderRequest(
  */
 export function useCanvasRenderBridge() {
   useEffect(() => {
+    if (!isMainWindow()) return;
     const unlisten = listenScoped<CanvasRenderRequest>(
       "canvas:render-request",
       "main-only",

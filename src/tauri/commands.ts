@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 import type { AgentIdentityChoice } from "@/shared/lib/agent-identity-choice";
 import { rendererPrincipal } from "@/shared/lib/local-profile-session";
+import { isMainWindow } from "@/shared/lib/current-window";
 // All Tauri invoke() wrappers go here. No raw invoke() calls elsewhere.
 
 import { invoke } from "@tauri-apps/api/core";
@@ -462,8 +463,14 @@ export const rebuildMenu = (
 
 // === MCP Viewer State ===
 
-export const pushViewerState = async (snapshot: Record<string, unknown>) =>
-  invoke<void>("push_viewer_state", { snapshot, expectedPrincipal: await rendererPrincipal() });
+/** The MCP viewer mirror is `main`'s; a satellite window pushes nothing. */
+export const pushViewerState = async (snapshot: Record<string, unknown>) => {
+  if (!isMainWindow()) return;
+  return invoke<void>("push_viewer_state", {
+    snapshot,
+    expectedPrincipal: await rendererPrincipal(),
+  });
+};
 
 export type AgentIdentityMap = Record<string, Record<string, AgentIdentityChoice>>;
 export const agentListRefresh = async () =>

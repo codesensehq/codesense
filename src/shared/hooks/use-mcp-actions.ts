@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 import { mcpNavLens } from "@/shared/lib/nav-lens";
 import { useEffect } from "react";
+import { isMainWindow } from "@/shared/lib/current-window";
 import { listenScoped } from "@/shared/windows/listen-scoped";
 import { safeUnlisten } from "@/shared/lib/tauri-listeners";
 import { cliChromeOf, cliChromeState, useViewerStore } from "@/shared/stores/viewer-store";
@@ -95,6 +96,7 @@ const ALLOWED_MCP_KEYS = new Set([
  */
 export function useMcpActions() {
   useEffect(() => {
+    if (!isMainWindow()) return;
     const unlisten = listenScoped<{
       teamKey: string;
       workspaceId: string;
@@ -115,6 +117,7 @@ export function useMcpActions() {
     };
   }, []);
   useEffect(() => {
+    if (!isMainWindow()) return;
     let live = true;
     let generation = 0;
     let activating = false;
@@ -213,6 +216,7 @@ export function useMcpActions() {
     };
   }, []);
   useEffect(() => {
+    if (!isMainWindow()) return;
     const unlisten = listenScoped<Record<string, unknown>>(
       "mcp:set-viewer-state",
       "main-only",
@@ -284,6 +288,7 @@ export function useMcpActions() {
     };
   }, []);
   useEffect(() => {
+    if (!isMainWindow()) return;
     const unlisten = listenScoped<import("@/features/viewer/lib/workspace-groups").GroupSnapshot>(
       "mcp:workspace-groups-changed",
       "main-only",
@@ -296,6 +301,7 @@ export function useMcpActions() {
     };
   }, []);
   useEffect(() => {
+    if (!isMainWindow()) return;
     // close_workspace dropped the row from the saved state; drop this copy too, or
     // the next save writes it back and the pill returns.
     const unlisten = listenScoped<RetiredWorkspace>(
