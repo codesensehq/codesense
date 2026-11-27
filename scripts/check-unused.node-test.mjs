@@ -179,19 +179,22 @@ test("a missing baseline without --write fails", () => {
 const FIXTURE = join(HERE, "fixtures", "knip-entries");
 const KNIP_CONFIG = join(ROOT, "knip.json");
 const ENTRY_FIXTURES = [
-  ["src/main.tsx", "from_main"],
-  ["src-emulator/**", "from_emulator"],
-  ["scripts/**/*.mjs", "from_script"],
-  ["playwright*.config.ts", "from_playwright"],
-  ["vitest.config.ts", "from_vitest"],
-  ["vite.config.ts", "from_vite"],
-  ["tests/e2e-mock/**", "from_e2e"],
+  ["src/main.tsx", "from_main", "src/lib/main.ts"],
+  ["src-emulator/**", "from_emulator", "src/lib/emulator.ts"],
+  ["scripts/**/*.mjs", "from_script", "src/lib/script.ts"],
+  ["playwright*.config.ts", "from_playwright", "src/lib/playwright.ts"],
+  ["vitest.config.ts", "from_vitest", "src/lib/vitest.ts"],
+  ["vite.config.ts", "from_vite", "src/lib/vite.ts"],
+  ["tests/e2e-mock/**", "from_e2e", "src/lib/e2e.ts"],
 ];
 
 function fixtureSymbols(configFile) {
-  return runKnip({ cwd: FIXTURE, config: configFile }).issues.flatMap((issue) =>
-    [...issue.exports, ...issue.types].map((item) => item.name),
-  );
+  // A file nothing imports is reported as an unused file; one that is imported, by its exports.
+  return runKnip({ cwd: FIXTURE, config: configFile }).issues.flatMap((issue) => [
+    ...issue.files.map(() => issue.file),
+    ...issue.exports.map((item) => item.name),
+    ...issue.types.map((item) => item.name),
+  ]);
 }
 
 test("the fixture tree holds one file per entry glob in knip.json", () => {
@@ -204,8 +207,11 @@ test("the fixture tree holds one file per entry glob in knip.json", () => {
 
 test("nothing reachable only from an entry glob is reported, and the fixture can report", () => {
   const reported = fixtureSymbols(KNIP_CONFIG);
-  for (const [glob, symbol] of ENTRY_FIXTURES) {
-    assert.ok(!reported.includes(symbol), `${symbol} (from ${glob}) is reported as unused`);
+  for (const [glob, symbol, file] of ENTRY_FIXTURES) {
+    assert.ok(
+      !reported.includes(symbol) && !reported.includes(file),
+      `${symbol} (from ${glob}) is reported as unused`,
+    );
   }
   assert.ok(reported.includes("orphanCanary"), "the orphan export should be reported");
 });
@@ -217,7 +223,10 @@ test("without the entry globs the fixture exports are reported", () => {
   // Keep one entry so knip has something to start from; every other glob is removed.
   writeFileSync(config, JSON.stringify({ ...rest, entry: [entry[0]] }));
   const reported = fixtureSymbols(config);
-  for (const [glob, symbol] of ENTRY_FIXTURES.slice(1)) {
-    assert.ok(reported.includes(symbol), `${symbol} should be reported once ${glob} is removed`);
+  for (const [glob, symbol, file] of ENTRY_FIXTURES.slice(1)) {
+    assert.ok(
+      reported.includes(symbol) || reported.includes(file),
+      `${symbol} should be reported once ${glob} is removed`,
+    );
   }
 });

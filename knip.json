@@ -1,0 +1,14 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "project": ["src/**"],
+  "entry": [
+    "src/main.tsx",
+    "src-emulator/**",
+    "scripts/**/*.mjs",
+    "playwright*.config.ts",
+    "vitest.config.ts",
+    "vite.config.ts",
+    "tests/e2e-mock/**"
+  ],
+  "ignore": ["src/components/ui/**"]
+}
