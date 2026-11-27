@@ -44,10 +44,11 @@ pub fn guarded<R: tauri::Runtime>(
 ) -> impl Fn(tauri::ipc::Invoke<R>) -> bool + Send + Sync + 'static {
     move |invoke| {
         let message = &invoke.message;
-        if allowed(message.webview_ref().label(), message.command()) {
+        let command = tauri::ipc::InvokeMessage::command(message);
+        if allowed(message.webview_ref().label(), command) {
             return handler(invoke);
         }
-        let error = refusal(message.command());
+        let error = refusal(command);
         invoke.resolver.reject(error);
         true
     }

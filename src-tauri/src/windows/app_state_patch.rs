@@ -22,13 +22,12 @@ fn check_keys(state: &str) -> Result<(), String> {
     let object = value
         .as_object()
         .ok_or("an app-state patch must be an object")?;
-    match object
-        .keys()
-        .find(|key| !APP_STATE_PATCH_KEYS.iter().any(|allowed| allowed == *key))
-    {
-        Some(key) => Err(format!("not a key a satellite may write: {key}")),
-        None => Ok(()),
+    for key in object.keys() {
+        if !APP_STATE_PATCH_KEYS.iter().any(|allowed| allowed == key) {
+            return Err(format!("not a key a satellite may write: {key}"));
+        }
     }
+    Ok(())
 }
 
 /// Patch the allowed keys of the app-state file at `path`.
