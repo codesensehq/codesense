@@ -4,7 +4,7 @@ import { useGroupRef, type Layout } from "react-resizable-panels";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 
 // ---------------------------------------------------------------------------
-// SW-EW-3 — TileGroup: the reusable split tiling primitive (one group of a mosaic).
+// TileGroup: the reusable split tiling primitive (one group of a mosaic).
 //
 // Built on `react-resizable-panels` (via @/components/ui/resizable) so the
 // hard parts come for free: conditionally-rendered panels renormalize the

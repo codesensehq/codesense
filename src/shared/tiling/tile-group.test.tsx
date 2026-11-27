@@ -136,7 +136,7 @@ describe("TileGroup", () => {
   });
 });
 
-describe("TileGroup — SW-EW-4 zoom (D-1: CSS promotion, never remount)", () => {
+describe("TileGroup — zoom (CSS promotion, never remount)", () => {
   const tiles = [{ key: "ws-a" }, { key: "ws-b" }, { key: "ws-c" }];
 
   it("does NOT remount tiles across a zoom toggle — DOM node identity persists (R-1/R-6)", () => {
