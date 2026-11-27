@@ -3766,7 +3766,7 @@ mod tests {
         let statuses = repo.statuses(Some(&mut opts)).unwrap();
         statuses
             .iter()
-            .filter_map(|s| s.path().map(str::to_string))
+            .filter_map(|s| s.path().ok().map(str::to_string))
             .collect()
     }
 
