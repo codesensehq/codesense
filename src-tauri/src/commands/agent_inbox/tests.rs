@@ -76,6 +76,20 @@ pub(crate) struct FakeHost {
     fetch_error: Mutex<Option<String>>,
     /// Every media fetch panics, where a test sets it.
     fetch_panics: std::sync::atomic::AtomicBool,
+    /// Every `prepare_media` call: the team, `own`, the scope and the workspace root.
+    prepared: Mutex<Vec<PrepareCall>>,
+    /// Every sender looked up by session: `own_media_sender`, `caller_scope`,
+    /// `caller_media_workspace`, `launch_team` and `tab_team`, as `(method, sender)`.
+    lookups: Mutex<Vec<(&'static str, String)>>,
+}
+
+/// One `prepare_media` call the fake saw.
+#[derive(Clone, Debug)]
+pub(crate) struct PrepareCall {
+    pub team: LaunchTeam,
+    pub own: bool,
+    pub scope: crate::context_repo::caller_scope::CallerScope,
+    pub workspace_root: Option<PathBuf>,
 }
 
 impl FakeHost {
@@ -129,6 +143,8 @@ impl FakeHost {
             chat_media_changes: Mutex::default(),
             fetch_error: Mutex::default(),
             fetch_panics: Default::default(),
+            prepared: Mutex::default(),
+            lookups: Mutex::default(),
         })
     }
 
@@ -159,6 +175,23 @@ impl FakeHost {
     /// Every `media_sent` call, and whether its message was stored by then.
     pub(crate) fn media_sent_calls(&self) -> Vec<(StoredMedia, bool)> {
         self.media_sent.lock().unwrap().clone()
+    }
+
+    /// Every `prepare_media` call so far.
+    pub(crate) fn prepare_calls(&self) -> Vec<PrepareCall> {
+        self.prepared.lock().unwrap().clone()
+    }
+
+    /// Every session lookup so far, as `(method, sender)`.
+    pub(crate) fn lookups(&self) -> Vec<(&'static str, String)> {
+        self.lookups.lock().unwrap().clone()
+    }
+
+    fn looked_up(&self, method: &'static str, sender: &str) {
+        self.lookups
+            .lock()
+            .unwrap()
+            .push((method, sender.to_string()));
     }
 
     /// Every chat media change reported so far.
@@ -333,6 +366,7 @@ impl InboxHost for FakeHost {
     }
 
     async fn own_media_sender(&self, sender: &str) -> bool {
+        self.looked_up("own_media_sender", sender);
         self.own_media.lock().unwrap().contains(sender)
     }
 
@@ -459,6 +493,7 @@ impl InboxHost for FakeHost {
     }
 
     async fn caller_scope(&self, sender: &str) -> crate::context_repo::caller_scope::CallerScope {
+        self.looked_up("caller_scope", sender);
         self.media_scopes
             .lock()
             .unwrap()
@@ -468,6 +503,7 @@ impl InboxHost for FakeHost {
     }
 
     async fn caller_media_workspace(&self, sender: &str) -> Option<PathBuf> {
+        self.looked_up("caller_media_workspace", sender);
         self.media_workspaces.lock().unwrap().get(sender).cloned()
     }
 
@@ -479,6 +515,12 @@ impl InboxHost for FakeHost {
         scope: &crate::context_repo::caller_scope::CallerScope,
         workspace_root: Option<&std::path::Path>,
     ) -> Result<(crate::media::Attachment, bool), String> {
+        self.prepared.lock().unwrap().push(PrepareCall {
+            team: team.clone(),
+            own,
+            scope: scope.clone(),
+            workspace_root: workspace_root.map(std::path::Path::to_path_buf),
+        });
         input.validate()?;
         if let Some(path) = &input.path {
             let cache = self.dir.path().join("media-cache");
@@ -582,6 +624,7 @@ impl InboxHost for FakeHost {
             .ok_or_else(|| "no active team selected".to_string())
     }
     fn launch_team(&self, handle: &str) -> Option<LaunchTeam> {
+        self.looked_up("launch_team", handle);
         self.teams
             .lock()
             .unwrap()
@@ -589,6 +632,7 @@ impl InboxHost for FakeHost {
             .map(|t| launch_team(t))
     }
     async fn tab_team(&self, handle: &str) -> Option<LaunchTeam> {
+        self.looked_up("tab_team", handle);
         self.tab_teams
             .lock()
             .unwrap()

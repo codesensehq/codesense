@@ -11,9 +11,11 @@ use serde::Serialize;
 use super::model::{ChatMediaState, WorkspaceChatMessage};
 use super::store::{ChatAppendMedia, InFlight, WorkspaceChatStore};
 use crate::commands::agent_inbox::{
-    handle_team, InboxHost, InboxMediaBytes, StoredMedia, MEDIA_SLOT,
+    handle_team, human_media_refusal, team_inbox, InboxHost, InboxMediaBytes, StoredMedia,
+    MEDIA_SLOT,
 };
 use crate::commands::dashboard_launch::LaunchTeam;
+use crate::context_repo::caller_scope::CallerScope;
 use crate::media::{index::Owner, Attachment, MediaInput, Remote};
 
 /// Emitted when a chat message's image changes state on this Mac (a fetch finished).
@@ -46,33 +48,112 @@ pub(crate) fn owner(team: &LaunchTeam, workspace: &str, message_id: i64) -> Owne
     crate::gif::register::owner_of(team, Some(workspace), message_id)
 }
 
-/// Prepare `input` for a post by `handle`, `remote` when its session runs on another
-/// machine. Refuses an invalid input, an overlong alt or url, a file path from a sender not on this machine,
-/// and a sender with no team; prepares as `send_message` does and records what the
-/// send admitted.
-pub(crate) async fn prepare(
-    host: &dyn InboxHost,
-    handle: &str,
-    remote: bool,
-    input: &MediaInput,
-) -> Result<PreparedChatMedia, String> {
-    input.validate()?;
+/// Who sends a chat post: an agent's session, or the person at this Mac.
+#[derive(Debug, Clone)]
+pub(crate) enum ChatSender {
+    /// The session under `handle`, `remote` when it runs on another machine. Its team,
+    /// read scope and workspace come from its session.
+    Session { handle: String, remote: bool },
+    /// The person, sending with `team`, the chat's team; the team is read only when the
+    /// post carries media.
+    Human { team: Option<LaunchTeam> },
+}
+
+impl ChatSender {
+    /// The `from` a post by this sender is stored with.
+    pub(crate) fn from(&self) -> &str {
+        match self {
+            Self::Session { handle, .. } => handle.as_str(),
+            Self::Human { .. } => super::model::HUMAN,
+        }
+    }
+}
+
+/// Why a post's media was refused. The person's refusals are typed so the app can
+/// say how to recover; a session's are always [`MediaRefusal::Invalid`], told as is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum MediaRefusal {
+    /// The person's GIF has a blank description.
+    NoAlt,
+    /// The person's send has no team, or a team this Mac doesn't sync.
+    NoTeam,
+    /// Anything else, with the engine's reason.
+    Invalid(String),
+}
+
+impl MediaRefusal {
+    /// The engine's reason, as an agent or a log reads it.
+    pub(crate) fn reason(&self) -> String {
+        match self {
+            Self::NoAlt => "media.alt is required".into(),
+            Self::NoTeam => "media needs a team this machine syncs".into(),
+            Self::Invalid(reason) => reason.clone(),
+        }
+    }
+}
+
+/// The length limits every sender's media is held to.
+fn check_bounds(input: &MediaInput) -> Result<(), String> {
     if input.alt.len() > MAX_ALT_BYTES {
         return Err(format!("media.alt exceeds {MAX_ALT_BYTES} bytes"));
     }
     if input.url.as_ref().is_some_and(|u| u.len() > MAX_URL_BYTES) {
         return Err(format!("media.url exceeds {MAX_URL_BYTES} bytes"));
     }
-    // Decided on the sender: a remote team's caller scope would read its path here.
-    let own = !remote && host.own_media_sender(handle).await;
-    if input.path.is_some() && !own {
-        return Err("media.path needs a session on this machine; send a url instead".into());
-    }
-    let team = handle_team(host, handle)
-        .await
-        .ok_or("media needs a session in a team; this session has none, so send text only")?;
-    let scope = host.caller_scope(handle).await;
-    let workspace_root = host.caller_media_workspace(handle).await;
+    Ok(())
+}
+
+/// Prepare `input` for a post by `sender`, as `send_message` does, and record what the
+/// send admitted.
+///
+/// A session's media is refused when invalid, with an overlong alt or url, a file path
+/// from a session not on this machine, or a session with no team. The person's is
+/// refused with no team or one this Mac doesn't sync (checked first, so nothing is
+/// prepared for it), a blank alt, a `path`, or an invalid or overlong input; their
+/// `url` is this machine's own, read with the person's scope and no workspace root.
+pub(crate) async fn prepare(
+    host: &dyn InboxHost,
+    sender: &ChatSender,
+    input: &MediaInput,
+) -> Result<PreparedChatMedia, MediaRefusal> {
+    let (team, own, scope, workspace_root) = match sender {
+        ChatSender::Session { handle, remote } => {
+            let invalid = MediaRefusal::Invalid;
+            input.validate().map_err(invalid)?;
+            check_bounds(input).map_err(invalid)?;
+            // Decided on the sender: a remote team's caller scope would read its path here.
+            let own = !remote && host.own_media_sender(handle).await;
+            if input.path.is_some() && !own {
+                return Err(invalid(
+                    "media.path needs a session on this machine; send a url instead".into(),
+                ));
+            }
+            let team = handle_team(host, handle).await.ok_or_else(|| {
+                invalid(
+                    "media needs a session in a team; this session has none, so send text only"
+                        .into(),
+                )
+            })?;
+            let scope = host.caller_scope(handle).await;
+            let workspace_root = host.caller_media_workspace(handle).await;
+            (team, own, scope, workspace_root)
+        }
+        ChatSender::Human { team } => {
+            let team = team.clone().ok_or(MediaRefusal::NoTeam)?;
+            let team = team_inbox(host, team)
+                .await
+                .map_err(|_| MediaRefusal::NoTeam)?
+                .team;
+            if input.alt.trim().is_empty() {
+                return Err(MediaRefusal::NoAlt);
+            }
+            if let Some(reason) = human_media_refusal(input) {
+                return Err(MediaRefusal::Invalid(reason));
+            }
+            check_bounds(input).map_err(MediaRefusal::Invalid)?;
+            (team, true, CallerScope::Human, None)
+        }
+    };
     let (attachment, auto) = host
         .prepare_media(
             &team,
@@ -81,7 +162,8 @@ pub(crate) async fn prepare(
             &scope,
             workspace_root.as_deref(),
         )
-        .await?;
+        .await
+        .map_err(MediaRefusal::Invalid)?;
     let off = host.media_config(&team).remote == Remote::Off;
     let state = if attachment.state == "cached" {
         ChatMediaState::Cached
