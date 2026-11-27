@@ -281,11 +281,12 @@ function MediaFigure({
         />
       )}
       {!loaded && (
-        <span className="ibx-media-spin">
+        // A loading figure is named by its label; the copy repeats it for sighted readers.
+        <span className="ibx-media-spin" aria-hidden={pending || undefined}>
           {unavailable
             ? `Couldn't load this image. ${a.alt}`
             : pending
-              ? a.alt
+              ? `Loading ${mediaKind(a)} · ${a.alt}`
               : `Loading ${mediaKind(a)}…`}
         </span>
       )}

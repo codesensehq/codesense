@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: MIT
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 
@@ -179,11 +181,27 @@ describe("MessageMedia while an image loads on its own", () => {
       />,
     );
     const figure = screen.getByRole("figure", { name: "Loading GIF: a dog nods" });
-    expect(figure.textContent).toContain("a dog nods");
+    const copy = figure.querySelector(".ibx-media-spin")!;
+    expect(copy.textContent).toBe("Loading GIF · a dog nods");
+    expect(copy.getAttribute("aria-hidden")).toBe("true");
+    expect(figure.classList.contains("loading")).toBe(true);
     expect(figure.style.getPropertyValue("--w")).toBe("480");
     expect(figure.style.getPropertyValue("--h")).toBe("270");
     expect(screen.queryByRole("button", { name: /Load/ })).toBeNull();
     expect(readWorkspaceChatMedia).not.toHaveBeenCalled();
+  });
+});
+
+describe("MessageMedia loading shimmer", () => {
+  it("pulses a loading figure only when motion is allowed", () => {
+    const css = readFileSync(resolve(__dirname, "../inbox.css"), "utf-8");
+    const gated = css.slice(css.indexOf("@media (prefers-reduced-motion: no-preference)"));
+    expect(gated).toMatch(/^[^}]*\{\s*\.ibx-media\.loading\s*\{\s*animation: ibx-shim/);
+    const ungated = css.replace(
+      /@media \(prefers-reduced-motion: no-preference\)[\s\S]*?\n\}/g,
+      "",
+    );
+    expect(ungated).not.toMatch(/\.ibx-media\.loading\s*\{[^}]*animation/);
   });
 });
 
