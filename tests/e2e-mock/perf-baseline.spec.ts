@@ -19,7 +19,8 @@ import { expect, test, type Browser, type Page } from "@playwright/test";
  *   npx playwright test -c playwright.mock.config.ts --project=webkit --workers=1 \
  *     tests/e2e-mock/perf-baseline.spec.ts
  * then `node scripts/perf-baseline.mjs compare|record --current <that file> --runner <name>`.
- * `MEASURE_RUNS` (default 5) is the samples per key; each sample is a fresh browser context.
+ * `MEASURE_RUNS` (default 5, at least 3) is the samples per key; each sample is a fresh browser
+ * context. Only `MEASURE_PERF_BASELINE=1` turns it on (`=0` or any other value skips).
  * `PERF_BASELINE_OUT` (default `test-results/perf-baseline-current.json`) gets every key
  * measured in the run, with each sample's ms and the end state it stopped on.
  *
@@ -30,8 +31,18 @@ import { expect, test, type Browser, type Page } from "@playwright/test";
  * "ambiguous". A change that moves where that click lands adds its row here, in the same change.
  */
 
-const ENABLED = !!process.env.MEASURE_PERF_BASELINE;
-const RUNS = Number(process.env.MEASURE_RUNS ?? 5);
+const ENABLED = process.env.MEASURE_PERF_BASELINE === "1";
+const MIN_RUNS = 3;
+
+/** `MEASURE_RUNS` as a whole number of at least 3; anything else stops the run before it starts. */
+function runs() {
+  const text = process.env.MEASURE_RUNS ?? "5";
+  if (!/^\d+$/.test(text) || Number(text) < MIN_RUNS) {
+    throw new Error(`MEASURE_RUNS must be a whole number of at least ${MIN_RUNS}, not "${text}"`);
+  }
+  return Number(text);
+}
+const RUNS = ENABLED ? runs() : 0;
 const OUT = process.env.PERF_BASELINE_OUT ?? "test-results/perf-baseline-current.json";
 const END_CAP_MS = 5_000;
 const VIEWPORT = { width: 1600, height: 950 };
