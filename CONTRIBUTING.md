@@ -149,6 +149,42 @@ pnpm test:rust         # Rust tests
 
 If a step fails on a clean checkout, please open an issue.
 
+## Release flags
+
+A feature that isn't ready for everyone ships behind a release flag, off by
+default. There is one flag today, `tiles`, read as `tiles_enabled()` in Rust
+(`src-tauri/src/flags.rs`) and `tilesEnabled()` in the frontend
+(`src/shared/lib/tiles-enabled.ts`). It is on only when both of its inputs say
+so:
+
+- **The local setting**: `viewer.settings.tiles` in `app-state.json`. Only the
+  boolean `true` turns it on; a missing key or any other value is off.
+- **No remote kill.** Beta builds read the static update manifest, and each
+  read that parses caches its override in `flags-cache.json` in the app data
+  folder. Only the literal JSON `false` at `flags.tiles` kills, for example
+  `{"version":"0.5.1","flags":{"tiles":false}}`, a withdrawn manifest included.
+  The value is unsigned and kill-only: the manifest can switch tiles off but
+  never on. An unreachable or malformed manifest keeps the last cached value,
+  and a missing, malformed or unreadable cache is no kill. Internal builds read
+  no manifest and use the local setting alone.
+
+The app decides the flag once at startup, before its first manifest read, and
+the frontend reads that same value through the `tiles_enabled` command, so both
+agree for the whole session. A kill takes effect from the next launch.
+
+With the flag off the app is today's app on untouched old state, and no tile
+code writes any file. Every file that writes a tile file or mounts the tile host
+calls `tilesEnabled()` and is listed in `src/shared/lib/tiles-flag-sites.json`,
+one entry per file:
+
+```json
+[{ "file": "src/features/tiles/save-layout.ts", "what": "writes the tile layout file" }]
+```
+
+`tiles-flag.guard.test.ts` (in `pnpm test:docs-gate`) fails if a listed file
+doesn't call `tilesEnabled()` in code; a mention in a comment or a string
+doesn't count.
+
 ## Who maintains CodeSense
 
 CodeSense has a single maintainer, who reviews every change and makes the final
