@@ -826,8 +826,13 @@ impl UsageStore {
         // The durable session record: another additive table, for the same reason.
         tx.execute_batch(record::SCHEMA).map_err(db_err)?;
         // The launcher's tab and when the record took its handle, which a charge's launch chain
-        // is checked by. Additive columns; an older record has neither.
-        for (column, kind) in [("launched_by_session", "TEXT"), ("handle_at_ms", "INTEGER")] {
+        // is checked by, and the work item the session belongs to. Additive columns; an older
+        // record has none of them.
+        for (column, kind) in [
+            ("launched_by_session", "TEXT"),
+            ("handle_at_ms", "INTEGER"),
+            ("work_item", "TEXT"),
+        ] {
             if !has_column(&tx, "session_record", column)? {
                 tx.execute_batch(&format!("ALTER TABLE session_record ADD COLUMN {column} {kind};")).map_err(db_err)?;
             }

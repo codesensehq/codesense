@@ -156,7 +156,9 @@ impl SshRoutineMachine {
             },
             status: "pending",
             identity: crate::commands::pty_layout::RemoteLaunchIdentity {
-                launched_by: Some(format!("routine {}", launch.routine_name)),
+                launched_by: Some(crate::commands::dashboard_launch::routine_launcher(
+                    &launch.routine_key,
+                )),
                 if_absent: true,
                 durable_workspace: true,
                 ..Default::default()

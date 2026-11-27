@@ -160,7 +160,11 @@ pub fn resume_request(
         headed: false,
         initial_prompt: Some(brief.to_string()),
         identity: Box::new(crate::commands::pty_layout::RemoteLaunchIdentity {
-            launched_by: Some("CodeSense restore".to_string()),
+            // A restore keeps its launcher and its work item.
+            launched_by: crate::commands::pty_layout::remote_tab_launcher(&tab.tags),
+            work_item: crate::commands::pty_layout::remote_tab_work_item(&tab.tags),
+            restored_by: Some(RESTORED_BY.to_string()),
+            restoring: true,
             role: tab.role.clone(),
             // A restore keeps its story (SV-CDE-83 I1).
             story: story_of(tab),
@@ -583,9 +587,21 @@ pub(crate) async fn relaunch_local(
     .await
 }
 
-/// The launch record a local relaunch of `tab` is made with. A restore keeps its story and
-/// team and continues its session's task (SV-CDE-83 I1); `launched_by` stays
-/// "CodeSense restore".
+/// Who a restore records as having restored a session; its launcher stays the original.
+pub(crate) const RESTORED_BY: &str = "CodeSense restore";
+
+/// The launcher `tab`'s launch recorded, kept by its restore.
+fn original_launcher(tab: &RestoreTab, key: &str) -> Option<String> {
+    tab.tags
+        .get(key)
+        .map(|launcher| launcher.trim())
+        .filter(|launcher| !str::is_empty(launcher))
+        .map(str::to_owned)
+}
+
+/// The launch record a local relaunch of `tab` is made with. A restore keeps its story,
+/// team and launcher, adds `restoredBy`, and continues its session's task,
+/// which keeps its work item.
 pub(crate) fn restore_record(
     tab: &RestoreTab,
     relaunch: &LocalRelaunch,
@@ -594,7 +610,8 @@ pub(crate) fn restore_record(
     LaunchRecord {
         meta: LaunchMeta {
             display_name: Some(tab.name.clone()),
-            launched_by: Some("CodeSense restore".to_string()),
+            launched_by: original_launcher(tab, crate::commands::dashboard_launch::TAG_LAUNCHED_BY),
+            restored_by: Some(RESTORED_BY.to_string()),
             team: Some(LaunchTeam {
                 org: relaunch.org.clone(),
                 team: relaunch.team.clone(),
@@ -767,6 +784,37 @@ mod tests {
         assert_eq!(alone.tab_cwd, None);
     }
 
+    /// A remote restore keeps who launched it (trimmed, a blank tag none) and its work
+    /// item, names who restored it, and is marked a restore so it never mints.
+    #[test]
+    fn a_remote_restore_keeps_its_launcher_and_work_item_and_says_who_restored_it() {
+        let identity = |tags: &[(&str, &str)]| {
+            let mut all = vec![
+                ("remoteAgentKey", "acme:default/triage"),
+                ("remotePreparedWorkspace", "prep-7"),
+            ];
+            all.extend_from_slice(tags);
+            let crate::commands::pty_layout::RemoteShellTabRequest::Create { identity, .. } =
+                resume_request("box", &tab(&all), "the brief").unwrap()
+            else {
+                panic!("a create")
+            };
+            identity
+        };
+        let tagged = identity(&[
+            ("remoteLaunchedBy", " lead "),
+            ("remoteWorkItem", "wi_00000000000000a1"),
+        ]);
+        assert_eq!(tagged.launched_by.as_deref(), Some("lead"));
+        assert_eq!(tagged.work_item, crate::work_item::WorkItemId::parse("wi_00000000000000a1"));
+        assert_eq!(tagged.restored_by.as_deref(), Some(RESTORED_BY));
+        assert!(tagged.restoring);
+        let untagged = identity(&[("remoteLaunchedBy", "  ")]);
+        assert_eq!(untagged.launched_by, None, "a blank launcher is none");
+        assert_eq!(untagged.work_item, None);
+        assert!(untagged.restoring, "a restore without the tag still never mints");
+    }
+
     #[test]
     fn agr19_git_state_reads_as_one_line() {
         let mut git = GitPromptStatus {
@@ -932,6 +980,7 @@ mod tests {
             ("launchCwd", "/Users/me/.codesense/w/SV-1"),
             ("launchTeam", "acme:default"),
             ("launchStory", "SV-1"),
+            ("launchedBy", "lead"),
         ]);
         let relaunch = local_relaunch_of(&tab).unwrap();
         let after = DashboardLaunchState::new(4);
@@ -944,7 +993,12 @@ mod tests {
 
         let record = open().read_session_record("s-2").unwrap().unwrap();
         assert_eq!(record.story_id.as_deref(), Some("SV-1"));
-        assert_eq!(record.launched_by.as_deref(), Some("CodeSense restore"));
+        assert_eq!(record.launched_by.as_deref(), Some("lead"), "a restore keeps its launcher");
+        let restored = after.snapshot().into_iter().find(|s| s.handle == "SV-1#dev").unwrap();
+        assert_eq!(restored.meta.restored_by.as_deref(), Some(RESTORED_BY));
+        let kept = open().read_session_record("s-1").unwrap().unwrap().work_item;
+        assert!(kept.is_some(), "the first launch minted a work item");
+        assert_eq!(record.work_item, kept, "a restore keeps its work item");
         assert_eq!(resumed.story_id.as_deref(), Some("SV-1"));
         assert_eq!(
             resumed.parent_id, dev.parent_id,

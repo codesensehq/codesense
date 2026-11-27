@@ -372,6 +372,7 @@ mod tests {
             chat_workspace_id: None,
             routine_key: None,
             deadline_ms: None,
+            work_item: None,
         };
         assert!(after.restore_launch(&launch, None, None));
 
@@ -435,6 +436,7 @@ mod tests {
             chat_workspace_id: None,
             routine_key: None,
             deadline_ms: None,
+            work_item: None,
         };
         assert!(after.restore_launch(&launch, None, None));
 

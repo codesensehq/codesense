@@ -611,6 +611,25 @@ async fn cde36_team_workspace_inherits_the_story_its_launcher_opened() {
     assert_launch_story(&host, result.handle.as_deref().unwrap(), Some("SW-1"));
 }
 
+/// `open_workspace`'s launch path: a lead a person opened mints a work item, and the
+/// worker it opens records the lead as its launcher and inherits that work item.
+#[tokio::test]
+async fn open_workspace_records_its_launcher_and_work_item() {
+    let home = tempfile::tempdir().unwrap();
+    let host = FakeHost::new(home.path(), 4);
+    let lead = open_agent(&host, &active(), &team_workspace("Lead", None)).await.unwrap();
+    let lead = lead.handle.unwrap();
+    let lead_item = host.registry.work_item(&lead).expect("a person's open mints");
+    let lead_session = host.registry.resolve(&lead).expect("the lead is bound");
+    let worker = open_agent(&host, &active(), &team_workspace("Worker", Some(&lead_session)))
+        .await
+        .unwrap();
+    let worker = worker.handle.unwrap();
+    let snapshot = host.registry.snapshot().into_iter().find(|s| s.handle == worker).unwrap();
+    assert_eq!(snapshot.meta.launched_by.as_deref(), Some(lead.as_str()));
+    assert_eq!(host.registry.work_item(&worker), Some(lead_item));
+}
+
 #[tokio::test]
 async fn cde36_team_workspace_explicit_story_wins_over_its_launchers_story() {
     let home = tempfile::tempdir().unwrap();
@@ -1228,6 +1247,7 @@ impl OpenWorkspacePort for FakePort {
         org: Option<&str>,
         initial_prompt: Option<&str>,
         view: crate::commands::mcp_workspace::SessionView,
+        _launched_by: Option<String>,
     ) -> Result<crate::commands::mcp_workspace::LaunchOutcome, String> {
         self.story_orgs
             .lock()
@@ -2970,6 +2990,7 @@ pub(crate) mod agent_opens {
             _org: Option<&str>,
             _initial_prompt: Option<&str>,
             _view: crate::commands::mcp_workspace::SessionView,
+            _launched_by: Option<String>,
         ) -> Result<crate::commands::mcp_workspace::LaunchOutcome, String> {
             panic!("an agent open never takes the legacy story path")
         }
@@ -4312,6 +4333,7 @@ mod authoring_opens {
             _org: Option<&str>,
             _initial_prompt: Option<&str>,
             _view: crate::commands::mcp_workspace::SessionView,
+            _launched_by: Option<String>,
         ) -> Result<crate::commands::mcp_workspace::LaunchOutcome, String> {
             panic!("an authoring open never takes the legacy story path")
         }

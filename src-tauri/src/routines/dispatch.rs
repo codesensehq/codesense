@@ -1060,6 +1060,11 @@ impl Launcher for AppLauncher {
                 provenance,
             } = request;
             if visible {
+                // The session is launched by its routine, as `routine:<org>/<team>/<id>`.
+                let launched_by = provenance
+                    .routine_key
+                    .as_deref()
+                    .map(crate::commands::dashboard_launch::routine_launcher);
                 let fresh = launch_managed_dir_session(
                     &self.app,
                     &handle,
@@ -1076,6 +1081,7 @@ impl Launcher for AppLauncher {
                                     org: org.clone(),
                                     team: team.clone(),
                                 }),
+                                launched_by,
                                 ..Default::default()
                             },
                             started_with: None,

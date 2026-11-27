@@ -722,6 +722,7 @@ impl crate::commands::workspace_open::OpenWorkspacePort for ScopedPort {
         _: Option<&str>,
         _: Option<&str>,
         _: crate::commands::mcp_workspace::SessionView,
+        _: Option<String>,
     ) -> Result<crate::commands::mcp_workspace::LaunchOutcome, String> {
         Err("target required".into())
     }

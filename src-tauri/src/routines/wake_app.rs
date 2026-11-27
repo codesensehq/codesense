@@ -722,7 +722,9 @@ impl WakeEnv for AppWakeEnv {
                         headed: true,
                         initial_prompt: Some(launch.prompt.clone()),
                         identity: Box::new(RemoteLaunchIdentity {
-                            launched_by: Some(format!("routine {}", launch.routine_name)),
+                            launched_by: Some(crate::commands::dashboard_launch::routine_launcher(
+                                &launch.routine_key,
+                            )),
                             // SW-AGR-8: a wake's launch-if-absent goes
                             // through the machine's single flight.
                             if_absent: true,

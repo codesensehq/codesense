@@ -76,6 +76,14 @@ pub(crate) struct PersistedLaunch {
     /// The app-captured workspace used by local publish admission.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worktree_dir: Option<PathBuf>,
+    /// The work item `session_id` belongs to, so a restore keeps it when the
+    /// session-server tag `launchWorkItem` is lost. A malformed one reads as none.
+    #[serde(
+        default,
+        deserialize_with = "crate::work_item::deserialize_lenient",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub work_item: Option<crate::work_item::WorkItemId>,
 }
 
 /// The full on-disk document. `launches` is keyed by handle to match the
@@ -287,6 +295,7 @@ mod tests {
                 deadline_ms: None,
                 session_id: None,
                 worktree_dir: None,
+                work_item: None,
             },
         );
         write_registry(&path, &registry).unwrap();
@@ -366,6 +375,7 @@ mod tests {
                     deadline_ms: None,
                     session_id: None,
                     worktree_dir: None,
+                    work_item: None,
                 },
             )
             .unwrap();
@@ -395,6 +405,7 @@ mod tests {
                 deadline_ms: None,
                 session_id: None,
                 worktree_dir: None,
+                work_item: None,
             },
         );
         write_registry(&path, &registry).unwrap();
@@ -428,6 +439,7 @@ mod tests {
                 deadline_ms: None,
                 session_id: None,
                 worktree_dir: None,
+                work_item: None,
             },
         );
         let store = Store::new(path, registry);

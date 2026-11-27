@@ -812,7 +812,7 @@ fn links(store: &UsageStore, task: &str, kind: &str) -> Vec<String> {
     out
 }
 
-/// SV-CDE-83 I1, case 1: a restore relaunch (`launched_by: "CodeSense restore"`, no launcher)
+/// Case 1: a restore relaunch (which keeps its original launcher)
 /// keeps its story, team and task parent, and its task continues the predecessor's.
 #[test]
 fn cde83_a_restore_relaunch_continues_its_predecessor() {
@@ -825,7 +825,7 @@ fn cde83_a_restore_relaunch_continues_its_predecessor() {
     );
     assert_eq!(first.parent_id.as_deref(), Some("lead-task"));
     let mut restored = record("new-tab");
-    restored.launched_by = Some("CodeSense restore".into());
+    restored.launched_by = Some("lead".into());
     let inputs = TaskInputs {
         continues: Some("old-tab".into()),
         ..brief("Resume.")
@@ -840,7 +840,7 @@ fn cde83_a_restore_relaunch_continues_its_predecessor() {
     assert_eq!(t.parent_id.as_deref(), Some("lead-task"));
     assert_eq!(t.parent_source.as_deref(), Some("continues"));
     assert!(!t.unavailable.contains_key("parent"));
-    assert_eq!(t.created_by.as_deref(), Some("CodeSense restore"));
+    assert_eq!(t.created_by.as_deref(), Some("lead"));
     assert_eq!(
         links(&store, "new-tab", "relates_to:continues"),
         vec!["old-tab"]
@@ -1104,7 +1104,7 @@ fn cde83_a_restored_reviewer_keeps_its_exact_review_target() {
     .unwrap();
 
     let mut restored = record("review-new");
-    restored.launched_by = Some("CodeSense restore".into());
+    restored.launched_by = Some("lead".into());
     let inputs = TaskInputs {
         role: Some("reviewer".into()),
         continues: Some("review-old".into()),

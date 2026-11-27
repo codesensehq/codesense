@@ -978,6 +978,9 @@ struct LaunchEntry {
     /// SW-SR-3 (AC-4): the auto-run provenance stamp, set by [`stamp_provenance`] on a
     /// dispatched worker. `None` for a hand-launched / externally-registered session.
     provenance: Option<RunProvenance>,
+    /// The work item the session belongs to, settled once when its entry is made by
+    /// [`crate::work_item::resolve_for_launch`] and kept on restore. `None` for a shell.
+    work_item: Option<crate::work_item::WorkItemId>,
     /// Durable routine identity, retained independently of a restored run outcome.
     routine_key: Option<String>,
     /// SW-AU-96B: the run's managed worktree dir, stamped at launch while it is guaranteed live.
@@ -1048,6 +1051,10 @@ struct LaunchEntry {
     restored_overdue: bool,
     /// The agent launch's per-launch settings file, removed when the entry goes.
     launch_settings: Option<crate::agents::launch::LaunchSettingsFile>,
+    /// A tab opened for its caller now ([`DashboardLaunchState::register_opened_tab`]),
+    /// not a session coming back: once it names an agent it is an agent launch, and its
+    /// work item is settled then.
+    opened_tab: bool,
 }
 
 fn entry_for_session_mut<'a>(inner: &'a mut Inner, session: &str) -> Option<&'a mut LaunchEntry> {
@@ -1140,6 +1147,17 @@ impl LaunchEntry {
         self.agent_revision.is_some() || self.kind == KIND_DASHBOARD_LAUNCHED
     }
 
+    /// The tab of the launch this entry is, as a launcher: a local launch's session, or a
+    /// remote tab's session on its machine (the one its authority verifies a remote caller
+    /// as).
+    fn launcher_session_of(&self) -> Option<String> {
+        self.session_id.clone().or_else(|| {
+            self.remote_shell
+                .as_ref()
+                .map(|remote| codesense_pty_core::domain::PtySessionId::as_str(&remote.target.session).to_owned())
+        })
+    }
+
     /// A cap-free entry for a session the app did not reserve a launch for: an app-opened
     /// terminal, or a launch restored from its tab after an app restart.
     fn registered(
@@ -1162,6 +1180,7 @@ impl LaunchEntry {
             launcher: launcher.map(str::to_string),
             account_provenance: None,
             provenance: None,
+            work_item: None,
             routine_key: None,
             worktree_dir: None,
             profile_id: None,
@@ -1181,6 +1200,7 @@ impl LaunchEntry {
             exit_sent_at_ms: None,
             restored_overdue: false,
             launch_settings: None,
+            opened_tab: false,
         }
     }
 }
@@ -1218,6 +1238,9 @@ pub struct LaunchMeta {
     /// The task a reviewer launch reviews, as `open_workspace` named it. Not on the wire.
     #[serde(skip)]
     pub reviews: Option<String>,
+    /// Who restored the session after a restart; its `launched_by` stays the original.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub restored_by: Option<String>,
 }
 
 /// An org and one of its teams.
@@ -1300,6 +1323,47 @@ pub(crate) struct LaunchRecord {
     /// the deadline sweep. Set at `open_workspace`'s call site; UI launches
     /// leave it empty (the UI sheet does not expose it today).
     pub max_runtime_ms: Option<u64>,
+}
+
+/// How a routine is named as a launcher and as a queue owner: `routine:<org>/<team>/<id>`.
+const ROUTINE_LAUNCHER_PREFIX: &str = "routine:";
+/// How a routine launch recorded its launcher before it recorded the routine's id.
+const LEGACY_ROUTINE_LAUNCHER_PREFIX: &str = "routine ";
+
+/// The launcher a routine's launch records, and the queue owner its sessions act as.
+pub(crate) fn routine_launcher(routine_key: &str) -> String {
+    format!("{ROUTINE_LAUNCHER_PREFIX}{routine_key}")
+}
+
+/// Whether a session recorded as launched by `recorded` matches a `launched_by` filter.
+/// A routine matches by its `routine:<key>` id, and a record written before routine
+/// launches recorded the id (`routine <name>`) still matches: a filter in that same legacy
+/// form, or a `routine:<key>` filter whose id is the name's slug.
+pub(crate) fn launcher_matches(recorded: Option<&str>, filter: &str) -> bool {
+    let Some(recorded) = recorded else {
+        return false;
+    };
+    if recorded == filter {
+        return true;
+    }
+    fn legacy_name(raw: &str) -> Option<&str> {
+        raw.strip_prefix(LEGACY_ROUTINE_LAUNCHER_PREFIX).map(str::trim)
+    }
+    fn routine_id(raw: &str) -> Option<&str> {
+        raw.strip_prefix(ROUTINE_LAUNCHER_PREFIX)
+            .and_then(|key| key.rsplit('/').next())
+    }
+    let slug = |name: &str| {
+        name.split(|c: char| !c.is_alphanumeric())
+            .filter(|part| !str::is_empty(part))
+            .map(str::to_lowercase)
+            .collect::<Vec<_>>()
+            .join("-")
+    };
+    match (legacy_name(recorded), routine_id(filter)) {
+        (Some(name), Some(id)) => !str::is_empty(name) && slug(name) == id,
+        _ => false,
+    }
 }
 
 /// A reported launcher id as the registry records it: the handle its session is bound
@@ -1670,6 +1734,7 @@ struct PersistSnapshot {
     deadline_ms: Option<u64>,
     session_id: Option<String>,
     worktree_dir: Option<PathBuf>,
+    work_item: Option<crate::work_item::WorkItemId>,
 }
 
 impl PersistSnapshot {
@@ -1682,6 +1747,7 @@ impl PersistSnapshot {
             deadline_ms: entry.deadline_ms,
             session_id: entry.session_id.clone(),
             worktree_dir: entry.worktree_dir.clone(),
+            work_item: entry.work_item.clone(),
         }
     }
 }
@@ -1849,6 +1915,35 @@ impl DashboardLaunchState {
         }
     }
 
+    /// The work item `session_id` had under `handle` in a prior app run, for a restore to keep.
+    pub(crate) fn persisted_work_item(
+        &self,
+        handle: &str,
+        session_id: &str,
+    ) -> Option<crate::work_item::WorkItemId> {
+        let guard = self.persistence.lock().unwrap_or_else(|e| e.into_inner());
+        let record = guard.as_ref()?.get(handle)?;
+        (record.session_id.as_deref() == Some(session_id))
+            .then(|| record.work_item.clone())
+            .flatten()
+    }
+
+    /// The work item a relaunch continuing `session_id` keeps: the one its session record
+    /// holds, else the one the registry saved for it under `handle`.
+    fn continued_work_item(&self, handle: &str, session_id: &str) -> Option<crate::work_item::WorkItemId> {
+        task_store_path(Some(self))
+            .and_then(|path| crate::session_usage::UsageStore::open(&path))
+            .and_then(|store| store.read_session_record(session_id))
+            .inspect_err(|e| {
+                log::warn!(target: "work_item", "reading the work item of continued session {session_id}: {e}");
+            })
+            .ok()
+            .flatten()
+            .and_then(|record| record.work_item)
+            .and_then(|raw| crate::work_item::WorkItemId::parse(&raw))
+            .or_else(|| self.persisted_work_item(handle, session_id))
+    }
+
     /// A person typed into `session_id`'s pane at `now_ms`. A bounded session that has
     /// not been sent `/exit` keeps running at least [`HUMAN_ACTIVE_GRACE_MS`] past the
     /// keystroke, so `maxRuntime` does not stop a session someone is using. Unbounded
@@ -1983,7 +2078,8 @@ impl DashboardLaunchState {
     /// mutation after that read re-marks the handle and is written by a later pass.
     ///
     /// A record is kept for an agent launch's launcher relationship, a bounded
-    /// launch's deadline (a person's launch included), or a captured workspace;
+    /// launch's deadline (a person's launch included), a captured workspace, or a
+    /// work item once its session is bound (a restore matches it by session id);
     /// with none of them, or once the entry is gone, it is removed. A write failure
     /// is logged and swallowed: the next write catches up.
     fn flush_dirty(
@@ -2016,6 +2112,7 @@ impl DashboardLaunchState {
                 snap.launched_by.is_some()
                     || snap.deadline_ms.is_some()
                     || snap.worktree_dir.is_some()
+                    || (snap.work_item.is_some() && snap.session_id.is_some())
             });
             let Some(snap) = record else {
                 if let Err(error) = store.remove(&handle) {
@@ -2041,6 +2138,7 @@ impl DashboardLaunchState {
                 deadline_ms: snap.deadline_ms,
                 session_id: snap.session_id.clone(),
                 worktree_dir: snap.worktree_dir.clone(),
+                work_item: snap.work_item.clone(),
             };
             if let Err(error) = store.upsert(&handle, record) {
                 log::warn!(
@@ -2092,6 +2190,8 @@ impl DashboardLaunchState {
         // during the store read or startup. A live run is a fallback until capture arrives.
         let story_was_explicit = record.meta.story.is_some();
         let launcher_entry = launched_by.as_deref().and_then(|handle| inner.by_handle.get(handle));
+        // The launcher's work item, from the same snapshot: a worker inherits it.
+        let launcher_work_item = launcher_entry.and_then(|entry| entry.work_item.clone());
         // Keep the story with the same launcher snapshot as the task: the handle may be
         // reused while the durable task is read. An explicitly named story always wins.
         if record.meta.story.is_none() {
@@ -2102,14 +2202,7 @@ impl DashboardLaunchState {
         }
         // The launcher's tab: a local launch's session, or a remote tab's session on its machine
         // (the one its authority verifies a remote caller as).
-        let launcher_session = launcher_entry.and_then(|launcher| {
-            launcher.session_id.clone().or_else(|| {
-                launcher
-                    .remote_shell
-                    .as_ref()
-                    .map(|remote| codesense_pty_core::domain::PtySessionId::as_str(&remote.target.session).to_owned())
-            })
-        });
+        let launcher_session = launcher_entry.and_then(LaunchEntry::launcher_session_of);
         let launcher = launcher_entry.and_then(|launcher| {
             let session = launcher.session_id.as_ref()?;
             let fallback = launcher.provenance.as_ref()
@@ -2137,10 +2230,25 @@ impl DashboardLaunchState {
                 .flatten()
                 .unwrap_or(fallback)
         });
+        // A relaunch that continues a session is its restore: it keeps that session's work
+        // item, read here without holding the registry lock across SQLite I/O.
+        let kept_work_item = record
+            .meta
+            .continues
+            .as_deref()
+            .map(|previous| self.continued_work_item(handle, previous));
         let mut inner = self.lock();
         if inner.by_handle.contains_key(handle) {
             return Ok(false);
         }
+        let work_item = crate::work_item::resolve_for_launch(
+            launcher_work_item.as_ref(),
+            true,
+            match &kept_work_item {
+                Some(kept) => crate::work_item::LaunchKind::Restoring(kept.as_ref()),
+                None => crate::work_item::LaunchKind::Fresh,
+            },
+        );
         let permit = self.cap.try_acquire()?;
         inner.by_handle.insert(
             handle.to_string(),
@@ -2164,6 +2272,7 @@ impl DashboardLaunchState {
                 account_provenance: None,
                 routine_key: provenance.as_ref().and_then(|p| p.routine_key.clone()),
                 provenance,
+                work_item,
                 // SW-AU-96B: stamped post-bind by `set_worktree_dir_if_absent`.
                 worktree_dir: None,
                 profile_id: None,
@@ -2187,6 +2296,7 @@ impl DashboardLaunchState {
                 exit_sent_at_ms: None,
                 restored_overdue: false,
                 launch_settings: None,
+                opened_tab: false,
             },
         );
         // SW-FX-launcher-persistence (step 1): mirror the just-committed launcher
@@ -2274,14 +2384,15 @@ impl DashboardLaunchState {
         // mirror the just-stamped deadline to the on-disk record so a
         // later app process can restore the sweep's clock through the file
         // fallback when the tab's tag is lost. Gated on a bounded entry (or one
-        // holding a captured workspace, whose record must carry the session id the
-        // restore check matches) so an unbounded rebind does not pay a redundant
-        // file write.
+        // holding a captured workspace or a work item, whose record must carry the
+        // session id the restore check matches) so an unbounded rebind does not pay a
+        // redundant file write.
         let persist = budget_changed
-            && inner
-                .by_handle
-                .get(handle)
-                .is_some_and(|entry| entry.deadline_ms.is_some() || entry.worktree_dir.is_some());
+            && inner.by_handle.get(handle).is_some_and(|entry| {
+                entry.deadline_ms.is_some()
+                    || entry.worktree_dir.is_some()
+                    || entry.work_item.is_some()
+            });
         drop(inner);
         if persist {
             self.queue_persist(handle);
@@ -2318,6 +2429,7 @@ impl DashboardLaunchState {
         // prior app run.
         let persisted_launcher_context = self.persisted_launcher_context(handle);
         let persisted_launched_by = self.persisted_launched_by(handle);
+        let persisted_work_item = self.persisted_work_item(handle, session_id);
         let mut inner = self.lock();
         if inner
             .by_session
@@ -2373,6 +2485,12 @@ impl DashboardLaunchState {
         if persisted_launched_by.is_some() {
             entry.meta.launched_by = persisted_launched_by;
         }
+        // A registration starts no work: it only keeps the one its session had before.
+        entry.work_item = crate::work_item::resolve_for_launch(
+            None,
+            entry.names_an_agent(),
+            crate::work_item::LaunchKind::Restoring(persisted_work_item.as_ref()),
+        );
         inner.by_handle.insert(handle.to_string(), entry);
         inner
             .by_session
@@ -2672,10 +2790,18 @@ impl DashboardLaunchState {
     /// Record the named agent (`<key>@<revision>`) `handle`'s session runs — fill-gap only,
     /// like the profile id.
     pub fn set_agent_revision_if_absent(&self, handle: &str, agent_revision: String) {
-        if let Some(entry) = self.lock().by_handle.get_mut(handle) {
-            if entry.agent_revision.is_none() {
-                entry.agent_revision = Some(agent_revision);
-            }
+        let mut inner = self.lock();
+        let Some(entry) = inner.by_handle.get_mut(handle) else {
+            return;
+        };
+        if entry.agent_revision.is_some() {
+            return;
+        }
+        entry.agent_revision = Some(agent_revision);
+        // A tab opened for its caller becomes an agent launch now.
+        if settle_opened_tab_work_item(&mut inner, handle) {
+            drop(inner);
+            self.queue_persist(handle);
         }
     }
 
@@ -3100,7 +3226,7 @@ impl DashboardLaunchState {
     /// Stable queue authority granted by this launch, never a display role label.
     pub(crate) fn queue_owner_for_session(&self, session: &str) -> Option<String> {
         if let Some(key) = self.routine_key_for_session(session) {
-            return Some(format!("routine:{key}"));
+            return Some(routine_launcher(&key));
         }
         let role = self
             .with_entry(session, |entry| {
@@ -3213,6 +3339,11 @@ impl DashboardLaunchState {
             .collect()
     }
 
+    /// The work item `handle`'s session belongs to.
+    pub(crate) fn work_item(&self, handle: &str) -> Option<crate::work_item::WorkItemId> {
+        self.lock().by_handle.get(handle).and_then(|entry| entry.work_item.clone())
+    }
+
     /// The tab that launched `handle`'s session, captured when its launch was reserved.
     pub(crate) fn launcher_session(&self, handle: &str) -> Option<String> {
         self.lock().by_handle.get(handle).and_then(|entry| entry.launcher_session.clone())
@@ -3287,6 +3418,57 @@ impl DashboardLaunchState {
                     .and_then(|record| launch_team_from_key(&record.team_key));
                 entry.meta.team = Some(present.unwrap_or(team));
             }
+        }
+    }
+
+    /// Record the verified session that opened `handle`'s tab as its launcher, normalized
+    /// like [`begin_with_provenance`]'s. A launcher already recorded stays; a tab cannot
+    /// name itself.
+    ///
+    /// [`begin_with_provenance`]: Self::begin_with_provenance
+    pub(crate) fn set_launched_by_if_absent(&self, handle: &str, caller: &str) {
+        let mut inner = self.lock();
+        let launched_by = normalize_launcher(&inner, caller);
+        if launched_by == handle
+            || inner
+                .by_handle
+                .get(handle)
+                .is_none_or(|entry| entry.meta.launched_by.is_some())
+        {
+            return;
+        }
+        // The caller is a verified session, so it is the launcher's tab when no entry says
+        // otherwise.
+        let launcher_session = inner
+            .by_handle
+            .get(&launched_by)
+            .and_then(LaunchEntry::launcher_session_of)
+            .unwrap_or_else(|| caller.to_owned());
+        let Some(entry) = inner.by_handle.get_mut(handle) else {
+            return;
+        };
+        entry.meta.launched_by = Some(launched_by);
+        entry.launcher_session = Some(launcher_session);
+        settle_opened_tab_work_item(&mut inner, handle);
+        drop(inner);
+        self.queue_persist(handle);
+    }
+
+    /// Register a tab a verified caller (or a person, with none) opened now, as
+    /// [`register`](Self::register) does, then record its caller as its launcher. Once the tab
+    /// names an agent it is that agent's launch, and its work item is settled then: the
+    /// launcher's, else a new one.
+    pub(crate) fn register_opened_tab(&self, handle: &str, session_id: &str, caller: Option<&str>) {
+        self.register(handle, session_id, Some("codesense"));
+        let mut inner = self.lock();
+        let Some(entry) = inner.by_handle.get_mut(handle) else {
+            return;
+        };
+        entry.opened_tab = true;
+        settle_opened_tab_work_item(&mut inner, handle);
+        drop(inner);
+        if let Some(caller) = caller {
+            self.set_launched_by_if_absent(handle, caller);
         }
     }
 
@@ -3949,6 +4131,7 @@ pub(crate) fn compose_launch_write(
     let owner = state.owner_for_session(session_id);
     let mut record = record_from_launch(session_id, &snapshot, owner.as_ref(), &facts);
     record.launched_by_session = state.launcher_session(handle);
+    record.work_item = state.work_item(handle).map(String::from);
     // What the task is typed and linked from, beyond the brief: the launch's role, its saved
     // agent's queue role, the task it reviews and the session it continues.
     let mut task = facts.task;
@@ -4603,7 +4786,22 @@ pub(crate) async fn launch_headless_session(
     // Reserve the supervisory slot BEFORE any spawn work (fail-fast `busy`). A handle
     // already launching returns `false` — a headless run has nothing to focus, so refuse
     // rather than fork a second run onto the same handle (we don't own that permit).
-    if !launch.begin(&handle).map_err(|e| e.to_string())? {
+    // A routine's run is launched by its routine, as `routine:<org>/<team>/<id>`; `launcher`
+    // stays the surface that started it.
+    let record = LaunchRecord {
+        meta: LaunchMeta {
+            launched_by: provenance
+                .as_ref()
+                .and_then(|provenance| provenance.routine_key.as_deref())
+                .map(routine_launcher),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    if !launch
+        .begin_with_provenance(&handle, None, record)
+        .map_err(|e| e.to_string())?
+    {
         return Err(format!(
             "busy: a session is already active for handle '{handle}'"
         ));
@@ -6578,6 +6776,7 @@ impl DashboardLaunchState {
             .agent
             .as_ref()
             .map(|agent| agent.manifest.agent.to_string());
+        let work_item = remote_work_item(&inner, &record);
         inner.by_handle.insert(
             record.handle.clone(),
             LaunchEntry {
@@ -6598,6 +6797,7 @@ impl DashboardLaunchState {
                 launcher: None,
                 account_provenance: None,
                 provenance: None,
+                work_item,
                 routine_key: None,
                 worktree_dir: None,
                 profile_id: None,
@@ -6616,6 +6816,7 @@ impl DashboardLaunchState {
                 exit_sent_at_ms: None,
                 restored_overdue: false,
                 launch_settings: None,
+                opened_tab: false,
             },
         );
         Ok(())
@@ -6747,6 +6948,68 @@ fn remote_launch_meta(record: &super::pty_layout::RemoteShellRecord) -> LaunchMe
         avatar: identity.avatar.clone(),
         continues: None,
         reviews: None,
+        restored_by: identity.restored_by.clone(),
+    }
+}
+
+/// The work item a remote launch records: the one its record carries (a restore, or a
+/// receipt written after it was settled), else [`crate::work_item::resolve_for_launch`]
+/// with its launcher's. A restore whose tab recorded none keeps none, like a local one.
+fn remote_work_item(
+    inner: &Inner,
+    record: &super::pty_layout::RemoteShellRecord,
+) -> Option<crate::work_item::WorkItemId> {
+    let launcher = record
+        .identity
+        .launched_by
+        .as_deref()
+        .and_then(|launcher| inner.by_handle.get(launcher))
+        .and_then(|entry| entry.work_item.as_ref());
+    crate::work_item::resolve_for_launch(
+        launcher,
+        record.agent.is_some(),
+        match (&record.identity.work_item, record.identity.restoring) {
+            (Some(kept), _) => crate::work_item::LaunchKind::Restoring(Some(kept)),
+            (None, true) => crate::work_item::LaunchKind::Restoring(None),
+            (None, false) => crate::work_item::LaunchKind::Fresh,
+        },
+    )
+}
+
+/// Settle the work item of `handle`'s tab, opened for its caller now, once it names an
+/// agent: its launcher's, else a new one. A tab that names none, already has one, or came
+/// back from a restore is left alone. True when the work item was set.
+fn settle_opened_tab_work_item(inner: &mut Inner, handle: &str) -> bool {
+    let Some(entry) = inner.by_handle.get(handle) else {
+        return false;
+    };
+    if !entry.opened_tab || entry.work_item.is_some() || !LaunchEntry::names_an_agent(entry) {
+        return false;
+    }
+    let launcher = entry
+        .meta
+        .launched_by
+        .as_deref()
+        .and_then(|launcher| inner.by_handle.get(launcher))
+        .and_then(|launcher| launcher.work_item.clone());
+    let work_item = crate::work_item::resolve_for_launch(
+        launcher.as_ref(),
+        true,
+        crate::work_item::LaunchKind::Fresh,
+    );
+    let Some(entry) = inner.by_handle.get_mut(handle) else {
+        return false;
+    };
+    entry.work_item = work_item;
+    entry.work_item.is_some()
+}
+
+impl DashboardLaunchState {
+    /// Settle the work item remote launch `record` records, on `record` itself, so its
+    /// receipt, its layout tags and its registry entry all carry the same one. Settling
+    /// again keeps it.
+    pub(crate) fn settle_remote_work_item(&self, record: &mut super::pty_layout::RemoteShellRecord) {
+        record.identity.work_item = remote_work_item(&self.lock(), record);
     }
 }
 
@@ -7109,9 +7372,11 @@ impl DashboardLaunchState {
     pub(crate) fn reserve_remote_shell_durable(
         &self,
         root: &std::path::Path,
-        record: super::pty_layout::RemoteShellRecord,
+        mut record: super::pty_layout::RemoteShellRecord,
     ) -> Result<RemoteShellReservation, String> {
         use std::io::Write;
+        // Settled before the receipt is written, so a restore from it keeps the same one.
+        self.settle_remote_work_item(&mut record);
         let path = remote_intent_path(root, &record)?;
         std::fs::create_dir_all(root).map_err(|e| format!("cannot reserve remote intent: {e}"))?;
         let bytes = serde_json::to_vec(&record).map_err(|e| e.to_string())?;
@@ -7157,7 +7422,7 @@ mod local_restore;
 pub(crate) use local_restore::RestoredLaunch;
 pub(crate) use local_restore::{
     is_launch_tag, spawn_local_launch_restore, tag_bound_launch, TAG_LAUNCH_AGENT_REVISION,
-    TAG_LAUNCH_HANDLE, TAG_LAUNCH_PRINCIPAL, TAG_LAUNCH_ROUTINE, TAG_LAUNCH_STORY,
+    TAG_LAUNCHED_BY, TAG_LAUNCH_HANDLE, TAG_LAUNCH_PRINCIPAL, TAG_LAUNCH_ROUTINE, TAG_LAUNCH_STORY,
 };
 
 mod persistence;
@@ -9834,6 +10099,7 @@ pub(crate) mod tests {
     };
 
     include!("dashboard_launch/story_tests.rs");
+    include!("dashboard_launch/work_item_tests.rs");
 
     fn task_facts(brief: Option<&str>) -> crate::session_usage::record::LaunchFacts {
         launch_facts(&[]).with_task(TaskInputs {
@@ -12656,12 +12922,24 @@ pub(crate) mod tests {
             assert!(!waited_on_disk, "the stamp waited on the registry write");
         }
 
+        /// An unbounded launch with no workspace keeps only its session and work item,
+        /// and only once it is bound, so a restore can match the work item to its session.
         #[test]
-        fn unbounded_bind_without_workspace_or_deadline_persists_nothing() {
+        fn unbounded_bind_without_workspace_or_deadline_persists_only_its_work_item() {
             let (state, _dir, path) = wired_state();
             state.begin("worker").unwrap();
-            state.bind("worker", "session-a", None).unwrap();
             assert!(!load_registry(&path).launches.contains_key("worker"));
+            state.bind("worker", "session-a", None).unwrap();
+
+            let registry = load_registry(&path);
+            let value = serde_json::to_value(registry.launches.get("worker").unwrap()).unwrap();
+            assert_eq!(value["sessionId"], "session-a");
+            assert_eq!(
+                value["workItem"],
+                serde_json::to_value(state.work_item("worker").unwrap()).unwrap()
+            );
+            assert!(value.get("worktreeDir").is_none());
+            assert!(value.get("deadlineMs").is_none());
         }
 
         #[test]
@@ -12713,6 +12991,7 @@ pub(crate) mod tests {
                     deadline_ms: None,
                     session_id: None,
                     worktree_dir: None,
+                    work_item: None,
                 },
             );
             persistence::write_registry(&path, &seed).unwrap();
@@ -12906,6 +13185,7 @@ pub(crate) mod tests {
                     deadline_ms: None,
                     session_id: None,
                     worktree_dir: None,
+                    work_item: None,
                 },
             );
             persistence::write_registry(&other_path, &other).unwrap();

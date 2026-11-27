@@ -259,11 +259,23 @@ pub fn register(
     registry: &crate::commands::dashboard_launch::DashboardLaunchState,
 ) -> Result<(String, Arc<AtomicU32>, Arc<AtomicBool>), String> {
     let handle = super::dispatch::handle(&request.routine_key, &request.run_id);
-    if !registry.begin(&handle).map_err(|e| e.to_string())? {
+    // The run is launched by its routine, as `routine:<org>/<team>/<id>`.
+    let launcher = crate::commands::dashboard_launch::routine_launcher(&request.routine_key);
+    let record = crate::commands::dashboard_launch::LaunchRecord {
+        meta: crate::commands::dashboard_launch::LaunchMeta {
+            launched_by: Some(launcher),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    if !registry
+        .begin_with_provenance(&handle, None, record)
+        .map_err(|e| e.to_string())?
+    {
         return Err("Command run is already registered".into());
     }
     let session = format!("headless-command-{}", request.run_id);
-    registry.bind_with_account(&handle, &session, Some("routine"), None)?;
+    registry.bind_with_account(&handle, &session, Some(super::dispatch::TRIGGER_SOURCE), None)?;
     registry.stamp_provenance(
         &handle,
         crate::commands::dashboard_launch::RunProvenance {

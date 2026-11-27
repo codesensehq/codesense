@@ -93,6 +93,7 @@ fn bound_manager(state: &DashboardLaunchState, session: &str) {
             team: None,
             continues: None,
             reviews: None,
+            restored_by: None,
         },
         started_with: None,
         max_runtime_ms: None,
@@ -801,6 +802,7 @@ fn restore_falls_back_to_the_persisted_deadline() {
             deadline_ms: Some(42_424_242),
             session_id: None,
             worktree_dir: None,
+            work_item: None,
         },
     );
     let mut store = Store::new(path.clone(), registry);
@@ -817,6 +819,7 @@ fn restore_falls_back_to_the_persisted_deadline() {
                 deadline_ms: Some(42_424_242),
                 session_id: None,
                 worktree_dir: None,
+                work_item: None,
             },
         )
         .unwrap();
