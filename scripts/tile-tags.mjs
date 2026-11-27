@@ -19,7 +19,8 @@ function listedSpecs(report) {
     for (const spec of suite.specs ?? []) {
       const key = [...titles, spec.title].join(" › ");
       const entry = specs.get(key) ?? { tags: new Set(), projects: new Set() };
-      for (const tag of spec.tags ?? []) entry.tags.add(tag);
+      // The JSON reporter writes a tag without its @ (`p0` for `@p0`).
+      for (const tag of spec.tags ?? []) entry.tags.add(tag.startsWith("@") ? tag : `@${tag}`);
       for (const run of spec.tests ?? []) entry.projects.add(run.projectName);
       specs.set(key, entry);
     }

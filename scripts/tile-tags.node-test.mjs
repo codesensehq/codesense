@@ -29,9 +29,11 @@ const both = (title, tags) => [
 ];
 
 test("a spec tagged once and listed on both engines passes", () => {
+  // The JSON reporter's shape drops the @; a tag given with it counts the same.
   assert.deepEqual(tileTagErrors(report(both("mounts @p0", ["@p0"]))), []);
-  assert.deepEqual(tileTagErrors(report(both("drifts @nightly", ["@nightly"]))), []);
-  assert.deepEqual(tileTagErrors(report(both("axe @p1", ["@p1"]))), []);
+  assert.deepEqual(tileTagErrors(report(both("mounts @p0", ["p0"]))), []);
+  assert.deepEqual(tileTagErrors(report(both("drifts @nightly", ["nightly"]))), []);
+  assert.deepEqual(tileTagErrors(report(both("axe @p1", ["p1"]))), []);
 });
 
 test("an empty list passes: no tile specs yet", () => {
@@ -46,14 +48,14 @@ test("an untagged spec fails", () => {
 
 test("a spec with two gate tags fails; a tag that is not a gate does not count", () => {
   assert.match(
-    tileTagErrors(report(both("mounts @p0 @nightly", ["@p0", "@nightly"])))[0],
+    tileTagErrors(report(both("mounts @p0 @nightly", ["p0", "nightly"])))[0],
     /needs exactly one gate tag .*has @p0, @nightly/,
   );
-  assert.deepEqual(tileTagErrors(report(both("mounts @p0 @slow", ["@p0", "@slow"]))), []);
+  assert.deepEqual(tileTagErrors(report(both("mounts @p0 @slow", ["p0", "slow"]))), []);
 });
 
 test("a spec listed for only one engine fails", () => {
-  const errors = tileTagErrors(report([spec("mounts @p0", ["@p0"], "tiles-webkit")]));
+  const errors = tileTagErrors(report([spec("mounts @p0", ["p0"], "tiles-webkit")]));
   assert.equal(errors.length, 1);
   assert.match(errors[0], /mounts @p0: listed for tiles-webkit only; must run on both/);
 });
@@ -61,7 +63,7 @@ test("a spec listed for only one engine fails", () => {
 test("specs in describe blocks are keyed by their full title, so twins don't hide each other", () => {
   const inner = (title, project) => ({
     title,
-    specs: [spec("mounts @p0", ["@p0"], project)],
+    specs: [spec("mounts @p0", ["p0"], project)],
     suites: [],
   });
   // Two describes with the same spec title, each on one engine: two failures, not one pass.
@@ -75,7 +77,7 @@ test("specs in describe blocks are keyed by their full title, so twins don't hid
 
 test("a spec in a project other than the tile engines fails", () => {
   const errors = tileTagErrors(
-    report([...both("mounts @p0", ["@p0"]), spec("mounts @p0", ["@p0"], "chromium")]),
+    report([...both("mounts @p0", ["p0"]), spec("mounts @p0", ["p0"], "chromium")]),
   );
   assert.match(errors[0], /listed for chromium, tiles-chromium, tiles-webkit/);
 });
@@ -90,7 +92,7 @@ test("the CLI reads the report file and exits 1 with each error", (t) => {
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const good = path.join(dir, "good.json");
   const bad = path.join(dir, "bad.json");
-  fs.writeFileSync(good, JSON.stringify(report(both("mounts @p0", ["@p0"]))));
+  fs.writeFileSync(good, JSON.stringify(report(both("mounts @p0", ["p0"]))));
   fs.writeFileSync(bad, JSON.stringify(report(both("mounts", []))));
   const ok = spawnSync(process.execPath, [script, good], { encoding: "utf8" });
   assert.equal(ok.status, 0, ok.stderr);
