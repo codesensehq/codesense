@@ -238,8 +238,6 @@ mod tests {
     use super::*;
     use crate::shared::test_deadline::within;
 
-    const TEST_LIMIT: Duration = Duration::from_secs(30);
-
     #[test]
     fn cp3_os_observer_trips_and_captures_with_all_tokio_workers_parked_on_std_mutex() {
         use std::sync::{mpsc, Mutex};
@@ -372,38 +370,34 @@ mod tests {
 
     #[test]
     fn sample_command_is_posix_spawnable() {
-        within("sample_command_is_posix_spawnable", TEST_LIMIT, || {
-            let command = sample_command(4242, Path::new("/tmp/runtime-stall.sample.txt"));
-            assert_eq!(command.get_program(), "/bin/sh");
-            let args: Vec<String> = command
-                .get_args()
-                .map(|arg| arg.to_string_lossy().into_owned())
-                .collect();
-            assert_eq!(args[0], "-c");
-            let script = &args[1];
-            assert!(
-                script.contains(&format!("ulimit -f {}", CAPTURE_BYTES / 1024)),
-                "{script}"
-            );
-            assert!(script.contains(r#"exec "$0" "$@""#), "{script}");
-            assert_eq!(
-                &args[2..],
-                [
-                    "/usr/bin/sample",
-                    "4242",
-                    "5",
-                    "-file",
-                    "/tmp/runtime-stall.sample.txt"
-                ]
-            );
-        });
+        let command = sample_command(4242, Path::new("/tmp/runtime-stall.sample.txt"));
+        assert_eq!(command.get_program(), "/bin/sh");
+        let args: Vec<String> = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(args[0], "-c");
+        // `&&`, not `;`: a cap the shell cannot set must end it before the exec.
+        assert_eq!(
+            args[1],
+            format!(r#"ulimit -f {} && exec "$0" "$@""#, CAPTURE_BYTES / 1024)
+        );
+        assert_eq!(
+            &args[2..],
+            [
+                "/usr/bin/sample",
+                "4242",
+                "5",
+                "-file",
+                "/tmp/runtime-stall.sample.txt"
+            ]
+        );
     }
 
     #[cfg(unix)]
     #[test]
     fn capture_wrapper_caps_output_at_capture_bytes() {
-        within("capture_wrapper_caps_output_at_capture_bytes", TEST_LIMIT, || {
-            use std::os::unix::process::ExitStatusExt;
+        within(|| {
             use std::process::Stdio;
             let dir = tempfile::tempdir().unwrap();
             let out = dir.path().join("eight-mib.bin");
@@ -441,10 +435,8 @@ mod tests {
                 written <= CAPTURE_BYTES,
                 "{written} bytes written past the {CAPTURE_BYTES} cap"
             );
-            assert!(
-                status.signal() == Some(libc::SIGXFSZ) || !status.success(),
-                "the cap must stop the writer: {status:?}"
-            );
+            // SIGXFSZ or a write error: either way dd does not succeed.
+            assert!(!status.success(), "the cap must stop the writer: {status:?}");
         });
     }
 
