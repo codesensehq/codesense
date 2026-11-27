@@ -69,10 +69,11 @@ export function mediaReason(
   team: string | null,
   machine?: string | null,
 ): string {
+  const kind = mediaKind(a);
   if (a.state === "blocked" || a.reason === "off") {
     return team
-      ? `GIF · media is off in ${team}'s team config`
-      : "GIF · media is off in the team config";
+      ? `${kind} · media is off in ${team}'s team config`
+      : `${kind} · media is off in the team config`;
   }
   if (a.state === "failed") {
     return (
@@ -81,11 +82,11 @@ export function mediaReason(
   }
   if (a.reason === "sender") {
     return machine
-      ? `GIF · sent from ${machine}, not loaded here yet`
-      : "GIF · from another person's machine";
+      ? `${kind} · sent from ${machine}, not loaded here yet`
+      : `${kind} · from another person's machine`;
   }
-  if (a.reason === "ask") return `GIF · ${team ?? "the team"} asks before loading`;
-  return "GIF · not on your auto-load list";
+  if (a.reason === "ask") return `${kind} · ${team ?? "the team"} asks before loading`;
+  return `${kind} · not on your auto-load list`;
 }
 
 /** Whether `a` is a cached image this view can read: cached, with a well-formed hash. */
