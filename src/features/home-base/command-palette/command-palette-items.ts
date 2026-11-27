@@ -15,7 +15,7 @@
 
 import { STORY_DASHBOARD_ACTION_ID } from "@/features/dashboard/lib/story-dashboard-action-id";
 import type { QuickPickerItem } from "@/features/viewer/components/quick-open-dialog";
-import { runsWaitingText } from "@/shared/components/menu-section";
+import { runsWaitingText } from "@/shared/lib/runs-waiting-text";
 import { basename } from "@/shared/lib/path";
 import type { Team } from "@/shared/types/domain";
 
