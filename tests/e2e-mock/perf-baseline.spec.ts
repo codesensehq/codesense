@@ -83,6 +83,9 @@ function installClock(page: Page) {
         const box = el.getBoundingClientRect();
         return box.width > 0 && box.height > 0;
       };
+      // Whether `root` has painted any `selector` match (a message, a terminal screen).
+      const drawn = (root: Element, selector: string) =>
+        [...root.querySelectorAll(selector)].some(shown);
       /**
        * Where a click on an agent in the left bar lands. Each row says when its view of
        * `session` has drawn its first usable frame; exactly one may match.
@@ -104,11 +107,12 @@ function installClock(page: Page) {
             const input = chat?.querySelector<HTMLTextAreaElement>(
               '[data-testid="ibx-composer"] textarea',
             );
-            return shown(chat) && !!input && !input.disabled && !!chat.querySelector("[data-mid]");
+            return shown(chat) && !!input && !input.disabled && drawn(chat, "[data-mid]");
           },
         },
         {
-          // The agent opens in an overlay over the current team: its transcript and send box.
+          // The agent opens in an overlay over the current team: its transcript drawn (a message
+          // painted) and its send box enabled.
           name: "agent-overlay",
           ready: (session) => {
             const overlay = document.querySelector(
@@ -117,14 +121,19 @@ function installClock(page: Page) {
             const input = overlay?.querySelector<HTMLTextAreaElement>(
               '[data-testid="ibx-composer"] textarea',
             );
-            return shown(overlay) && !!input && !input.disabled;
+            return shown(overlay) && !!input && !input.disabled && drawn(overlay, "[data-mid]");
           },
         },
         {
-          // The agent's tile is focused in the tiled workspace.
+          // The agent's tile is focused in the tiled workspace and has drawn its content: a
+          // painted message or a painted terminal screen, never an empty tile.
           name: "tile",
-          ready: (session) =>
-            shown(document.querySelector(`[data-session-id="${session}"][data-focused="true"]`)),
+          ready: (session) => {
+            const tile = document.querySelector(
+              `[data-session-id="${session}"][data-focused="true"]`,
+            );
+            return shown(tile) && drawn(tile, "[data-mid], .xterm-screen");
+          },
         },
       ];
       const agent = (session: string) => {
