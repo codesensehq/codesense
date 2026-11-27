@@ -61,6 +61,11 @@ open issues first.
   narrow that listing to the calls in, or to functions defined in, the files
   your change touches (it lists every call when none is in a changed file).
 - The other jobs lint, build and test the change.
+- **Tile specs** runs the `@p0` browser specs in `tests/e2e-mock/tiles/` on
+  WebKit and Chromium, and checks that each one carries one gate tag. **Frame
+  security specs** runs `pnpm run test:frame-security`, and fails on a skipped
+  spec too. Where new browser specs go, their tags, the release gate and the
+  nightly run: [`tests/e2e-mock/README.md`](tests/e2e-mock/README.md).
 - **Rust (macOS arm64)** doesn't block a merge. It runs after the merge, on
   each push to `main` and nightly; a red run there is fixed forward in a
   later hardening pass. A push that `main` has already moved past when its
