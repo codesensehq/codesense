@@ -85,10 +85,10 @@ export function resetOwnerMapForTests(): void {
  * it is: outside the app (tests, the mock) there is no registry and `main` owns all.
  */
 export async function pullMainSlice(
-  getSlice: (label: string) => Promise<WindowSlice> = windowGetSlice,
+  getSlice?: (label: string) => Promise<WindowSlice>,
 ): Promise<void> {
   try {
-    mainSlice.offer(await getSlice(MAIN_WINDOW_LABEL));
+    mainSlice.offer(await (getSlice ?? windowGetSlice)(MAIN_WINDOW_LABEL));
   } catch (e) {
     logger.warn("windows", `main slice pull failed: ${String(e)}`);
   }
