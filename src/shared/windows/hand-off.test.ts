@@ -257,12 +257,12 @@ describe("main as the source", () => {
     expect(open()).toBe(true);
   });
 
-  it("appends the tab on an abort when it was not open at hand-off", async () => {
+  it("reopens nothing on an abort when the tab was not open at hand-off", async () => {
     useViewerStore.setState({ openTabs: { [TEAM]: [tab(A), tab(B)] }, activeTab: { [TEAM]: A } });
     const handOff = createHandOff(mainTabSide(), acker("ignored"));
     await handOff.onHandOff(request(K_KEY));
     act(() => handOff.onAborted({ key: K_KEY, moveId: "mv-1", reason: "no_ack" }));
-    expect(paths()).toEqual([A, B, K]);
+    expect(paths()).toEqual([A, B]);
   });
 
   it("keeps the preview flag when it reopens a preview tab", async () => {

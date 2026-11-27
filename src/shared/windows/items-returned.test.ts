@@ -102,4 +102,24 @@ describe("items returned to main", () => {
     expect(tabs(ORIGIN)).toEqual([DOC]);
     expect(getActiveTeamKey()).toBe(ACTIVE);
   });
+
+  it("drops a queued item whose team is unavailable, and ends the org-store subscription", () => {
+    const ready = useOrgStore.getState().orgs;
+    useOrgStore.setState({ orgs: [], discoveryComplete: false });
+    openReturnedItems({ items: [KEY], reason: "move" });
+    useOrgStore.setState({ orgs: [], discoveryComplete: true });
+    expect(tabs(ORIGIN)).toEqual([]);
+    useOrgStore.setState({ orgs: ready, discoveryComplete: true });
+    expect(tabs(ORIGIN)).toEqual([]);
+  });
+
+  it("drops a queued item whose org has no teams, and ends the org-store subscription", () => {
+    const ready = useOrgStore.getState().orgs;
+    useOrgStore.setState({ orgs: [], discoveryComplete: false });
+    openReturnedItems({ items: [KEY], reason: "move" });
+    useOrgStore.setState({ orgs: [{ ...ready[0]!, teams: [] }], discoveryComplete: true });
+    expect(tabs(ORIGIN)).toEqual([]);
+    useOrgStore.setState({ orgs: ready, discoveryComplete: true });
+    expect(tabs(ORIGIN)).toEqual([]);
+  });
 });

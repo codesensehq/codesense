@@ -127,6 +127,8 @@ export function mainTabSide(): HandOffSide<TabPlace> {
       return !tabsOf(key.team).some((t) => t.path === key.id);
     },
     takeBack(key, place) {
+      // Not open at hand-off (the user closed it during the flush): nothing to give back.
+      if (place && place.index < 0) return;
       const repoPath = place?.repoPath ?? repoPathForItem(key);
       if (repoPath === null) {
         // Queued until the team is ready; it comes back without its old position.

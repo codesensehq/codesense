@@ -17,9 +17,13 @@ import type { ItemsReturned } from "./window-slice";
 /** The content repo `openFile` takes for `key`'s team, or `null` while the team's
  *  context is not ready. */
 export function repoPathForItem(key: ItemKey): string | null {
-  const { orgs, discoveryComplete } = useOrgStore.getState();
-  const content = resolveTeamContentContext(key.team, orgs, discoveryComplete);
+  const content = contentOfItem(key);
   return content.kind === "ready" ? content.source.repoPath : null;
+}
+
+function contentOfItem(key: ItemKey) {
+  const { orgs, discoveryComplete } = useOrgStore.getState();
+  return resolveTeamContentContext(key.team, orgs, discoveryComplete);
 }
 
 /** Opens `key`'s tab now: pinned, or as the preview tab when it was one. */
@@ -40,9 +44,18 @@ let stopWatching: (() => void) | null = null;
 
 function openWaiting(): void {
   for (const item of waiting.splice(0)) {
-    const repoPath = repoPathForItem(item.key);
-    if (repoPath === null) waiting.push(item);
-    else openItemTab(item.key, repoPath, item.preview);
+    const content = contentOfItem(item.key);
+    if (content.kind === "ready") {
+      openItemTab(item.key, content.source.repoPath, item.preview);
+    } else if (content.kind === "loading") {
+      waiting.push(item);
+    } else {
+      // `unavailable` and `no-teams` last until the org list changes: do not wait on them.
+      logger.warn(
+        "windows",
+        `returned item ${item.key.id} dropped: ${item.key.team} is ${content.kind}`,
+      );
+    }
   }
   if (waiting.length === 0) {
     stopWatching?.();
