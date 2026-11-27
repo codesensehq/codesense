@@ -3766,7 +3766,7 @@ mod tests {
         let statuses = repo.statuses(Some(&mut opts)).unwrap();
         statuses
             .iter()
-            .filter_map(|s| s.path().ok().map(str::to_string))
+            .map(|s| s.path().expect("utf-8 status path").to_string())
             .collect()
     }
 
@@ -3891,7 +3891,7 @@ mod tests {
             "async fn establish_worktree_story_link_with(",
         ));
         assert!(with.contains("establish_worktree_story_link_blocking("));
-        assert!(with.contains(",stamp"));
+        assert!(with.contains("&source_repo,stamp,)"));
         let blocking = squish(fn_source(
             engine,
             "fn establish_worktree_story_link_blocking(",
