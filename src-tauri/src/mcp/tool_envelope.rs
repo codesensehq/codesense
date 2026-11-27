@@ -34,6 +34,40 @@ pub(crate) enum ToolEnvelope<T> {
     },
 }
 
+/// The `ok` payload of a tool served under an old name: the new tool's payload (an object),
+/// plus `alias: true` and `use`, the name to call instead. Other arms pass through unchanged.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub(crate) struct Aliased<T> {
+    #[serde(flatten)]
+    pub data: T,
+    pub alias: bool,
+    #[serde(rename = "use")]
+    pub use_instead: &'static str,
+}
+
+impl<T> ToolEnvelope<T> {
+    /// This reply as the old name `use_instead` replaces gives it.
+    pub(crate) fn aliased(self, use_instead: &'static str) -> ToolEnvelope<Aliased<T>> {
+        match self {
+            Self::Ok(data) => ToolEnvelope::Ok(Aliased {
+                data,
+                alias: true,
+                use_instead,
+            }),
+            Self::NotSyncedLocally => ToolEnvelope::NotSyncedLocally,
+            Self::UnauthorizedTeam => ToolEnvelope::UnauthorizedTeam,
+            Self::Validation { message } => ToolEnvelope::Validation { message },
+            Self::Conflict {
+                message,
+                current_revision,
+            } => ToolEnvelope::Conflict {
+                message,
+                current_revision,
+            },
+        }
+    }
+}
+
 /// The resolved target of a tool's optional `org`/`team` args. `Resolved` boxes the (large)
 /// [`ActiveContext`] so the enum stays small.
 pub(crate) enum ContextTarget {

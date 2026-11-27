@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 //! The team setup MCP tools: create, rename, archive, delete and re-parent a
-//! team, set its starter page, and rename the workspace (the org's display name).
+//! team, set its landing page, and rename the workspace (the org's display name).
 //!
 //! Each tool is one [`RegistryEdit`] committed through the same write path the
 //! UI uses ([`commit_registry_edit`]), so the registry rules (team-name shape,
@@ -88,7 +88,7 @@ pub struct SetTeamStarterPageParams {
     /// active team.
     #[serde(default)]
     pub org: Option<String>,
-    /// The team whose starter page to set. Omit with `org` to use the active team.
+    /// The team whose landing page to set. Omit with `org` to use the active team.
     #[serde(default)]
     pub team: Option<String>,
     /// Required. The file to open whenever the team has nothing open: a path
@@ -110,7 +110,12 @@ where
     Option::<String>::deserialize(deserializer).map(Some)
 }
 
-/// What `set_team_starter_page` did: the registry change and the page now set
+/// The tool that sets a team's landing page.
+pub(crate) const LANDING_PAGE_TOOL: &str = "set_team_landing_page";
+/// Its old name, still served: the same edit, its reply marked as an alias.
+pub(crate) const STARTER_PAGE_ALIAS: &str = "set_team_starter_page";
+
+/// What `set_team_landing_page` did: the registry change and the page now set
 /// (relative to the team's content folder; `null` once cleared).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -378,7 +383,7 @@ pub(crate) async fn set_team_starter_page_for<R: tauri::Runtime>(
     crate::context_repo::caller_scope::readback(readable, result)
 }
 
-/// Set or clear a team's starter page (`teams.yml` `landing_page:`) through the
+/// Set or clear a team's landing page (`teams.yml` `landing_page:`) through the
 /// shared registry write path: a working-tree edit, never committed or pushed.
 /// `active` is the app's active team, used when neither `org` nor `team` is given.
 pub(crate) async fn set_team_starter_page<R: tauri::Runtime>(

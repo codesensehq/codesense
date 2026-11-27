@@ -172,6 +172,7 @@ const NO_IDENTITY_TOOLS: &[&str] = &[
     "set_machine_remote_mcp_control",
     "set_model_rate",
     "set_private_items_use",
+    "set_team_landing_page",
     "set_team_parent",
     "set_team_starter_page",
     "set_viewer_state",

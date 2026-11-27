@@ -777,6 +777,34 @@ impl CodesenseHandler {
         Ok((coord, active_team))
     }
 
+    /// Set or clear a team's landing page, as `tool` (the tool or its alias) was called.
+    async fn set_team_landing_page_as(
+        &self,
+        tool: &str,
+        params: team_tools::SetTeamStarterPageParams,
+    ) -> Result<tool_envelope::ToolEnvelope<team_tools::StarterPageSet>, ErrorData> {
+        self.admit_local_setup_mutation(tool)?;
+        let (home, user_id) = commands::route_to_context::resolve_ambient(&self.app_handle)
+            .await
+            .map_err(|m| ErrorData::invalid_params(m, None))?;
+        let active = self
+            .app_handle
+            .try_state::<super::state::ActiveTeamState>()
+            .and_then(|state| state.get())
+            .map(|a| (a.org_slug, a.team_name));
+        let scope = self.caller_scope().await;
+        team_tools::set_team_starter_page_for(
+            &self.app_handle,
+            &home,
+            &Principal::from(user_id),
+            active,
+            params,
+            &scope,
+        )
+        .await
+        .map_err(|e| ErrorData::internal_error(e, None))
+    }
+
     fn admit_local_setup_mutation(&self, tool: &str) -> Result<(), ErrorData> {
         super::local_setup::admit(tool).map_err(|e| ErrorData::invalid_params(e, None))
     }
@@ -9082,7 +9110,7 @@ impl CodesenseHandler {
     }
 
     #[tool(
-        description = "List the signed-in user's orgs and teams: the discovery surface for targeting team-scoped tools at a specific team. Returns { org, team, synced, starterPage? } entries (`starterPage`: the team's declared starter page, relative to its content folder) bounded to the user's LOCALLY-SYNCED memberships (not all teams). No arguments. Use the org/team you find here as the optional `org`/`team` args on other team-scoped tools; omit them to use the active team."
+        description = "List the signed-in user's orgs and teams: the discovery surface for targeting team-scoped tools at a specific team. Returns { org, team, synced, starterPage? } entries (`starterPage`: the team's declared landing page, relative to its content folder) bounded to the user's LOCALLY-SYNCED memberships (not all teams). No arguments. Use the org/team you find here as the optional `org`/`team` args on other team-scoped tools; omit them to use the active team."
     )]
     async fn list_orgs_teams(&self) -> Result<CallToolResult, ErrorData> {
         let entries = crate::commands::route_to_context::enumerate_orgs_teams(&self.app_handle)
@@ -9939,33 +9967,29 @@ impl CodesenseHandler {
     }
 
     #[tool(
-        description = "Set or clear a team's starter page — the file CodeSense opens whenever the team has nothing open (`teams.yml` `landing_page:`), the same edit as the UI's Set as team starter page. Pass `path`: relative to the team's content folder (`guide/start.md`) or an absolute path inside it; it must be an existing file, not hidden and not outside the folder. `path` is required: pass `null` to clear it (the team then falls back to README.md, README.html, then index.html); leaving it out is refused. `org` and `team` name the team; omit both for the active team. The edit stays a local working-tree change of the context repo (publish it to share it). Returns { status:\"ok\", data:{ orgSlug, edit:\"SetTeamLandingPage\", team, starterPage } }; a missing `path`, a missing, hidden or outside file, an unknown team, or the read-only CodeSense Docs returns { status:\"validation\", message } and changes nothing."
+        description = "Set or clear a team's landing page — the file CodeSense opens whenever the team has nothing open (`teams.yml` `landing_page:`), the same edit as the UI's Set as team landing page. Pass `path`: relative to the team's content folder (`guide/start.md`) or an absolute path inside it; it must be an existing file, not hidden and not outside the folder. `path` is required: pass `null` to clear it (the team then falls back to README.md, README.html, then index.html); leaving it out is refused. `org` and `team` name the team; omit both for the active team. The edit stays a local working-tree change of the context repo (publish it to share it). Returns { status:\"ok\", data:{ orgSlug, edit:\"SetTeamLandingPage\", team, starterPage } }; a missing `path`, a missing, hidden or outside file, an unknown team, or the read-only CodeSense Docs returns { status:\"validation\", message } and changes nothing. `set_team_starter_page` is its old name, kept as an alias."
+    )]
+    async fn set_team_landing_page(
+        &self,
+        Parameters(params): Parameters<team_tools::SetTeamStarterPageParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let reply = self
+            .set_team_landing_page_as(team_tools::LANDING_PAGE_TOOL, params)
+            .await?;
+        envelope_json(&reply)
+    }
+
+    #[tool(
+        description = "An alias of set_team_landing_page, its old name: the same arguments and the same edit to a team's landing page. Its `ok` reply adds `alias:true` and `use:\"set_team_landing_page\"`; call set_team_landing_page instead."
     )]
     async fn set_team_starter_page(
         &self,
         Parameters(params): Parameters<team_tools::SetTeamStarterPageParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        self.admit_local_setup_mutation("set_team_starter_page")?;
-        let (home, user_id) = commands::route_to_context::resolve_ambient(&self.app_handle)
-            .await
-            .map_err(|m| ErrorData::invalid_params(m, None))?;
-        let active = self
-            .app_handle
-            .try_state::<super::state::ActiveTeamState>()
-            .and_then(|state| state.get())
-            .map(|a| (a.org_slug, a.team_name));
-        let scope = self.caller_scope().await;
-        let reply = team_tools::set_team_starter_page_for(
-            &self.app_handle,
-            &home,
-            &Principal::from(user_id),
-            active,
-            params,
-            &scope,
-        )
-        .await
-        .map_err(|e| ErrorData::internal_error(e, None))?;
-        envelope_json(&reply)
+        let reply = self
+            .set_team_landing_page_as(team_tools::STARTER_PAGE_ALIAS, params)
+            .await?;
+        envelope_json(&reply.aliased(team_tools::LANDING_PAGE_TOOL))
     }
 
     #[tool(
