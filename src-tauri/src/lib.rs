@@ -71,6 +71,7 @@ mod exit_coordinator;
 // `redact`'s callers are behind the `dashboard-publish` feature.
 #[cfg_attr(not(feature = "dashboard-publish"), allow(dead_code))]
 mod feedback;
+mod flags;
 #[cfg(any(feature = "e2e-webdriver", test))]
 mod harness_guard;
 mod http;
@@ -635,6 +636,9 @@ pub fn run() {
             // It waits for the secret store probe for at most `credential_store::PROBE_WAIT`
             // (300 ms); a probe still running then leaves the secret-store row off for the run.
             platform_caps::log_startup();
+            // The release flags, decided once before the update tick (`license::install`) can
+            // cache a newer override, so the whole session runs with one value.
+            app.manage(flags::TilesFlag::at_boot(app.handle()));
 
             // SW-PB-22f-3: keep published dashboards in step with their folders.
             #[cfg(feature = "dashboard-publish")]
@@ -1770,6 +1774,7 @@ pub fn run() {
             commands::system::get_log_file_path,
             commands::system::get_log_debug_enabled,
             commands::system::get_platform_caps,
+            flags::tiles_enabled,
             // HTTP API
             commands::system::get_http_api_port,
             commands::frames::mint_frame,

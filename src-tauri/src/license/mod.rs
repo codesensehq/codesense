@@ -241,6 +241,7 @@ pub fn install(app: &AppHandle) -> Result<(), String> {
         running,
         updater.clone(),
         !key_ok,
+        app_dir.clone(),
         Box::new(move |view| {
             let _ = emitter.emit(view::EVENT, view);
         }),

@@ -8,7 +8,7 @@
 //! Nothing here gates the app: `view` is a fixed "no license" view that only carries the
 //! update fields. The license records an older build stored are removed once, locally.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -32,13 +32,25 @@ pub const MANIFEST_MAX_BYTES: usize = 64 * 1024;
 /// The Keychain services the license used, in both beta channels.
 pub const LICENSE_SERVICES: [&str; 2] = ["ai.codesense.beta", "ai.codesense.beta-staging"];
 
-/// What the static manifest says. Only the version and the notes are read here; the updater
-/// reads the rest (`url`, `signature`) through the plugin.
+/// What the static manifest says. The version, the notes and the release flags are read here;
+/// the updater reads the rest (`url`, `signature`) through the plugin.
 #[derive(Debug, Deserialize)]
 pub struct Manifest {
     pub version: String,
     #[serde(default)]
     pub notes: String,
+    /// The remote release-flag overrides (`crate::flags`). Kept as a raw value, never a struct,
+    /// so a `flags` of any shape can't make a manifest that parses today malformed.
+    #[serde(default)]
+    pub flags: serde_json::Value,
+}
+
+impl Manifest {
+    /// Whether the manifest kills tiles: only when `flags` is an object whose `tiles` is the
+    /// literal `false`. Any other shape is no override, so the manifest can't turn tiles on.
+    pub fn tiles_kill(&self) -> bool {
+        self.flags.get("tiles") == Some(&serde_json::Value::Bool(false))
+    }
 }
 
 /// The updater's endpoint for this Mac, with the target and arch filled in the way the plugin
@@ -76,6 +88,8 @@ pub struct StaticChannel {
     /// This build gets no updates: it was built without its channel's updater config. No entry
     /// point (the tick, Check now) then makes any request.
     updates_off: bool,
+    /// Where each manifest read caches the release-flag overrides (`crate::flags`).
+    flags_dir: PathBuf,
     /// A check is running. Another one (Check now during a tick) is skipped, so two reads can't
     /// land out of order in `latest`.
     checking: AtomicBool,
@@ -93,12 +107,14 @@ impl Drop for CheckGuard<'_> {
 
 impl StaticChannel {
     /// `base` is the channel's download host, for example `https://dl.codesense.ai`. The updater
-    /// is gated on the manifest from here on.
+    /// is gated on the manifest from here on. `flags_dir` is the app data folder the flag
+    /// overrides are cached in.
     pub fn new(
         base: &str,
         running: String,
         updater: Arc<Updates>,
         updates_off: bool,
+        flags_dir: PathBuf,
         emit: Box<dyn Fn(&View) + Send + Sync>,
     ) -> Result<Arc<Self>, String> {
         let channel = Arc::new(Self {
@@ -107,6 +123,7 @@ impl StaticChannel {
             updater: updater.clone(),
             latest: Mutex::new(None),
             updates_off,
+            flags_dir,
             checking: AtomicBool::new(false),
             emit,
         });
@@ -161,12 +178,7 @@ impl StaticChannel {
                 return Err("the update manifest is larger than allowed");
             }
         }
-        let manifest: Manifest =
-            serde_json::from_slice(&body).map_err(|_| "the update manifest is malformed")?;
-        if parse_version(&manifest.version).is_none() {
-            return Err("the update manifest names no version");
-        }
-        Ok(manifest)
+        serde_json::from_slice(&body).map_err(|_| "the update manifest is malformed")
     }
 
     /// One check: reads the manifest, drops a staged build it no longer names, and hands a newer
@@ -189,6 +201,13 @@ impl StaticChannel {
                 return false;
             }
         };
+        // Every manifest that parses carries the flag overrides, a withdrawn one included, so
+        // they are cached before the version is looked at.
+        crate::flags::write_kill(&self.flags_dir, manifest.tiles_kill());
+        if parse_version(&manifest.version).is_none() {
+            log::warn!(target: "license", "update check failed: the update manifest names no version");
+            return false;
+        }
         let version = manifest.version;
         *lock(&self.latest) = Some(version.clone());
         self.updater
@@ -478,6 +497,7 @@ mod tests {
             RUNNING.into(),
             updater.clone(),
             updates_off,
+            dir.path().to_path_buf(),
             Box::new(|_| {}),
         )
         .expect("the channel");
@@ -1156,6 +1176,138 @@ mod tests {
         assert!(
             !ch.checking.load(Ordering::SeqCst),
             "the flag is cleared after a check"
+        );
+    }
+
+    /// The tiles kill switch: only a literal `false` at `flags.tiles` kills, a withdrawn
+    /// manifest included. No other shape overrides, so the manifest can never turn tiles on,
+    /// and none of them stops a manifest from parsing.
+    #[test]
+    fn only_a_literal_false_at_flags_tiles_kills_tiles() {
+        // (manifest, kill)
+        for (body, kill) in [
+            (r#"{"version":"0.5.1","flags":{"tiles":false}}"#, true),
+            (
+                r#"{"version":"0.0.0","notes":"","withdrawn":"0.5.0","flags":{"tiles":false}}"#,
+                true,
+            ),
+            (r#"{"version":"0.5.1"}"#, false),
+            (r#"{"version":"0.5.1","flags":"x"}"#, false),
+            (r#"{"version":"0.5.1","flags":[]}"#, false),
+            (r#"{"version":"0.5.1","flags":5}"#, false),
+            (r#"{"version":"0.5.1","flags":true}"#, false),
+            (r#"{"version":"0.5.1","flags":null}"#, false),
+            (r#"{"version":"0.5.1","flags":{}}"#, false),
+            (r#"{"version":"0.5.1","flags":{"other":false}}"#, false),
+            (r#"{"version":"0.5.1","flags":{"tiles":true}}"#, false),
+            (r#"{"version":"0.5.1","flags":{"tiles":"false"}}"#, false),
+            (r#"{"version":"0.5.1","flags":{"tiles":0}}"#, false),
+            (r#"{"version":"0.5.1","flags":{"tiles":null}}"#, false),
+        ] {
+            let manifest: Manifest =
+                serde_json::from_str(body).unwrap_or_else(|e| panic!("{body} must parse: {e}"));
+            assert_eq!(manifest.tiles_kill(), kill, "{body}");
+        }
+    }
+
+    /// The tiles override cache follows each manifest read: a kill is kept, a manifest without
+    /// one clears it, and a manifest that can't be read or parsed leaves it as it was. A
+    /// manifest that carries `flags` still offers its update.
+    #[tokio::test]
+    async fn the_tiles_override_cache_follows_each_manifest_read() {
+        let server = MockServer::start().await;
+        let (app, dir) = (app(), tempfile::tempdir().unwrap());
+        let (ch, updater) = channel(&server, &dir);
+        let cached = || crate::flags::cached_kill(dir.path());
+        let reply = |body: serde_json::Value| ResponseTemplate::new(200).set_body_json(body);
+        assert!(!cached(), "no cache before the first read");
+
+        let kill = serde_json::json!({ "version": RUNNING, "flags": { "tiles": false } });
+        mount_manifest(&server, reply(kill)).await;
+        assert!(ch.check(app.handle(), false).await);
+        assert!(cached(), "a kill is cached");
+
+        mount_manifest(&server, ResponseTemplate::new(503)).await;
+        assert!(!ch.check(app.handle(), false).await);
+        assert!(cached(), "an unreachable manifest keeps the last value");
+        mount_manifest(
+            &server,
+            ResponseTemplate::new(200).set_body_string("{not json"),
+        )
+        .await;
+        assert!(!ch.check(app.handle(), false).await);
+        assert!(cached(), "a malformed manifest keeps the last value");
+
+        mount_manifest(&server, manifest(&server, RUNNING, good().sig)).await;
+        assert!(ch.check(app.handle(), false).await);
+        assert!(!cached(), "a manifest without flags clears the kill");
+
+        let withdrawn = serde_json::json!({
+            "version": "0.0.0",
+            "notes": "",
+            "withdrawn": "0.5.0",
+            "flags": { "tiles": false },
+        });
+        mount_manifest(&server, reply(withdrawn)).await;
+        ch.check(app.handle(), false).await;
+        assert!(cached(), "a withdrawn manifest still delivers the kill");
+
+        // A newer build on a manifest with flags stages as before.
+        let mut newer = serde_json::json!({
+            "version": NEXT,
+            "notes": "Manifest notes",
+            "pub_date": "2026-10-29T00:00:00Z",
+            "url": format!("{}{SIGNED_PATH}", server.uri()),
+            "signature": good().sig.trim(),
+        });
+        newer["flags"] = serde_json::json!({ "tiles": true });
+        mount_manifest(&server, reply(newer)).await;
+        mount_file(&server, good().bytes.to_vec(), None).await;
+        assert!(ch.check(app.handle(), false).await);
+        assert_eq!(updater.staged_version().as_deref(), Some(NEXT), "staged");
+        assert!(!cached(), "`true` is no override");
+    }
+
+    /// A cache that can't be written never fails the update check.
+    #[tokio::test]
+    async fn a_failed_cache_write_never_fails_the_check() {
+        let server = MockServer::start().await;
+        let (app, dir) = (app(), tempfile::tempdir().unwrap());
+        let body = serde_json::json!({ "version": RUNNING, "flags": { "tiles": false } });
+        mount_manifest(&server, ResponseTemplate::new(200).set_body_json(body)).await;
+        let (_, updater) = channel(&server, &dir);
+        // The cache's folder is a file, so the write fails.
+        let blocked = dir.path().join("blocked");
+        std::fs::write(&blocked, "").unwrap();
+        let ch = StaticChannel::new(
+            &server.uri(),
+            RUNNING.into(),
+            updater,
+            false,
+            blocked.clone(),
+            Box::new(|_| {}),
+        )
+        .expect("the channel");
+        assert!(ch.check(app.handle(), false).await, "the manifest was read");
+        assert!(!crate::flags::cached_kill(&blocked));
+    }
+
+    /// A beta build honours a cached kill at boot: the local setting is on, and the kill a
+    /// manifest read cached turns tiles off for the next launch.
+    #[test]
+    fn on_a_beta_channel_a_cached_kill_turns_tiles_off_at_boot() {
+        let dir = tempfile::tempdir().unwrap();
+        crate::flags::tests::local_tiles(dir.path(), true);
+        assert!(crate::flags::tiles_at_boot(dir.path()), "no kill: on");
+        crate::flags::write_kill(dir.path(), true);
+        assert!(
+            !crate::flags::tiles_at_boot(dir.path()),
+            "the cached kill wins"
+        );
+        crate::flags::write_kill(dir.path(), false);
+        assert!(
+            crate::flags::tiles_at_boot(dir.path()),
+            "a cleared kill: on again"
         );
     }
 }

@@ -6044,6 +6044,10 @@ export const installCommandLineTools = () => invoke<CltInstallResult>("install_c
 export const getLogFilePath = () => invoke<string>("get_log_file_path");
 export const getLogDebugEnabled = () => invoke<boolean>("get_log_debug_enabled");
 
+// Release flags
+/** The tiles release flag's boot value; read it through `tilesEnabled()` in `@/shared/lib/tiles-enabled`. */
+export const getTilesEnabled = () => invoke<boolean>("tiles_enabled");
+
 // Platform capabilities
 export interface PlatformCap {
   key: string;

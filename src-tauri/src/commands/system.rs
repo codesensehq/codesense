@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use tauri::Manager;
 
@@ -27,11 +27,16 @@ pub(crate) fn app_state_path<R: tauri::Runtime>(
 pub(crate) fn app_state_file<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
 ) -> Result<PathBuf, String> {
-    Ok(app
+    let dir = app
         .path()
         .app_data_dir()
-        .map_err(|e| format!("failed to resolve app data dir: {}", e))?
-        .join("app-state.json"))
+        .map_err(|e| format!("failed to resolve app data dir: {}", e))?;
+    Ok(app_state_file_in(&dir))
+}
+
+/// The app state file inside an app data folder.
+pub(crate) fn app_state_file_in(dir: &Path) -> PathBuf {
+    dir.join("app-state.json")
 }
 
 /// SW-MCP-11: synchronously read the configured summary-section headings from
@@ -69,25 +74,35 @@ pub(crate) fn read_configured_summary_headings<R: tauri::Runtime>(
 /// an absent/wrong-typed `settings.summaryHeadings`, or an all-blank list all
 /// resolve to the defaults via `effective_headings` (never an error).
 fn parse_configured_summary_headings(json: &str) -> Vec<String> {
-    let configured: Vec<String> = serde_json::from_str::<serde_json::Value>(json)
-        .ok()
-        .and_then(|v| {
-            // On disk the viewer store owns its slice under a top-level `viewer`
-            // key, so the setting lives at `viewer.settings.summaryHeadings`
-            // (see `viewer-store.ts` `existing.viewer = { … settings … }`), NOT
-            // a top-level `settings`.
-            v.get("viewer")
-                .and_then(|vw| vw.get("settings"))
-                .and_then(|s| s.get("summaryHeadings"))
-                .and_then(|h| h.as_array())
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(|item| item.as_str().map(str::to_string))
-                        .collect()
-                })
+    let configured: Vec<String> = viewer_setting(json, "summaryHeadings")
+        .as_ref()
+        .and_then(|h| h.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|item| item.as_str().map(str::to_string))
+                .collect()
         })
         .unwrap_or_default();
     crate::commands::pipeline_scanner::effective_headings(configured)
+}
+
+/// One viewer setting from app-state JSON, or `None` when the JSON is malformed or the key is
+/// absent. On disk the viewer store owns its slice under a top-level `viewer` key, so settings
+/// live at `viewer.settings.<key>` (see `viewer-store.ts` `existing.viewer = { … settings … }`),
+/// NOT a top-level `settings`.
+pub(crate) fn viewer_setting(json: &str, key: &str) -> Option<serde_json::Value> {
+    let mut state = serde_json::from_str::<serde_json::Value>(json).ok()?;
+    state
+        .get_mut("viewer")?
+        .get_mut("settings")?
+        .get_mut(key)
+        .map(serde_json::Value::take)
+}
+
+/// The tiles release flag's local setting, `viewer.settings.tiles`: on only when it is the
+/// boolean `true`. Missing, malformed or any other value is off, so no migration is needed.
+pub(crate) fn parse_tiles_setting(json: &str) -> bool {
+    viewer_setting(json, "tiles") == Some(serde_json::Value::Bool(true))
 }
 
 /// Resolve the contexts dir path without creating it (or its parent). Single
@@ -478,6 +493,40 @@ mod tests {
             ),
             defaults()
         );
+    }
+
+    // ----- The tiles release flag's local setting -----------------------------
+
+    #[test]
+    fn the_tiles_setting_is_on_only_when_it_is_true() {
+        let at =
+            |value: &str| format!(r#"{{ "viewer": {{ "settings": {{ "tiles": {value} }} }} }}"#);
+        assert!(parse_tiles_setting(&at("true")));
+        for off in ["false", "\"true\"", "1", "null", "{}", "[]"] {
+            assert!(!parse_tiles_setting(&at(off)), "{off}");
+        }
+    }
+
+    #[test]
+    fn a_missing_tiles_setting_is_off() {
+        for json in [
+            "{}",
+            r#"{ "viewer": {} }"#,
+            r#"{ "viewer": { "settings": {} } }"#,
+            r#"{ "settings": { "tiles": true } }"#,
+            "not json {{",
+            "",
+        ] {
+            assert!(!parse_tiles_setting(json), "{json}");
+        }
+    }
+
+    #[test]
+    fn viewer_setting_reads_under_viewer_settings_only() {
+        let json = r#"{ "viewer": { "settings": { "a": [1] } }, "settings": { "b": 2 } }"#;
+        assert_eq!(viewer_setting(json, "a"), Some(serde_json::json!([1])));
+        assert_eq!(viewer_setting(json, "b"), None);
+        assert_eq!(viewer_setting("not json", "a"), None);
     }
 
     #[test]
