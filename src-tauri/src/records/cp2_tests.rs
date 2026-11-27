@@ -620,8 +620,8 @@ fn cp2_production_projection_callbacks_publish_mcp_outside_and_delayed_commits()
     projection::start(app.handle());
     let (_tmp, binding) = fixture();
     let care = binding.resolve("care").unwrap();
-    let care_key = projection::prepare(app.handle(), &binding, "care").unwrap();
-    let notes_key = projection::prepare(app.handle(), &binding, "notes").unwrap();
+    let care_key = projection::prepare(app.handle(), &binding, "care", None).unwrap();
+    let notes_key = projection::prepare(app.handle(), &binding, "notes", None).unwrap();
     for (id, key) in [("pane-care", &care_key), ("pane-notes", &notes_key)] {
         crate::live_hub::subscribe(app.handle(), "records", key, None, Some(id), None).unwrap();
     }
@@ -1021,4 +1021,50 @@ fn cp2_child_frame_drift_cannot_serve_team_records_on_own_grant() {
     );
     assert!(!folder.join("drift-write.md").exists());
     assert_eq!(std::fs::read_dir(&folder).unwrap().count(), before);
+}
+
+/// What the re-check keeps: a private-only collection is still served on `records:read:own`,
+/// a `records:read:team` frame still reads a team-only collection, and `records.collections`
+/// still lists exactly what each grant covers.
+#[test]
+fn cp2_served_scope_recheck_keeps_what_the_grant_covers() {
+    let f = records_app();
+    let binding = parent_page(&f);
+    let own = mint_on(
+        &f,
+        &binding,
+        "right-pane",
+        "parent",
+        Some(&["records:read:own"]),
+    );
+    let team = mint_on(
+        &f,
+        &binding,
+        "right-pane",
+        "parent",
+        Some(&["records:read:team"]),
+    );
+    let listed = call(&f, &own, "list", json!({"collection":"y"})).unwrap();
+    assert_eq!(listed["rows"][0]["id"], "own-y-row");
+    assert!(prepare_view(&f, &own, "y").is_ok());
+    let read = call(
+        &f,
+        &team,
+        "read",
+        json!({"collection":"x","id":"team-x-row"}),
+    )
+    .unwrap();
+    assert!(read.to_string().contains("TEAM-X-ROW"));
+    assert!(prepare_view(&f, &team, "x").is_ok());
+    let names = |frame: &FrameRecord| -> Vec<String> {
+        call(&f, frame, "collections", json!({}))
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["name"].as_str().unwrap().to_owned())
+            .collect()
+    };
+    assert_eq!(names(&own), ["notes", "y"]);
+    assert_eq!(names(&team), ["x"]);
 }

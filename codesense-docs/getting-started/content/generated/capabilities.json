@@ -814,7 +814,7 @@
     "src-tauri/src/verbs/capabilities.rs": "ca4e62d053beef566662fe42095839cd4768b44b716aef8d6e4e9a1a5b054c04",
     "src-tauri/src/verbs/registry.generated.json": "21a4f01b15c216e0fb749e4b95dc8e7ad0f7fc09ddca3fe3f0fb3a29d5ad5e60",
     "src-tauri/src/verbs/registry.rs": "d601a2313ffe616d7a909537685ff0d770106172173d01efeb8124886a97469f",
-    "src-tauri/src/records/binding.rs": "8952cdcd9bfee677a0ecc60a382d876ecac5fdddcacbcb1508bb01ad9f501fa7",
+    "src-tauri/src/records/binding.rs": "364e7f3a67b461224017950b82486fe2ae670a64274f0d0836969d79ef1e0bcd",
     "src-tauri/src/records/schema.rs": "36ed3b3ae3547e1e622f007c2480d3fad19c463e3b3636242fb94edcb4286a29"
   }
 }

@@ -249,6 +249,34 @@ pub fn check_frame_capability(
     )
 }
 
+/// The scope the private records pair is kept to: a team or message frame's kind, else its
+/// grant's scope.
+fn records_scope(kind: crate::dashboard_stream::frame::FrameCallerKind, scope: &str) -> &str {
+    match kind {
+        crate::dashboard_stream::frame::FrameCallerKind::Team => "team",
+        crate::dashboard_stream::frame::FrameCallerKind::Message => "message",
+        _ => scope,
+    }
+}
+
+/// Whether a frame holds `capability` as admission counts it: in its grant and, under
+/// team-safe, where the private records pair may be used.
+pub(crate) fn frame_holds(
+    frame: &crate::dashboard_stream::frame::FrameRecord,
+    capability: &str,
+) -> bool {
+    let granted = Iterator::any(&mut <[String]>::iter(&frame.effective_grant), |g| {
+        g == capability
+    });
+    granted
+        && (!frame.policy.team_safe
+            || super::capabilities::records_allows(
+                &frame.grant.slot,
+                records_scope(frame.kind, &frame.grant.scope),
+                capability,
+            ))
+}
+
 fn check_capability(
     caller: &Caller,
     grant: &[String],
@@ -256,11 +284,7 @@ fn check_capability(
     args: &Value,
     team_safe: bool,
 ) -> Result<(), &'static str> {
-    let scope = match caller.kind {
-        crate::dashboard_stream::frame::FrameCallerKind::Team => "team",
-        crate::dashboard_stream::frame::FrameCallerKind::Message => "message",
-        _ => &caller.scope,
-    };
+    let scope = records_scope(caller.kind, &caller.scope);
     let allowed =
         |cap: &str| !team_safe || super::capabilities::records_allows(&caller.slot, scope, cap);
     if !(spec.name == "records.collections"

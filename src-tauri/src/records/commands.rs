@@ -40,12 +40,11 @@ pub async fn records_prepare_view<R: tauri::Runtime>(
         &serde_json::json!({"collection":collection}),
     )
     .map_err(str::to_owned)?;
-    let binding = frame
-        .records_binding
+    let binding = Option::clone(&frame.records_binding)
         .ok_or("unavailable: frame has no collection roots")?
         .for_caller(scope);
     crate::commands::await_blocking("records.prepare", move || {
-        super::projection::prepare(&app, &binding, &collection)
+        super::projection::prepare(&app, &binding, &collection, Some(&frame))
     })
     .await
 }
@@ -62,7 +61,7 @@ pub async fn records_prepare_native_view(
     crate::commands::await_blocking("records.prepare_native", move || {
         let binding =
             super::binding::Binding::from_context(&home, &principal.into(), &org_slug, None)?;
-        super::projection::prepare(&app, &binding, &collection)
+        super::projection::prepare(&app, &binding, &collection, None)
     })
     .await
 }
@@ -95,6 +94,6 @@ fn execute_frame_for(
         args,
         &super::Actor::human(),
         index,
-        Some(&frame.effective_grant),
+        Some(frame),
     )
 }

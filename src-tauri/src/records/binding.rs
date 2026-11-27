@@ -126,6 +126,21 @@ pub fn capability(scope: Scope, write: bool) -> &'static str {
         (false, true) => "records:write:team",
     }
 }
+/// Refuses a store the frame's grant does not cover. The served store's own scope decides
+/// the capability, so a drift between the scope admission resolved and the one the action
+/// resolved is refused rather than served.
+pub(crate) fn require_store_grant(
+    store: &Store,
+    write: bool,
+    frame: &crate::dashboard_stream::frame::FrameRecord,
+) -> Result<(), String> {
+    let needed = capability(store.collection.scope, write);
+    if crate::verbs::frame_holds(frame, needed) {
+        Ok(())
+    } else {
+        Err(format!("denied: grant ({needed})"))
+    }
+}
 pub fn is_write(operation: &str) -> bool {
     matches!(
         operation,
@@ -143,7 +158,7 @@ pub fn execute(
     args: &Value,
     actor: &Actor,
     index: Option<crate::context_query::ContextIndexService>,
-    grants: Option<&[String]>,
+    frame: Option<&crate::dashboard_stream::frame::FrameRecord>,
 ) -> Result<Value, String> {
     if is_write(operation)
         && !matches!(
@@ -153,8 +168,11 @@ pub fn execute(
     {
         // The write keeps main's policy. Its result may contain retained fields/body.
         let baseline = binding.clone().for_caller(Default::default());
-        let result = execute(&baseline, operation, args, actor, index, grants);
+        let result = execute(&baseline, operation, args, actor, index, frame);
         let store = binding.resolve(required(args, "collection")?)?;
+        if let Some(frame) = frame {
+            require_store_grant(&store, true, frame)?;
+        }
         if let Some(id) = args["id"].as_str().or_else(|| {
             result
                 .as_ref()
@@ -176,11 +194,20 @@ pub fn execute(
             .collections()?
             .into_iter()
             .map(|(_, c)| c)
-            .filter(|c| grants.is_none_or(|g| g.iter().any(|s| s == capability(c.scope, false))))
+            .filter(|c| {
+                frame.is_none_or(|f| {
+                    f.effective_grant
+                        .iter()
+                        .any(|s| s == capability(c.scope, false))
+                })
+            })
             .collect::<Vec<_>>();
         return serde_json::to_value(collections).map_err(|e| e.to_string());
     }
     let mut store = binding.resolve(required(args, "collection")?)?;
+    if let Some(frame) = frame {
+        require_store_grant(&store, is_write(operation), frame)?;
+    }
     if let Some(index) = index {
         store = store.with_index(index);
     }

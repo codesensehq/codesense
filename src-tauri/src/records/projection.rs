@@ -208,8 +208,12 @@ pub fn prepare<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     binding: &super::binding::Binding,
     name: &str,
+    frame: Option<&crate::dashboard_stream::frame::FrameRecord>,
 ) -> Result<String, String> {
     let store = binding.resolve(name)?;
+    if let Some(frame) = frame {
+        super::binding::require_store_grant(&store, false, frame)?;
+    }
     store.list()?;
     let _serial = serial();
     let key = binding.view_key(&store);

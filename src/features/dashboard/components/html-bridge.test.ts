@@ -58,6 +58,7 @@ const mockGifPicked = vi.fn();
 const mockReactAsHuman = vi.fn();
 const mockAgentPins = vi.fn();
 const mockAgentPinsPrepareView = vi.fn();
+const mockRecordsPrepareView = vi.fn();
 const mockAgentDefinitionsPrepare = vi.fn();
 const mockMarkInboxMessagesRead = vi.fn();
 const mockMarkInboxMessagesUnread = vi.fn();
@@ -135,6 +136,7 @@ vi.mock("@/tauri/commands", () => ({
   reactAsHuman: (...a: unknown[]) => mockReactAsHuman(...a),
   agentPins: (...a: unknown[]) => mockAgentPins(...a),
   agentPinsPrepareView: (...a: unknown[]) => mockAgentPinsPrepareView(...a),
+  recordsPrepareView: (...a: unknown[]) => mockRecordsPrepareView(...a),
   agentDefinitionsPrepare: (...a: unknown[]) => mockAgentDefinitionsPrepare(...a),
   markInboxMessagesRead: (...a: unknown[]) => mockMarkInboxMessagesRead(...a),
   markInboxMessagesUnread: (...a: unknown[]) => mockMarkInboxMessagesUnread(...a),
@@ -2285,6 +2287,36 @@ describe("agents read model verbs", () => {
     expect(unsubscribe).toHaveBeenCalledWith("pins", {
       viewKey: "pins:acme/default:acme/default/dev:DEMO-1",
     });
+  });
+
+  it("a records unsubscribe releases the view the frame prepared without preparing again", async () => {
+    const viewKey = "records:team:acme/default:care";
+    mockRecordsPrepareView.mockResolvedValueOnce(viewKey);
+    const live = {
+      subscribe: vi.fn(async () => ({ topic: "records", viewKey, rev: 1, snapshot: [] })),
+      unsubscribe: vi.fn(async () => undefined),
+    };
+    const ctx = { ...DOC, frame: { frameId: "f1" } as never, liveFrame: async () => live as never };
+    const care = { topic: "records", collection: "care" };
+    await runBridgeCommand("subscribe", care, ctx);
+    expect(live.subscribe).toHaveBeenCalledWith("records", undefined, { viewKey });
+    // The host now refuses this frame's prepare: the collection's scope moved past its grant.
+    mockRecordsPrepareView.mockImplementation(async () => {
+      throw new Error("denied: grant (records:read:team)");
+    });
+    try {
+      await expect(runBridgeCommand("unsubscribe", care, ctx)).resolves.toBeNull();
+      expect(live.unsubscribe).toHaveBeenCalledWith("records", { viewKey });
+      // Released once; a collection the frame never prepared has nothing to release.
+      await expect(runBridgeCommand("unsubscribe", care, ctx)).resolves.toBeNull();
+      await expect(
+        runBridgeCommand("unsubscribe", { topic: "records", collection: "other" }, ctx),
+      ).resolves.toBeNull();
+      expect(live.unsubscribe).toHaveBeenCalledTimes(1);
+      expect(mockRecordsPrepareView).toHaveBeenCalledTimes(1);
+    } finally {
+      mockRecordsPrepareView.mockReset();
+    }
   });
 
   it("a messageDelivery subscription takes the frame's granted view, as the inbox does", async () => {

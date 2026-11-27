@@ -225,6 +225,10 @@ export type BridgeContext = {
   releaseMessage?: (frameId: string) => void;
 };
 
+/** The records view each live frame prepared, by collection. Leaving releases that view: a
+ *  prepare there could be refused by the host or register a view nothing releases. */
+const preparedRecordsViews = new WeakMap<HubFrame, Map<string, string>>();
+
 /** Pages name selectors; the host alone resolves them into granted view keys. */
 async function subscriptionView(
   args: Record<string, unknown>,
@@ -236,8 +240,19 @@ async function subscriptionView(
     throw new Error("invalid: agentList order must be status");
   if (args.topic === "files")
     return { viewKey: await fileSurfacePrepareView(ctx!.frame!.frameId, args) };
-  if (args.topic === "records")
-    return { viewKey: await recordsPrepareView(ctx!.frame!.frameId, String(args.collection)) };
+  if (args.topic === "records") {
+    const collection = String(args.collection);
+    const live = await ctx?.liveFrame?.();
+    const views = live ? preparedRecordsViews.get(live) : undefined;
+    if (!prepare) {
+      const viewKey = views?.get(collection);
+      views?.delete(collection);
+      return viewKey === undefined ? undefined : { viewKey };
+    }
+    const viewKey = await recordsPrepareView(ctx!.frame!.frameId, collection);
+    if (live) preparedRecordsViews.set(live, (views ?? new Map()).set(collection, viewKey));
+    return { viewKey };
+  }
   if (args.topic === "pins") {
     const { agentId, storyId } = pinThread(args, "subscribe");
     const team = await inboxTeam(ctx, "pins");
@@ -974,7 +989,10 @@ export const HTML_BRIDGE_ALLOWLIST: Record<string, BridgeHandler> = {
   unsubscribe: async (args, ctx) => {
     const a = argObject(args, "unsubscribe");
     const topic = topicArg(a, "unsubscribe");
-    await (await ctx?.liveFrame?.())?.unsubscribe(topic, await subscriptionView(a, ctx, false));
+    const view = await subscriptionView(a, ctx, false);
+    // A records collection this frame never prepared holds no view to release.
+    if (topic === "records" && view === undefined) return null;
+    await (await ctx?.liveFrame?.())?.unsubscribe(topic, view);
     return null;
   },
   setUiState: async (args, ctx) => {
