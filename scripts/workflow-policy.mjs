@@ -33,8 +33,16 @@ const SCORECARD = { file: "scorecard.yml", job: "scorecard" };
 const FLAKY_ISSUES = { file: "rust.yml", job: "flaky-issues" };
 // Deletes the nightly's superseded macOS build caches, the only job that may write actions.
 const CACHE_PRUNE = { file: "rust.yml", job: "rust-macos-cache-prune" };
+// The nightly tile, pane harness, perf and load lanes run on a schedule or by hand, never on a pull
+// request or merge group, so none of them can be a required check. Its issue job alone writes:
+// one issue for a red scheduled night on main.
+const NIGHTLY = {
+  file: "nightly.yml",
+  job: "nightly-issue",
+  triggers: ["schedule", "workflow_dispatch"],
+};
 // The jobs that write something, and so run only on main outside requests (below).
-const MAIN_WRITERS = [FLAKY_ISSUES, CACHE_PRUNE];
+export const MAIN_WRITERS = [FLAKY_ISSUES, CACHE_PRUNE, NIGHTLY];
 // The commit email audit runs nightly and on main, never on pull requests.
 const COMMIT_EMAILS = {
   file: "commit-emails.yml",
@@ -111,6 +119,7 @@ const JOB_PERMISSIONS = new Map([
   [`${EXPORTS_GUARD.file}:${EXPORTS_GUARD.job}`, { contents: "read", "pull-requests": "read" }],
   ["quarantine.yml:quarantine-issues", { contents: "read", issues: "read" }],
   [`${FLAKY_ISSUES.file}:${FLAKY_ISSUES.job}`, { contents: "read", issues: "write" }],
+  [`${NIGHTLY.file}:${NIGHTLY.job}`, { contents: "read", issues: "write" }],
   [`${CACHE_PRUNE.file}:${CACHE_PRUNE.job}`, { actions: "write" }],
   [
     `${SCORECARD.file}:${SCORECARD.job}`,
@@ -250,10 +259,12 @@ export function workflowPolicy(text, file = "") {
       ? COMMIT_EMAILS.triggers
       : file === REGENERATE_EXPORTS.file
         ? REGENERATE_EXPORTS.triggers
-        : allowedTriggers;
+        : file === NIGHTLY.file
+          ? NIGHTLY.triggers
+          : allowedTriggers;
   if (!triggers.length || triggers.some((t) => !permittedTriggers.includes(t)))
     errors.push(
-      "triggers must match the workflow allowlist; Scorecard and commit emails forbid pull requests, export regeneration allows only schedule and workflow_dispatch",
+      "triggers must match the workflow allowlist; Scorecard and commit emails forbid pull requests, export regeneration allows only schedule and workflow_dispatch, as does nightly.yml",
     );
   if (triggers.includes("merge_group")) {
     const mergeGroup = mapping(workflow.on) ? workflow.on.merge_group : null;
@@ -521,6 +532,20 @@ export function workflowPolicy(text, file = "") {
           errors.push(`${name}: if must require ${required} at the top level`);
     }
     const requiredPermissions = JOB_PERMISSIONS.get(`${file}:${name}`) ?? { contents: "read" };
+    // An issue writer runs one at a time, so two runs (a scheduled run and a rerun, say) cannot
+    // both open the same issue: a fixed job-level group that never cancels a running writer.
+    const group = mapping(job.concurrency) ? job.concurrency.group : null;
+    if (
+      mainWriter &&
+      requiredPermissions.issues === "write" &&
+      (typeof group !== "string" ||
+        !group.trim() ||
+        group.includes("${{") ||
+        job.concurrency["cancel-in-progress"] !== false)
+    )
+      errors.push(
+        `${name}: concurrency must be one fixed group with cancel-in-progress: false, since it writes issues`,
+      );
     if (
       !mapping(job.permissions) ||
       Object.entries(requiredPermissions).some(([key, level]) => job.permissions[key] !== level) ||
