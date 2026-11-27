@@ -236,6 +236,9 @@ pub(crate) fn start(app: &tauri::AppHandle) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shared::test_deadline::within;
+
+    const TEST_LIMIT: Duration = Duration::from_secs(30);
 
     #[test]
     fn cp3_os_observer_trips_and_captures_with_all_tokio_workers_parked_on_std_mutex() {
@@ -369,63 +372,80 @@ mod tests {
 
     #[test]
     fn sample_command_is_posix_spawnable() {
-        let command = sample_command(4242, Path::new("/tmp/runtime-stall.sample.txt"));
-        assert_eq!(command.get_program(), "/bin/sh");
-        let args: Vec<String> = command
-            .get_args()
-            .map(|arg| arg.to_string_lossy().into_owned())
-            .collect();
-        assert_eq!(args[0], "-c");
-        let script = &args[1];
-        assert!(
-            script.contains(&format!("ulimit -f {}", CAPTURE_BYTES / 1024)),
-            "{script}"
-        );
-        assert!(script.contains(r#"exec "$0" "$@""#), "{script}");
-        assert_eq!(
-            &args[2..],
-            [
-                "/usr/bin/sample",
-                "4242",
-                "5",
-                "-file",
-                "/tmp/runtime-stall.sample.txt"
-            ]
-        );
+        within("sample_command_is_posix_spawnable", TEST_LIMIT, || {
+            let command = sample_command(4242, Path::new("/tmp/runtime-stall.sample.txt"));
+            assert_eq!(command.get_program(), "/bin/sh");
+            let args: Vec<String> = command
+                .get_args()
+                .map(|arg| arg.to_string_lossy().into_owned())
+                .collect();
+            assert_eq!(args[0], "-c");
+            let script = &args[1];
+            assert!(
+                script.contains(&format!("ulimit -f {}", CAPTURE_BYTES / 1024)),
+                "{script}"
+            );
+            assert!(script.contains(r#"exec "$0" "$@""#), "{script}");
+            assert_eq!(
+                &args[2..],
+                [
+                    "/usr/bin/sample",
+                    "4242",
+                    "5",
+                    "-file",
+                    "/tmp/runtime-stall.sample.txt"
+                ]
+            );
+        });
     }
 
     #[cfg(unix)]
     #[test]
     fn capture_wrapper_caps_output_at_capture_bytes() {
-        use std::os::unix::process::ExitStatusExt;
-        use std::process::Stdio;
-        let dir = tempfile::tempdir().unwrap();
-        let out = dir.path().join("eight-mib.bin");
-        let status = capped_command(
-            "/bin/dd",
-            [
-                "if=/dev/zero".to_string(),
-                format!("of={}", out.display()),
-                "bs=1048576".to_string(),
-                "count=8".to_string(),
-            ],
-            CAPTURE_BYTES,
-        )
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .unwrap();
-        let written = std::fs::metadata(&out).unwrap().len();
-        assert!(written > 0, "dd wrote nothing: {status:?}");
-        assert!(
-            written <= CAPTURE_BYTES,
-            "{written} bytes written past the {CAPTURE_BYTES} cap"
-        );
-        assert!(
-            status.signal() == Some(libc::SIGXFSZ) || !status.success(),
-            "the cap must stop the writer: {status:?}"
-        );
+        within("capture_wrapper_caps_output_at_capture_bytes", TEST_LIMIT, || {
+            use std::os::unix::process::ExitStatusExt;
+            use std::process::Stdio;
+            let dir = tempfile::tempdir().unwrap();
+            let out = dir.path().join("eight-mib.bin");
+            let mut child = capped_command(
+                "/bin/dd",
+                [
+                    "if=/dev/zero".to_string(),
+                    format!("of={}", out.display()),
+                    "bs=1048576".to_string(),
+                    "count=8".to_string(),
+                ],
+                CAPTURE_BYTES,
+            )
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+            // The shell execs dd, so this pid is dd's: a kill reaches the writer.
+            let deadline = Instant::now() + Duration::from_secs(20);
+            let status = loop {
+                if let Some(status) = child.try_wait().unwrap() {
+                    break status;
+                }
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    panic!("dd under the cap did not exit within 20 s; killed");
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            };
+            let written = std::fs::metadata(&out).unwrap().len();
+            assert!(written > 0, "dd wrote nothing: {status:?}");
+            assert!(
+                written <= CAPTURE_BYTES,
+                "{written} bytes written past the {CAPTURE_BYTES} cap"
+            );
+            assert!(
+                status.signal() == Some(libc::SIGXFSZ) || !status.success(),
+                "the cap must stop the writer: {status:?}"
+            );
+        });
     }
 
     #[test]

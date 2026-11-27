@@ -646,6 +646,7 @@ pub fn metric_gauge(name: &str, value: usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shared::test_deadline::within;
 
     fn secs(s: u64) -> Duration {
         Duration::from_secs(s)
@@ -706,64 +707,68 @@ mod tests {
 
     #[test]
     fn rollover_hands_epoch_to_logger_without_formatting() {
-        let r = Registry::new();
-        for _ in 0..60 {
-            r.count_at(Kind::Invoke, "hot", secs(1));
-        }
-        let before = report_lines_on_this_thread();
-        let finished = r
-            .count_at(Kind::Invoke, "hot", secs(61))
-            .expect("the first call in a new window hands off the finished one");
-        assert_eq!(finished, 0);
-        let (tx, rx) = std::sync::mpsc::sync_channel(2);
-        assert!(hand_off(finished, &tx));
-        // The production path too: `emit` queues for the logger thread and returns.
-        emit(Some(finished));
-        assert_eq!(
-            report_lines_on_this_thread(),
-            before,
-            "the caller must not build the line"
-        );
-        assert_eq!(rx.try_recv(), Ok(0));
-        // The logger thread formats it from the still-readable finished bucket.
-        let line = r.report_line(finished).expect("a hot window is reported");
-        assert!(line.starts_with("window=60s hot 60 1.00/s"), "{line}");
-        assert_eq!(report_lines_on_this_thread(), before + 1);
+        within("rollover_hands_epoch_to_logger_without_formatting", Duration::from_secs(30), || {
+            let r = Registry::new();
+            for _ in 0..60 {
+                r.count_at(Kind::Invoke, "hot", secs(1));
+            }
+            let before = report_lines_on_this_thread();
+            let finished = r
+                .count_at(Kind::Invoke, "hot", secs(61))
+                .expect("the first call in a new window hands off the finished one");
+            assert_eq!(finished, 0);
+            let (tx, rx) = std::sync::mpsc::sync_channel(2);
+            assert!(hand_off(finished, &tx));
+            // The production path too: `emit` queues for the logger thread and returns.
+            emit(Some(finished));
+            assert_eq!(
+                report_lines_on_this_thread(),
+                before,
+                "the caller must not build the line"
+            );
+            assert_eq!(rx.try_recv(), Ok(0));
+            // The logger thread formats it from the still-readable finished bucket.
+            let line = r.report_line(finished).expect("a hot window is reported");
+            assert!(line.starts_with("window=60s hot 60 1.00/s"), "{line}");
+            assert_eq!(report_lines_on_this_thread(), before + 1);
+        });
     }
 
     #[test]
     fn full_channel_never_blocks_count() {
-        let (tx, rx) = std::sync::mpsc::sync_channel(2);
-        assert!(hand_off(100, &tx) && hand_off(101, &tx), "fill the channel");
-        let r = Registry::new();
-        for _ in 0..60 {
-            r.count_at(Kind::Invoke, "hot", secs(1));
-        }
-        let started = Instant::now();
-        // Each kind of caller crosses a window while the logger is two lines behind.
-        let crossings = [
-            r.count_at(Kind::Invoke, "hot", secs(61)),
-            r.begin_at(Kind::Blocking, "slow", secs(121)).take_epoch(),
-            r.metric_count_at("live_hub.rebuild", secs(181)),
-            r.metric_add_at("live_hub.delta.bytes.sessions", 10, secs(241)),
-            r.metric_gauge_at("live_hub.agent_views", 3, secs(301)),
-        ];
-        assert_eq!(crossings, [Some(0), Some(1), Some(2), Some(3), Some(4)]);
-        for epoch in crossings.into_iter().flatten() {
-            assert!(!hand_off(epoch, &tx), "a full channel drops epoch {epoch}");
-        }
-        assert!(started.elapsed() < Duration::from_secs(1), "{:?}", started.elapsed());
-        assert_eq!(rx.try_iter().collect::<Vec<_>>(), [100, 101]);
-        // A dropped minute is not folded into the next line.
-        for _ in 0..60 {
-            r.count_at(Kind::Invoke, "next", secs(361));
-        }
-        let finished = r.count_at(Kind::Invoke, "next", secs(421)).unwrap();
-        assert!(hand_off(finished, &tx));
-        assert_eq!(rx.try_recv(), Ok(6));
-        let line = r.report_line(finished).unwrap();
-        assert!(line.starts_with("window=60s next 60 1.00/s"), "{line}");
-        assert!(!line.contains("hot") && !line.contains("m4"), "{line}");
+        within("full_channel_never_blocks_count", Duration::from_secs(30), || {
+            let (tx, rx) = std::sync::mpsc::sync_channel(2);
+            assert!(hand_off(100, &tx) && hand_off(101, &tx), "fill the channel");
+            let r = Registry::new();
+            for _ in 0..60 {
+                r.count_at(Kind::Invoke, "hot", secs(1));
+            }
+            let started = Instant::now();
+            // Each kind of caller crosses a window while the logger is two lines behind.
+            let crossings = [
+                r.count_at(Kind::Invoke, "hot", secs(61)),
+                r.begin_at(Kind::Blocking, "slow", secs(121)).take_epoch(),
+                r.metric_count_at("live_hub.rebuild", secs(181)),
+                r.metric_add_at("live_hub.delta.bytes.sessions", 10, secs(241)),
+                r.metric_gauge_at("live_hub.agent_views", 3, secs(301)),
+            ];
+            assert_eq!(crossings, [Some(0), Some(1), Some(2), Some(3), Some(4)]);
+            for epoch in crossings.into_iter().flatten() {
+                assert!(!hand_off(epoch, &tx), "a full channel drops epoch {epoch}");
+            }
+            assert!(started.elapsed() < Duration::from_secs(1), "{:?}", started.elapsed());
+            assert_eq!(rx.try_iter().collect::<Vec<_>>(), [100, 101]);
+            // A dropped minute is not folded into the next line.
+            for _ in 0..60 {
+                r.count_at(Kind::Invoke, "next", secs(361));
+            }
+            let finished = r.count_at(Kind::Invoke, "next", secs(421)).unwrap();
+            assert!(hand_off(finished, &tx));
+            assert_eq!(rx.try_recv(), Ok(6));
+            let line = r.report_line(finished).unwrap();
+            assert!(line.starts_with("window=60s next 60 1.00/s"), "{line}");
+            assert!(!line.contains("hot") && !line.contains("m4"), "{line}");
+        });
     }
 
     #[test]
