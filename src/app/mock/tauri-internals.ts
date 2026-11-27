@@ -11,6 +11,8 @@
  * changes anywhere.
  */
 
+import { MAIN_WINDOW_LABEL, WINDOW_BOOT_PARAM } from "@/shared/lib/current-window";
+
 import type { InvokeRouter } from "./mock-router";
 
 export interface TauriInternals {
@@ -26,14 +28,19 @@ export interface TauriInternals {
   runCallback: (id: number, payload: unknown) => void;
 }
 
-export function buildTauriInternals(router: InvokeRouter): TauriInternals {
+/**
+ * `search` is the page's query string: a satellite boots with `?window=<label>`, and the real
+ * app hands that label to the webview as metadata, so the mock does the same (default `main`).
+ */
+export function buildTauriInternals(router: InvokeRouter, search = ""): TauriInternals {
   const callbacks = new Map<number, (payload: unknown) => void>();
   let nextCallbackId = 1;
+  const label = new URLSearchParams(search).get(WINDOW_BOOT_PARAM) || MAIN_WINDOW_LABEL;
 
   return {
     metadata: {
-      currentWindow: { label: "main" },
-      currentWebview: { label: "main" },
+      currentWindow: { label },
+      currentWebview: { label },
     },
     invoke: (cmd, args) => router(cmd, args),
     // Callbacks are registered to hand back a stable id; only the mock event

@@ -9,6 +9,21 @@ describe("buildTauriInternals", () => {
     expect(internals.metadata.currentWebview.label).toBe("main");
   });
 
+  it("labels the window and webview from the ?window= boot hint", () => {
+    const internals = buildTauriInternals(() => Promise.resolve(), "?scenario=ready&window=pane-x");
+    expect(internals.metadata.currentWindow.label).toBe("pane-x");
+    expect(internals.metadata.currentWebview.label).toBe("pane-x");
+  });
+
+  it("stays main with no or an empty ?window=", () => {
+    expect(
+      buildTauriInternals(() => Promise.resolve(), "?window=").metadata.currentWindow.label,
+    ).toBe("main");
+    expect(
+      buildTauriInternals(() => Promise.resolve(), "?scenario=ready").metadata.currentWebview.label,
+    ).toBe("main");
+  });
+
   it("delegates invoke to the supplied router", async () => {
     const router = vi.fn(() => Promise.resolve("routed"));
     const internals = buildTauriInternals(router);
