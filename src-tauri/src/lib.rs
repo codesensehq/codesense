@@ -1241,6 +1241,7 @@ pub fn run() {
             commands::content_engine::reconcile_worktrees_on_launch,
             commands::content_engine::reconcile_stuck_worktrees,
             commands::system::save_app_state,
+            windows::app_state_patch::patch_app_state_keys,
             commands::agent_list_preferences::agent_list_identity,
             commands::agent_list_preferences::agent_list_refresh,
             commands::agent_list_preferences::agent_list_set_identity,

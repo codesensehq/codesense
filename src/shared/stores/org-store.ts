@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
-import { serializeAppStateWrite } from "@/shared/lib/app-state-write";
+import { patchAppState, serializeAppStateWrite } from "@/shared/lib/app-state-write";
+import { fieldPatch } from "@/shared/lib/field-patch";
 import { create } from "zustand";
-import { saveAppState, loadAppState, type RepoPermission } from "@/tauri/commands";
+import { loadAppState, type RepoPermission } from "@/tauri/commands";
 import { logger } from "@/shared/lib/logger";
 import { warmScopes } from "@/shared/lib/warm-scopes";
 import {
@@ -332,12 +333,14 @@ function patchTeamInOrgs(
   );
 }
 
+/** The `org` block as this store last read or wrote it, which its persist patches against.
+ *  Nothing else writes `org` (satellites never do), so no pre-write load is needed. */
+let persistedOrg: unknown;
+
 const debouncedPersist = createDebouncedAction(
   () =>
     serializeAppStateWrite(async () => {
       try {
-        const configState = await loadAppState();
-        const existing = JSON.parse(configState || "{}");
         const {
           activeOrgSlug,
           activeTeamName,
@@ -352,8 +355,10 @@ const debouncedPersist = createDebouncedAction(
           shownTeamsByOrgSlug,
           disabledOrgSlugs,
         };
-        existing.org = persisted;
-        await saveAppState(JSON.stringify(existing));
+        const patch = fieldPatch(persistedOrg, persisted);
+        if (patch === undefined) return;
+        await patchAppState({ org: patch });
+        persistedOrg = persisted;
         logger.info("org-store", "persistState: success");
       } catch (e) {
         logger.error("org-store", `persistState: failed — ${e}`);
@@ -1120,6 +1125,9 @@ export const useOrgStore = create<OrgState>((set, get) => ({
     try {
       const raw = await loadAppState();
       const data = JSON.parse(raw || "{}");
+      // The block as it is on disk, before the slug migration below, so the first persist
+      // patches the migrated keys over the legacy ones.
+      persistedOrg = data.org === undefined ? undefined : structuredClone(data.org);
       // SS-FU-12: rewrite the legacy `owner--repo` org slug to `owner/repo` in
       // the persisted org block (`activeOrgSlug` + `lastTeamByOrgSlug` keys)
       // before either restore branch reads it, so the restored selection

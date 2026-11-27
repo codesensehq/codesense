@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: MIT
 //! The app's windows: the registry of every window and the items they show (`registry`, `item_key`,
 //! `commands`), the `main` label and the one window a reply goes to (`label`), how long a new
-//! window may take to paint before it counts as failed (`pending_timeout`), and the commands only
-//! `main` may call (`command_acl`).
+//! window may take to paint before it counts as failed (`pending_timeout`), the commands only
+//! `main` may call (`command_acl`), and the app-state keys a satellite may patch
+//! (`app_state_patch`).
 
+pub mod app_state_patch;
 pub mod command_acl;
 pub mod commands;
 pub mod item_key;

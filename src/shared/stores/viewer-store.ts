@@ -20,7 +20,7 @@ import {
   beginContextNavigation,
   currentContextNavigationRevision,
 } from "@/shared/lib/context-navigation";
-import { serializeAppStateWrite } from "@/shared/lib/app-state-write";
+import { patchAppState, serializeAppStateWrite } from "@/shared/lib/app-state-write";
 import { fieldPatch, applyFieldPatch } from "@/shared/lib/field-patch";
 import { readPrefsState, usePrefsStore } from "@/features/dashboard/lib/prefs-client";
 import type { TeamFocusRestore } from "@/features/viewer/lib/agents-pane-team-focus";
@@ -58,7 +58,6 @@ import {
   type WorkspaceKind,
 } from "@/shared/lib/workspace-kind-capabilities";
 import {
-  saveAppState,
   listNotes,
   readNote,
   createNote as createNoteCmd,
@@ -6248,7 +6247,7 @@ const debouncedPersist = createDebouncedAction(
             ]),
           );
         const baseline = persistedViewer;
-        await saveAppState(JSON.stringify(existing), true);
+        await patchAppState(existing);
         if (persistedViewer === baseline) persistedViewer = structuredClone(candidate);
         for (const key of Object.keys(settingsPatch) as Array<keyof ViewerSettings>) {
           if (pendingSettings[key] === settingsPatch[key]) delete pendingSettings[key];

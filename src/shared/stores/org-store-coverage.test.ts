@@ -552,7 +552,7 @@ describe("useOrgStore — persistState writes through saveAppState", () => {
     expect(s.activeTeamName).toBe("other-team");
   });
 
-  it("merges under an existing app state instead of replacing it", async () => {
+  it("writes a key patch of org alone, so other app-state keys stay", async () => {
     vi.useFakeTimers();
     try {
       mockLoadAppStateValue = JSON.stringify({ viewer: { foo: "bar" } });
@@ -561,11 +561,10 @@ describe("useOrgStore — persistState writes through saveAppState", () => {
       useOrgStore.getState().setOrgs([makeOrg("a", ["backend"])]);
       useOrgStore.getState().setActiveOrg("a");
       await vi.advanceTimersByTimeAsync(350);
-      const saved = JSON.parse(
-        mockSaveAppState.mock.calls[mockSaveAppState.mock.calls.length - 1][0] as string,
-      );
-      // viewer block is preserved; org block is added.
-      expect(saved.viewer).toEqual({ foo: "bar" });
+      const [raw, patch] = mockSaveAppState.mock.calls[mockSaveAppState.mock.calls.length - 1];
+      const saved = JSON.parse(raw as string);
+      expect(patch).toBe(true);
+      expect(Object.keys(saved)).toEqual(["org"]);
       expect(saved.org.activeOrgSlug).toBe("a");
     } finally {
       vi.useRealTimers();

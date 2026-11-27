@@ -270,16 +270,26 @@ fn load_dashboard_policy(
 /// state, through the same load/save pair the viewer saves with, so a reload
 /// does not bring the workspace back. Writes nothing when no row matched.
 /// Returns how many rows were dropped.
-pub(crate) fn retire_saved_workspace_rows(
-    app: &tauri::AppHandle,
+pub(crate) fn retire_saved_workspace_rows<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
     principal: &str,
     team_key: &str,
     matches: &dyn Fn(&serde_json::Value) -> bool,
 ) -> Result<usize, String> {
-    let path = app_state_path(app)?;
+    retire_saved_workspace_rows_at(app, &app_state_path(app)?, principal, team_key, matches)
+}
+
+/// [`retire_saved_workspace_rows`] on the app-state file at `path`.
+pub(crate) fn retire_saved_workspace_rows_at<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    path: &std::path::Path,
+    principal: &str,
+    team_key: &str,
+    matches: &dyn Fn(&serde_json::Value) -> bool,
+) -> Result<usize, String> {
     app.state::<super::local_profile::LocalProfileState>()
         .with_expected(Some(principal), || {
-            let saved = profile_workspace::load(&path, Some(principal))?;
+            let saved = profile_workspace::load(path, Some(principal))?;
             let mut state: serde_json::Value =
                 serde_json::from_str(&saved).map_err(|e| e.to_string())?;
             let Some(viewer) = state.get_mut("viewer") else {
@@ -288,7 +298,7 @@ pub(crate) fn retire_saved_workspace_rows(
             let dropped = crate::mcp::state::retire_workspace_rows(viewer, team_key, matches);
             if dropped > 0 {
                 let json = serde_json::to_string(&state).map_err(|e| e.to_string())?;
-                profile_workspace::save(&path, principal, &json)?;
+                profile_workspace::save(path, principal, &json)?;
             }
             Ok(dropped)
         })

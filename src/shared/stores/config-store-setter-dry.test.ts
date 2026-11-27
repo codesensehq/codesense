@@ -72,12 +72,15 @@ async function flush(times = 10): Promise<void> {
 }
 
 describe("config-store setter DRY (R-11)", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
     mockSaveAppState.mockResolvedValue(undefined);
     mockLoadAppState.mockResolvedValue("{}");
     mockLoadWorkspaceConfig.mockResolvedValue({ repos: {} });
     mockSaveWorkspaceConfig.mockResolvedValue(undefined);
+    // Each test starts from an empty file, the baseline the store patches against.
+    await useConfigStore.getState().loadState();
+    mockLoadAppState.mockClear();
     useConfigStore.setState({ initialized: true, repos: [] });
     useOrgStore.setState({ workspaceRepos: { [SYNTHETIC_KEY]: makeWorkspaceRepo() } });
   });

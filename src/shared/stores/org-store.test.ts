@@ -38,6 +38,13 @@ const mockedLoadAppState = vi.mocked(loadAppState);
 
 installTerminalLayoutHarness();
 
+/** Load an empty app state, so the next persist patches the whole org block. */
+async function startFromEmptyAppState() {
+  useOrgStore.setState({ hasUserIntent: false, stateLoaded: false });
+  mockedLoadAppState.mockResolvedValueOnce("{}");
+  await useOrgStore.getState().loadPersistedState();
+}
+
 function makeOrg(overrides: Partial<Org> = {}): Org {
   return {
     slug: "acme",
@@ -742,6 +749,7 @@ describe("F-39 persistence round-trip", () => {
   // driving the actual persist writer, then feeding its exact on-disk blob into a
   // cold `loadPersistedState` (a fresh process reading the same appstate file).
   it("switch + disable + enable + active workspace round-trip a real restart", async () => {
+    await startFromEmptyAppState();
     // Two live orgs; switch to 9north + smart-web, disable then re-enable a repo.
     useOrgStore.setState({
       orgs: [
@@ -1608,6 +1616,7 @@ describe("shownTeamsByOrgSlug persistence (SW-OB-9)", () => {
   it("round-trips a curated set through persist → restore", async () => {
     vi.useFakeTimers();
     try {
+      await startFromEmptyAppState();
       useOrgStore.setState({
         orgs: [
           makeOrg({

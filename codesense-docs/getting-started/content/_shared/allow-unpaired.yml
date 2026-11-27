@@ -93,6 +93,12 @@ ui_only:
       Focuses the window that already shows an item the person tried to open
       in main.
 
+  - name: patch_app_state_keys
+    rationale: >-
+      A second window saves its own settings (shortcuts, dashboard prefs) into
+      the app state. Window plumbing; agents change settings through their
+      own tools.
+
 mcp_only:
   - name: codesense_overview
     rationale: >-

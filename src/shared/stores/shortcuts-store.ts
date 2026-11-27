@@ -18,8 +18,7 @@ import {
   SHORTCUT_ACTIONS,
   useDynamicShortcutActions,
 } from "@/shared/lib/shortcuts/registry";
-import { saveAppState } from "@/tauri/commands";
-import { serializeAppStateWrite } from "@/shared/lib/app-state-write";
+import { patchAppState, serializeAppStateWrite } from "@/shared/lib/app-state-write";
 import { fieldPatch } from "@/shared/lib/field-patch";
 import { readPrefsState } from "@/features/dashboard/lib/prefs-client";
 // NOTE: panel-menu imports useShortcutsStore back — a deliberate import cycle
@@ -188,7 +187,7 @@ const debouncedPersist = createDebouncedAction(
           version: CURRENT_SHORTCUTS_VERSION,
           shortcuts: patch as Record<string, string>,
         };
-        await saveAppState(JSON.stringify({ shortcuts: persisted }), true);
+        await patchAppState({ shortcuts: persisted });
         for (const key of Object.keys(patch)) {
           if (pendingShortcutPatch[key] === patch[key]) delete pendingShortcutPatch[key];
         }

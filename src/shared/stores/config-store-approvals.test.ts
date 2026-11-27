@@ -7,7 +7,7 @@ const mockLoadAppState = vi.fn().mockResolvedValue("{}");
 const mockSaveAppState = vi.fn().mockResolvedValue(undefined);
 
 vi.mock("@/tauri/commands", () => ({
-  saveAppState: (s: string) => mockSaveAppState(s),
+  saveAppState: (s: string, patch?: boolean) => mockSaveAppState(s, patch),
   loadAppState: () => mockLoadAppState(),
   createContextRepo: vi.fn(),
   loadWorkspaceConfig: vi.fn(),
@@ -32,13 +32,16 @@ describe("config-store — setup approvals (SW-WT-9)", () => {
     expect(useConfigStore.getState().isSetupApproved("/repo", "h2")).toBe(false);
   });
 
-  it("persists approvals via app-state RMW, preserving other keys", async () => {
+  it("persists approvals as a key patch that leaves other keys alone", async () => {
     mockLoadAppState.mockResolvedValue(JSON.stringify({ viewer: { tab: 1 }, repos: [] }));
-    await useConfigStore.getState().recordSetupApproval("/repo", "h1");
+    await useConfigStore.getState().loadState();
+    await useConfigStore.getState().recordSetupApproval("/repo", "h2");
     expect(mockSaveAppState).toHaveBeenCalledTimes(1);
-    const written = JSON.parse(mockSaveAppState.mock.calls[0][0]);
-    expect(written.viewer).toEqual({ tab: 1 }); // untouched
-    expect(written.worktreeSetupApprovals[setupApprovalKey("/repo", "h1")].configHash).toBe("h1");
+    const [raw, patch] = mockSaveAppState.mock.calls[0];
+    expect(patch).toBe(true);
+    const written = JSON.parse(raw);
+    expect(Object.keys(written)).toEqual(["worktreeSetupApprovals"]);
+    expect(written.worktreeSetupApprovals[setupApprovalKey("/repo", "h2")].configHash).toBe("h2");
   });
 
   it("loadState hydrates approvals and drops malformed entries", async () => {

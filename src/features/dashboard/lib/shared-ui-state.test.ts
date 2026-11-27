@@ -3,8 +3,11 @@ import { beforeEach, expect, it, vi } from "vitest";
 const storage = vi.hoisted(() => ({ raw: "{}" }));
 vi.mock("@/tauri/commands", () => ({
   loadAppState: async () => storage.raw,
-  saveAppState: async (raw: string) => {
-    storage.raw = raw;
+  saveAppState: async (raw: string, patch?: boolean) => {
+    const { applyFieldPatch } = await import("@/shared/lib/field-patch");
+    storage.raw = patch
+      ? JSON.stringify(applyFieldPatch(JSON.parse(storage.raw), JSON.parse(raw)))
+      : raw;
   },
 }));
 import {
