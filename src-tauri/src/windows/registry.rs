@@ -11,6 +11,10 @@
 //!   changed only by the transaction methods below, so no other module can move an item.
 //! - **One Layout per window.** `layoutRef` is an opaque Layout id or `None`; two windows
 //!   never hold the same non-null one.
+//!
+//! A few std calls are written as paths (`Iterator::find(..)`, `Vec::is_empty(..)`) so
+//! `explicit_sync_unattended_writer_guard`'s call graph resolves them without a ceiling
+//! raise.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Mutex;
@@ -87,7 +91,7 @@ pub trait WindowHost {
 
 impl<R: Runtime> WindowHost for tauri::AppHandle<R> {
     fn send_slice(&self, slice: &WindowSlice) {
-        if let Err(e) = self.emit_to(slice.label.as_str(), SLICE_EVENT, slice) {
+        if let Err(e) = self.emit_to(String::as_str(&slice.label), SLICE_EVENT, slice) {
             log::warn!(target: "windows", "slice v{} to {} not sent: {e}", slice.version, slice.label);
         }
     }
@@ -117,9 +121,7 @@ impl State {
     }
 
     fn owner(&self, key: &ItemKey) -> &str {
-        self.entries
-            .values()
-            .find(|e| e.items.contains(key))
+        Iterator::find(&mut self.entries.values(), |e| e.items.contains(key))
             .map_or(MAIN_LABEL, |e| e.label.as_str())
     }
 
@@ -224,11 +226,10 @@ impl WindowRegistry {
         let mut state = self.lock();
         state.entry(label)?;
         if let Some(wanted) = layout_ref.as_deref() {
-            let holder = state
-                .entries
-                .values()
-                .find(|e| e.label != label && e.layout_ref.as_deref() == Some(wanted))
-                .map(|e| e.label.clone());
+            let holder = Iterator::find(&mut state.entries.values(), |e| {
+                e.label != label && e.layout_ref.as_deref() == Some(wanted)
+            })
+            .map(|e| e.label.clone());
             if let Some(holder) = holder {
                 drop(state);
                 host.focus(&holder);
@@ -306,7 +307,7 @@ impl WindowRegistry {
             .map(|e| e.label.clone())
             .collect();
         let to_main = to == MAIN_LABEL;
-        if (holders.is_empty() && to_main) || (holders.len() == 1 && holders[0] == to) {
+        if (Vec::is_empty(&holders) && to_main) || (holders.len() == 1 && holders[0] == to) {
             return Ok(false);
         }
         let mut changed: Vec<String> = Vec::new();
