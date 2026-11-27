@@ -2059,7 +2059,8 @@ impl DashboardLaunchState {
     /// mutation after that read re-marks the handle and is written by a later pass.
     ///
     /// A record is kept for an agent launch's launcher relationship, a bounded
-    /// launch's deadline (a person's launch included), or a captured workspace;
+    /// launch's deadline (a person's launch included), a captured workspace, or a
+    /// work item once its session is bound (a restore matches it by session id);
     /// with none of them, or once the entry is gone, it is removed. A write failure
     /// is logged and swallowed: the next write catches up.
     fn flush_dirty(
@@ -2092,7 +2093,7 @@ impl DashboardLaunchState {
                 snap.launched_by.is_some()
                     || snap.deadline_ms.is_some()
                     || snap.worktree_dir.is_some()
-                    || snap.work_item.is_some()
+                    || (snap.work_item.is_some() && snap.session_id.is_some())
             });
             let Some(snap) = record else {
                 if let Err(error) = store.remove(&handle) {
@@ -2370,14 +2371,15 @@ impl DashboardLaunchState {
         // mirror the just-stamped deadline to the on-disk record so a
         // later app process can restore the sweep's clock through the file
         // fallback when the tab's tag is lost. Gated on a bounded entry (or one
-        // holding a captured workspace, whose record must carry the session id the
-        // restore check matches) so an unbounded rebind does not pay a redundant
-        // file write.
+        // holding a captured workspace or a work item, whose record must carry the
+        // session id the restore check matches) so an unbounded rebind does not pay a
+        // redundant file write.
         let persist = budget_changed
-            && inner
-                .by_handle
-                .get(handle)
-                .is_some_and(|entry| entry.deadline_ms.is_some() || entry.worktree_dir.is_some());
+            && inner.by_handle.get(handle).is_some_and(|entry| {
+                entry.deadline_ms.is_some()
+                    || entry.worktree_dir.is_some()
+                    || entry.work_item.is_some()
+            });
         drop(inner);
         if persist {
             self.queue_persist(handle);
@@ -12813,12 +12815,24 @@ pub(crate) mod tests {
             assert!(!waited_on_disk, "the stamp waited on the registry write");
         }
 
+        /// An unbounded launch with no workspace keeps only its session and work item,
+        /// and only once it is bound, so a restore can match the work item to its session.
         #[test]
-        fn unbounded_bind_without_workspace_or_deadline_persists_nothing() {
+        fn unbounded_bind_without_workspace_or_deadline_persists_only_its_work_item() {
             let (state, _dir, path) = wired_state();
             state.begin("worker").unwrap();
-            state.bind("worker", "session-a", None).unwrap();
             assert!(!load_registry(&path).launches.contains_key("worker"));
+            state.bind("worker", "session-a", None).unwrap();
+
+            let registry = load_registry(&path);
+            let value = serde_json::to_value(registry.launches.get("worker").unwrap()).unwrap();
+            assert_eq!(value["sessionId"], "session-a");
+            assert_eq!(
+                value["workItem"],
+                serde_json::to_value(state.work_item("worker").unwrap()).unwrap()
+            );
+            assert!(value.get("worktreeDir").is_none());
+            assert!(value.get("deadlineMs").is_none());
         }
 
         #[test]
