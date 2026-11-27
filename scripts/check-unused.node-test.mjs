@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { test } from "node:test";
+import { after, test } from "node:test";
 import { fileURLToPath } from "node:url";
 
 import { compareEntries, entriesFromReport, formatBaseline, runKnip } from "./check-unused.mjs";
@@ -29,8 +29,14 @@ function report({ files = [], exports = [], types = [] } = {}) {
   return { issues: [...byFile.values()] };
 }
 
+const tempDirs = [];
+after(() => {
+  for (const dir of tempDirs) rmSync(dir, { recursive: true, force: true });
+});
+
 function sandbox(baseline, knipReport) {
   const dir = mkdtempSync(join(tmpdir(), "check-unused-"));
+  tempDirs.push(dir);
   const baselineFile = join(dir, "knip-baseline.json");
   const reportFile = join(dir, "report.json");
   if (baseline !== undefined) writeFileSync(baselineFile, baseline);
@@ -185,7 +191,8 @@ const ENTRY_FIXTURES = [
   ["playwright*.config.ts", "from_playwright", "src/lib/playwright.ts"],
   ["vitest.config.ts", "from_vitest", "src/lib/vitest.ts"],
   ["vite.config.ts", "from_vite", "src/lib/vite.ts"],
-  ["tests/e2e-mock/**", "from_e2e", "src/lib/e2e.ts"],
+  ["tests/**", "from_e2e", "src/lib/e2e.ts"],
+  ["tests/**", "from_frame_security", "src/lib/frame-security.ts"],
 ];
 
 function fixtureSymbols(configFile) {
@@ -199,10 +206,7 @@ function fixtureSymbols(configFile) {
 
 test("the fixture tree holds one file per entry glob in knip.json", () => {
   const { entry } = JSON.parse(readFileSync(KNIP_CONFIG, "utf8"));
-  assert.deepEqual(
-    entry,
-    ENTRY_FIXTURES.map(([glob]) => glob),
-  );
+  assert.deepEqual(entry, [...new Set(ENTRY_FIXTURES.map(([glob]) => glob))]);
 });
 
 test("nothing reachable only from an entry glob is reported, and the fixture can report", () => {
@@ -219,6 +223,7 @@ test("nothing reachable only from an entry glob is reported, and the fixture can
 test("without the entry globs the fixture exports are reported", () => {
   const { entry, ...rest } = JSON.parse(readFileSync(KNIP_CONFIG, "utf8"));
   const dir = mkdtempSync(join(tmpdir(), "knip-config-"));
+  tempDirs.push(dir);
   const config = join(dir, "knip.json");
   // Keep one entry so knip has something to start from; every other glob is removed.
   writeFileSync(config, JSON.stringify({ ...rest, entry: [entry[0]] }));

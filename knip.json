@@ -8,7 +8,7 @@
     "playwright*.config.ts",
     "vitest.config.ts",
     "vite.config.ts",
-    "tests/e2e-mock/**"
+    "tests/**"
   ],
   "ignore": ["src/components/ui/**"]
 }

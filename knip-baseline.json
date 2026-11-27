@@ -33,7 +33,6 @@
   "exports src/app/mock/handlers/team-edits.ts isTeamEditsDemo",
   "exports src/app/mock/handlers/terminal-server.ts runningTerminalServer",
   "exports src/app/mock/handlers/terminal-server.ts stoppedTerminalServer",
-  "exports src/app/mock/inbox-fixtures.ts inboxFixtureRollup",
   "exports src/app/mock/lib/mock-agent-context.ts applyMockContextEdit",
   "exports src/features/agent-context/lib/agent-context-model.ts tierTag",
   "exports src/features/agents/agents-virtual-tab.ts openAgentRunning",
