@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { useState } from "react";
+import { Ico } from "./ico";
 import { InboxRole } from "./inbox-role";
 import {
   AlertTriangle,
@@ -142,10 +143,7 @@ export function StaleNotice({
   );
 }
 
-/** A Lucide glyph at the inbox's two sizes (15px, 13px small) and stroke weight. */
-export function Ico({ icon: Icon, sm }: { icon: LucideIcon; sm?: boolean }) {
-  return <Icon className={sm ? "ibx-ico sm" : "ibx-ico"} strokeWidth={1.75} aria-hidden />;
-}
+export { Ico };
 
 /** A square initials avatar with a state dot; `#` for a role queue, the viewer's mark for the human. */
 export function Avatar({

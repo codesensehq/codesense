@@ -8,7 +8,7 @@ import type { InboxMediaAttachment } from "@/tauri/commands";
 
 import { acquireMediaUrl } from "../lib/media-urls";
 import { formatClock } from "../model";
-import { Ico } from "./primitives";
+import { Ico } from "./ico";
 
 /** Where a bubble's image comes from: the inbox and the workspace chat each pass their own. */
 export interface MediaLoader {
