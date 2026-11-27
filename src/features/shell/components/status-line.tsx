@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { useEffect, useLayoutEffect, useRef, type FocusEvent, type KeyboardEvent } from "react";
-import { createPortal } from "react-dom";
+import { ScopedPortal } from "@/shared/lib/warm-scopes/owning-scope";
 import {
   dismissStatusLine,
   pauseStatusLine,
@@ -24,14 +24,13 @@ export function StatusLine() {
   return (
     <>
       {line && <Line line={line} waiting={held ? [] : waiting} />}
-      {createPortal(
+      <ScopedPortal container={document.body}>
         <div role="status" aria-live="polite" aria-label="status line" className="sr-only">
           {announcements.map((a) => (
             <p key={a.seq}>{a.text}</p>
           ))}
-        </div>,
-        document.body,
-      )}
+        </div>
+      </ScopedPortal>
     </>
   );
 }
