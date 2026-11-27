@@ -71,6 +71,7 @@ test(
 );
 
 test("a long line is capped against the title bar and truncates", async ({ page }) => {
+  await page.setViewportSize({ width: 900, height: 700 });
   await page.goto("/");
   const bar = page.getByTestId("title-bar");
   await expect(bar).toBeVisible();

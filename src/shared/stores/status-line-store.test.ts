@@ -13,7 +13,7 @@ import {
   runStatusLineAction,
   STATUS_LINE_MAX_WAITING,
   STATUS_LINE_MS,
-  STATUS_LINE_OFFER_WAIT_MS,
+  STATUS_LINE_WAIT_MS,
   STATUS_LINE_UNDO_MS,
 } from "./status-line-store";
 
@@ -150,11 +150,11 @@ describe("queue and lifecycle", () => {
     postStatusLine({ text: "Long", kind: "announcement" });
     pauseStatusLine("focus");
     postStatusLine({ text: "Stale offer", kind: "offer" });
-    vi.advanceTimersByTime(STATUS_LINE_OFFER_WAIT_MS);
+    vi.advanceTimersByTime(STATUS_LINE_WAIT_MS);
     expect(waiting()).toEqual([]);
 
     postStatusLine({ text: "Fresh offer", kind: "offer" });
-    vi.advanceTimersByTime(STATUS_LINE_OFFER_WAIT_MS - 10_000);
+    vi.advanceTimersByTime(STATUS_LINE_WAIT_MS - 10_000);
     resumeStatusLine("focus");
     vi.advanceTimersByTime(STATUS_LINE_MS);
     expect(shown()).toBe("Fresh offer");
@@ -170,7 +170,7 @@ describe("queue and lifecycle", () => {
     postStatusLine({ text: "Stale announcement", kind: "announcement" });
     postStatusLine({ text: "Stale info", kind: "info" });
     postStatusLine({ key: "p", text: "Stale progress", kind: "progress" });
-    vi.advanceTimersByTime(STATUS_LINE_OFFER_WAIT_MS - 1);
+    vi.advanceTimersByTime(STATUS_LINE_WAIT_MS - 1);
     postStatusLine({ text: "Fresh info", kind: "info" });
     vi.advanceTimersByTime(1);
     resumeStatusLine("focus");
@@ -265,7 +265,7 @@ describe("hold and the hint line", () => {
     });
     postStatusLine({ key: "hint", text: "Drop to move beside design", kind: "info" });
     expect(shown()).toBe("Drop to move beside design");
-    vi.advanceTimersByTime(STATUS_LINE_OFFER_WAIT_MS - 10_000);
+    vi.advanceTimersByTime(STATUS_LINE_WAIT_MS - 10_000);
     expect(shown()).toBe("Drop to move beside design");
 
     clearStatusLine("hint");

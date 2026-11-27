@@ -74,7 +74,7 @@ export interface StatusLineState {
 export const STATUS_LINE_HINT_KEY = "hint";
 export const STATUS_LINE_MS = 6_000;
 export const STATUS_LINE_UNDO_MS = 10_000;
-export const STATUS_LINE_OFFER_WAIT_MS = 60_000;
+export const STATUS_LINE_WAIT_MS = 60_000;
 export const STATUS_LINE_MAX_WAITING = 3;
 /** How many recent texts the live region keeps. */
 const ANNOUNCEMENTS_KEPT = 3;
@@ -177,11 +177,10 @@ function show(line: Line) {
 const byId = (a: Line, b: Line) => a.id - b.id;
 
 function enqueue(line: Line) {
-  line.expiresAt = Date.now() + STATUS_LINE_OFFER_WAIT_MS;
+  line.expiresAt = Date.now() + STATUS_LINE_WAIT_MS;
   if (line.kind === "offer") {
     offers = [...offers, line].sort(byId);
     if (offers.length > STATUS_LINE_MAX_WAITING) offers = offers.slice(-STATUS_LINE_MAX_WAITING);
-    scheduleExpiry();
   } else {
     queue = [...queue, line].sort(byId);
   }
