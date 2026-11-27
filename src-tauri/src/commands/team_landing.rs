@@ -166,7 +166,7 @@ fn is_file_inside(path: &Path, real_root: &Path) -> bool {
 }
 
 /// Whether `page` (relative to `content_root`) is a page the resolver would
-/// open as a declared starter page: exact on-disk spelling, a regular file
+/// open as a declared landing page: exact on-disk spelling, a regular file
 /// really inside the content folder, nothing hidden. The registry edit checks
 /// with this, so it never records a page the app would refuse to open.
 pub fn declared_page_resolves(content_root: &Path, page: &str, context_root: &Path) -> bool {

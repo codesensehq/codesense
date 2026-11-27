@@ -126,7 +126,7 @@ pub enum RegistryEdit {
         team_name: String,
         parent_team: Option<String>,
     },
-    /// Set (or clear) a team's starter page — `teams.yml` `landing_page:`, the
+    /// Set (or clear) a team's landing page — `teams.yml` `landing_page:`, the
     /// file the viewer opens whenever the team has nothing open. `Some(path)` is
     /// relative to the team's content folder and must name a file there (no
     /// `..`, no hidden file or folder); `None` removes the key, so the app falls
@@ -1257,7 +1257,7 @@ fn apply_set_team_landing_page(
     teams_yml_applied_edit(&teams, edit)
 }
 
-/// `page` is a file the team's starter page may be: see
+/// `page` is a file the team's landing page may be: see
 /// [`apply_set_team_landing_page`].
 fn check_landing_page(
     org_root: &Path,
@@ -2897,7 +2897,7 @@ mod tests {
         assert_eq!(clear.commit_title, "Clear parent team for child");
     }
 
-    // ---------- SetTeamLandingPage: the team's starter page ----------
+    // ---------- SetTeamLandingPage: the team's landing page ----------
 
     fn landing(team: &str, page: Option<&str>) -> RegistryEdit {
         RegistryEdit::SetTeamLandingPage {
