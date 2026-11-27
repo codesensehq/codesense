@@ -12,7 +12,7 @@
 //! CodeSense works" page that also ships in the bundled CodeSense docs, compiled in so it
 //! reaches remote agents too, whose machines don't hold the docs checkout.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use rmcp::schemars::JsonSchema;
@@ -60,6 +60,8 @@ pub(crate) struct OverviewInputs {
     pub active: Option<(String, String)>,
     /// `list_sessions` rows.
     pub sessions: Result<Vec<Value>, String>,
+    /// The needs-you set: the live hub's `needsYou` rows.
+    pub needs_you: Result<Vec<Value>, String>,
     /// `list_machines` rows for the active team.
     pub machines: Result<Vec<Value>, String>,
     /// `agent_list` rows.
@@ -135,6 +137,7 @@ const SESSION_TOOLS: &[&str] = &[
     "send_to_session",
     "get_viewer_state",
 ];
+const NEEDS_YOU_TOOLS: &[&str] = &["list_sessions", "inbox_list", "read_terminal_tab"];
 const AGENT_TOOLS: &[&str] = &["agent_list", "agent_get"];
 const ROUTINE_TOOLS: &[&str] = &["routine_list", "routine_get", "routine_runs", "routine_run"];
 const INBOX_TOOLS: &[&str] = &[
@@ -200,14 +203,34 @@ fn machines_section(machines: &Result<Vec<Value>, String>) -> Value {
     })
 }
 
-fn sessions_section(sessions: &Result<Vec<Value>, String>) -> Value {
+/// The sessions an item of the needs-you set is about, by session id or handle.
+fn waiting_sessions(needs_you: &[Value]) -> BTreeSet<&str> {
+    needs_you
+        .iter()
+        .filter_map(|item| str_at(item, "session"))
+        .collect()
+}
+
+fn sessions_section(
+    sessions: &Result<Vec<Value>, String>,
+    needs_you: &Result<Vec<Value>, String>,
+) -> Value {
     let rows = match sessions {
         Ok(rows) => rows,
         Err(e) => return failed(e, SESSION_TOOLS),
     };
+    let waiting = needs_you
+        .as_deref()
+        .map(waiting_sessions)
+        .unwrap_or_default();
     let needs_you: Vec<Value> = rows
         .iter()
-        .filter(|row| str_at(row, "state") == Some("needs-you"))
+        .filter(|row| {
+            [str_at(row, "sessionId"), str_at(row, "handle")]
+                .into_iter()
+                .flatten()
+                .any(|id| waiting.contains(id))
+        })
         .map(|row| pick(row, &["handle", "displayName", "machine"]))
         .collect();
     let items: Vec<Value> = rows
@@ -239,6 +262,39 @@ fn sessions_section(sessions: &Result<Vec<Value>, String>) -> Value {
         "notExited": items,
         "truncated": truncated,
         "detail": detail(SESSION_TOOLS),
+    })
+}
+
+/// Everything that waits on the person: the one needs-you set, by kind.
+fn needs_you_section(needs_you: &Result<Vec<Value>, String>) -> Value {
+    let rows = match needs_you {
+        Ok(rows) => rows,
+        Err(e) => return failed(e, NEEDS_YOU_TOOLS),
+    };
+    let items = rows
+        .iter()
+        .map(|row| {
+            pick(
+                row,
+                &[
+                    "kind",
+                    "session",
+                    "org",
+                    "team",
+                    "workItem",
+                    "question",
+                    "messageId",
+                ],
+            )
+        })
+        .collect();
+    let (items, truncated) = capped(items);
+    json!({
+        "total": rows.len(),
+        "byKind": count_by(rows, |row| str_at(row, "kind").map(str::to_string)),
+        "items": items,
+        "truncated": truncated,
+        "detail": detail(NEEDS_YOU_TOOLS),
     })
 }
 
@@ -460,7 +516,8 @@ pub(crate) fn compose(inputs: &OverviewInputs) -> Value {
         "generatedAt": inputs.generated_at,
         "context": context_section(&inputs.active),
         "machines": machines_section(&inputs.machines),
-        "sessions": sessions_section(&inputs.sessions),
+        "sessions": sessions_section(&inputs.sessions, &inputs.needs_you),
+        "needsYou": needs_you_section(&inputs.needs_you),
         "agents": agents_section(&inputs.agents),
         "routines": routines_section(&inputs.routines),
         "inbox": inbox_section(&inputs.human_unread, &inputs.sessions, &inputs.active),
@@ -654,10 +711,16 @@ pub(crate) async fn gather(
         Err(error) => Err(error),
     };
 
+    let needs_you = app
+        .try_state::<crate::live_hub::LiveHub>()
+        .ok_or_else(|| "the live hub is not running".to_string())
+        .and_then(|hub| hub.needs_you_rows());
+
     OverviewInputs {
         generated_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
         active,
         sessions,
+        needs_you,
         machines,
         agents,
         routines,
@@ -724,6 +787,7 @@ mod tests {
         "context",
         "machines",
         "sessions",
+        "needsYou",
         "agents",
         "routines",
         "inbox",
@@ -737,6 +801,7 @@ mod tests {
             generated_at: "2026-10-04T00:00:00Z".into(),
             active: None,
             sessions: Ok(vec![]),
+            needs_you: Ok(vec![]),
             machines: Ok(vec![]),
             agents: Ok(vec![]),
             routines: Ok(vec![]),
@@ -793,6 +858,11 @@ mod tests {
                 json!({"handle":"w1","displayName":"worker 1","state":"needs-you","machine":"box","launchedBy":"lead","unread":2,"oldestUnreadAt":"2026-10-04T00:00:00.000Z","role":"worker"}),
                 json!({"handle":"w2","displayName":"worker 2","state":"idle","machine":"box","launchedBy":"lead","unread":null,"oldestUnreadAt":null}),
                 json!({"handle":"old","displayName":"old","state":"exited","machine":"This Mac","launchedBy":null,"unread":0,"oldestUnreadAt":null}),
+            ]),
+            // The set, not a session's state, says who waits on the person.
+            needs_you: Ok(vec![
+                json!({"id":"agent:w1:permission","kind":"permission","session":"w1","org":"acme/ctx","team":"web","workItem":"wi_00000000000000a1"}),
+                json!({"id":"inbox:7","kind":"merge","session":"lead","org":"acme/ctx","team":"web","workItem":"wi_00000000000000a1","messageId":7}),
             ]),
             machines: Ok(vec![
                 json!({"machineId":"local","label":"This Mac","kind":"local","status":{"state":"connected","workspaces":2},"remoteMcpControl":false,"attention":0}),
@@ -861,6 +931,7 @@ mod tests {
         assert_eq!(out["context"]["org"], Value::Null);
         assert_eq!(out["sessions"]["total"], 0);
         assert_eq!(out["sessions"]["needsYou"], json!([]));
+        assert_eq!(out["needsYou"]["total"], 0);
         assert_eq!(out["machines"]["total"], 0);
         assert_eq!(out["agents"]["total"], 0);
         assert_eq!(out["routines"]["total"], 0);
@@ -895,7 +966,17 @@ mod tests {
         assert_eq!(s["byMachine"], json!({"This Mac":2,"box":2}));
         assert_eq!(
             s["needsYou"],
-            json!([{"handle":"w1","displayName":"worker 1","machine":"box"}])
+            json!([
+                {"handle":"lead","displayName":"lead","machine":"This Mac"},
+                {"handle":"w1","displayName":"worker 1","machine":"box"}
+            ])
+        );
+        let n = &out["needsYou"];
+        assert_eq!(n["total"], 2);
+        assert_eq!(n["byKind"], json!({"merge":1,"permission":1}));
+        assert_eq!(
+            n["items"][1],
+            json!({"kind":"merge","session":"lead","org":"acme/ctx","team":"web","workItem":"wi_00000000000000a1","messageId":7})
         );
         let live: Vec<&str> = s["notExited"]
             .as_array()

@@ -299,3 +299,61 @@ fn the_topic_patches_each_change_in_its_own_place_and_nothing_else() {
         "a quiet launch is no delta"
     );
 }
+
+/// On the 14:02 fixture, the published rows and `codesense_overview` hold the same 4 ids.
+#[test]
+fn the_overview_and_the_topic_hold_the_same_set() {
+    let (day, inputs) = sample_day();
+    let published: Vec<Value> = rows(&needs_you(&inputs))
+        .into_iter()
+        .map(|(_, r)| r)
+        .collect();
+    let mut expected: Vec<&str> = day["expect"]["needsYou"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["id"].as_str().unwrap())
+        .collect();
+    expected.sort_unstable();
+    let ids: Vec<&str> = published
+        .iter()
+        .map(|r| r["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, expected);
+
+    let sessions = day["agents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| serde_json::json!({"handle": a["handle"], "sessionId": a["session"], "displayName": a["name"], "state": a["state"]}))
+        .collect();
+    let overview = crate::mcp::overview::compose(&crate::mcp::overview::OverviewInputs {
+        generated_at: "2026-11-15T14:02:00Z".into(),
+        active: None,
+        sessions: Ok(sessions),
+        needs_you: Ok(published),
+        machines: Ok(vec![]),
+        agents: Ok(vec![]),
+        routines: Ok(vec![]),
+        human_unread: Ok(0),
+        roles: Ok(vec![]),
+        layouts: Ok(vec![]),
+        docs_root: None,
+        docs_version: Err("not read here".into()),
+    });
+    assert_eq!(overview["needsYou"]["total"], 4);
+    assert_eq!(
+        overview["needsYou"]["byKind"],
+        serde_json::json!({"capped":1,"merge":1,"permission":1,"question":1})
+    );
+    let waiting: Vec<&str> = overview["sessions"]["needsYou"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["handle"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        waiting,
+        ["story-431", "design-431", "architect-431", "story-418"]
+    );
+}

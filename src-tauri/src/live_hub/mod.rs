@@ -479,6 +479,11 @@ impl LiveHub {
         };
         inbox.human_unread_total()
     }
+    /// The needs-you set as the hub last published it: the `needsYou` topic's `all` rows.
+    pub(crate) fn needs_you_rows(&self) -> Result<Vec<serde_json::Value>, String> {
+        let mut model = self.model.lock().unwrap();
+        Ok(TopicRegistry::snapshot(&mut model.projections, needs_you::TOPIC, "all")?.snapshot)
+    }
     /// `team`'s pending needs-you mail to the human: the sum of its `counts` row's
     /// `needsYouBySender`. Errors while the team's projection is loading.
     pub(crate) fn needs_you_count(
