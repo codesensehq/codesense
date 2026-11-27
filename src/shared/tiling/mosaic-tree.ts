@@ -331,20 +331,10 @@ export function dedupeLeaves(root: MosaicNode | null): MosaicNode | null {
  *  a bad path, a length mismatch (defends against a stale commit) or sizes that
  *  equal the current ones once normalized; a no-op returns `root`. */
 export function setNodeSizes(root: MosaicNode, path: number[], sizes: number[]): MosaicNode {
-  if (path.length === 0) {
-    if (root.kind !== "split" || sizes.length !== root.children.length) return root;
-    const next = normalizeSizes(sizes);
-    return sameSizes(next, root.sizes) ? root : { ...root, sizes: next };
-  }
-  if (root.kind !== "split") return root;
-  const [head, ...rest] = path;
-  const child = root.children[head];
-  if (!child) return root;
-  const nextChild = setNodeSizes(child, rest, sizes);
-  if (nextChild === child) return root;
-  const children = [...root.children];
-  children[head] = nextChild;
-  return { ...root, children };
+  const target = nodeAt(root, path);
+  if (target?.kind !== "split" || sizes.length !== target.children.length) return root;
+  const next = normalizeSizes(sizes);
+  return sameSizes(next, target.sizes) ? root : withNodeAt(root, path, { ...target, sizes: next });
 }
 
 /** Put `next` at `path`, keeping every size and every subtree off the path. */
@@ -496,13 +486,22 @@ const nonEmpty = (v: unknown): v is string => typeof v === "string" && v.length 
  *  needs ≥2 children, one finite size per child). A leaf reads `workspaceId`, then
  *  `id`: `workspaceId` wins when both are set, since a build that writes only it
  *  may have changed the leaf since. A leaf with neither is pruned: its split keeps
- *  the other children (their sizes renormalized), or becomes its one survivor. */
+ *  the other children (their sizes renormalized), or becomes its one survivor. A
+ *  split left with no children is pruned the same way from its parent. */
 export function parseMosaicNode(value: unknown): MosaicNode | null {
+  const parsed = parseSavedNode(value);
+  return parsed === PRUNED ? null : parsed;
+}
+
+/** A node pruned away whole: a keyless leaf, or a split holding only those. */
+const PRUNED = Symbol("pruned");
+
+function parseSavedNode(value: unknown): MosaicNode | typeof PRUNED | null {
   if (!value || typeof value !== "object") return null;
   const v = value as Record<string, unknown>;
   if (v.kind === "leaf") {
     const id = nonEmpty(v.workspaceId) ? v.workspaceId : v.id;
-    return nonEmpty(id) ? leaf(id) : null;
+    return nonEmpty(id) ? leaf(id) : PRUNED;
   }
   if (v.kind !== "split" || (v.axis !== "row" && v.axis !== "column")) return null;
   if (!Array.isArray(v.children) || !Array.isArray(v.sizes)) return null;
@@ -511,22 +510,15 @@ export function parseMosaicNode(value: unknown): MosaicNode | null {
   const children: MosaicNode[] = [];
   const sizes: number[] = [];
   for (const [i, c] of v.children.entries()) {
-    const child = parseMosaicNode(c);
-    if (child) {
-      children.push(child);
-      sizes.push(v.sizes[i] as number);
-    } else if (!isKeylessLeaf(c)) {
-      return null;
-    }
+    const child = parseSavedNode(c);
+    if (child === null) return null;
+    if (child === PRUNED) continue;
+    children.push(child);
+    sizes.push(v.sizes[i] as number);
   }
-  if (children.length === 0) return null;
+  if (children.length === 0) return PRUNED;
   if (children.length === 1) return children[0];
   return { kind: "split", axis: v.axis, children, sizes: normalizeSizes(sizes) };
-}
-
-/** A saved leaf with no usable id: the one malformed node a parse drops rather than refuses. */
-function isKeylessLeaf(value: unknown): boolean {
-  return !!value && typeof value === "object" && (value as Record<string, unknown>).kind === "leaf";
 }
 
 /** The saved form of a tree: every leaf carries both `id` and `workspaceId`. */

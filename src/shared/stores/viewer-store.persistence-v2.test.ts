@@ -331,9 +331,7 @@ describe("viewer persistence round-trip", () => {
       },
     };
     useViewerStore.setState({
-      workspaces: {
-        [TEAM_KEY]: [{ id: "S-1", kind: "story", cwd: "/wt/S-1", storyId: "S-1", status: "ready" }],
-      },
+      workspaces: { [TEAM_KEY]: [story("S-1")] },
       terminalLayout: { ...EMPTY_TERMINAL_LAYOUT, grids },
       tabGridLayout: sizes,
     });
@@ -355,9 +353,7 @@ describe("viewer persistence round-trip", () => {
     seedOrg([SLUG_A]);
     useViewerStore.setState({
       terminalLayout: EMPTY_TERMINAL_LAYOUT,
-      workspaces: {
-        [TEAM_KEY]: [{ id: "S-1", kind: "story", cwd: "/wt/S-1", storyId: "S-1", status: "ready" }],
-      },
+      workspaces: { [TEAM_KEY]: [story("S-1")] },
       activeWorkspace: { [TEAM_KEY]: "S-1" },
     });
     const key = `${TEAM_KEY}|S-1`;
@@ -378,9 +374,7 @@ describe("viewer persistence round-trip", () => {
   it("choosing the displayed local tab clears and autosaves a pending remote focus", async () => {
     seedOrg([SLUG_A]);
     useViewerStore.setState({
-      workspaces: {
-        [TEAM_KEY]: [{ id: "S-1", kind: "story", cwd: "/wt/S-1", storyId: "S-1", status: "ready" }],
-      },
+      workspaces: { [TEAM_KEY]: [story("S-1")] },
       activeWorkspace: { [TEAM_KEY]: "S-1" },
     });
     const key = seedTerminalTabs(TEAM_KEY, "S-1", ["local-first"]);
@@ -422,11 +416,7 @@ describe("viewer persistence round-trip", () => {
       JSON.stringify({
         viewer: {
           schemaVersion: 15,
-          workspaces: {
-            [TEAM_KEY]: [
-              { id: "S-1", kind: "story", cwd: "/wt/S-1", storyId: "S-1", status: "ready" },
-            ],
-          },
+          workspaces: { [TEAM_KEY]: [story("S-1")] },
           activeWorkspace: { [TEAM_KEY]: "S-1" },
           cliChrome: { layoutMode: "console", splitRatio: 0.3, expanded: true },
         },
@@ -692,9 +682,7 @@ describe("viewer persistence round-trip", () => {
   it("reads the legacy Manager arrangement but never saves folds", async () => {
     seedOrg([SLUG_A]);
     useViewerStore.setState({
-      workspaces: {
-        [TEAM_KEY]: [{ id: "S-1", kind: "story", cwd: "/wt/S-1", storyId: "S-1", status: "ready" }],
-      },
+      workspaces: { [TEAM_KEY]: [story("S-1")] },
       activeWorkspace: { [TEAM_KEY]: "S-1" },
     });
     const state = useViewerStore.getState();
@@ -788,11 +776,7 @@ describe("viewer persistence round-trip", () => {
       JSON.stringify({
         viewer: {
           schemaVersion: 10,
-          workspaces: {
-            [TEAM_KEY]: [
-              { id: "S-1", kind: "story", cwd: "/wt/S-1", storyId: "S-1", status: "ready" },
-            ],
-          },
+          workspaces: { [TEAM_KEY]: [story("S-1")] },
           activeWorkspace: { [TEAM_KEY]: "S-1" },
           softClosedWorkspaces: { [TEAM_KEY]: { "S-2": { workspace: story("S-2") } } },
           agentsWorkspaceFilter: filter,
@@ -878,11 +862,7 @@ describe("viewer persistence round-trip", () => {
       JSON.stringify({
         viewer: {
           schemaVersion: 10,
-          workspaces: {
-            [TEAM_KEY]: [
-              { id: "S-1", kind: "story", cwd: "/wt/S-1", storyId: "S-1", status: "ready" },
-            ],
-          },
+          workspaces: { [TEAM_KEY]: [story("S-1")] },
           activeWorkspace: { [TEAM_KEY]: "S-1" },
           agentsWorkspaceFilter: { teamKey: "gone-org:gone-team", workspaceId: id },
         },
@@ -1584,7 +1564,20 @@ describe("mosaic leaves saved before leaves carried an id", () => {
   it("loads to the same layout", async () => {
     resetViewer();
     seedOrg([SLUG_A]);
-    loadAppStateMock.mockResolvedValue(JSON.stringify({ viewer: legacyViewer }));
+    // A load keeps a tab grid only for a workspace it brings back.
+    const workspace = {
+      id: "S-1",
+      kind: "story",
+      cwd: "/wt/S-1",
+      storyFilePath: "/stories/S-1.md",
+      storyId: "S-1",
+      status: "ready",
+    };
+    loadAppStateMock.mockResolvedValue(
+      JSON.stringify({
+        viewer: { schemaVersion: 15, ...legacyViewer, workspaces: { [TEAM_KEY]: [workspace] } },
+      }),
+    );
     await useViewerStore.getState().loadPersistedState();
     const s = useViewerStore.getState();
     expect(s.foregroundLayout[TEAM_KEY]).toEqual({
@@ -1594,8 +1587,7 @@ describe("mosaic leaves saved before leaves carried an id", () => {
       root: inMemory,
     });
     expect(s.foregroundLayoutByRail[TEAM_KEY].epic.root).toEqual(inMemory);
-    // A load keeps a tab grid only once its workspace is back; load and sync read grids through
-    // the same parse, so the sync case below covers the legacy grid.
+    expect(s.tabGridLayout[gridKey]).toEqual({ preset: "rows", root: inMemory });
   });
 
   it("saves every root with both leaf keys", async () => {

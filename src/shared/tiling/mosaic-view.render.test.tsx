@@ -101,12 +101,16 @@ const resetCounts = () => {
   splitMounts = {};
 };
 
-/** Mount `node`, then count only what later updates touch. */
+/** Mount `node`, then count only what later updates touch. `splits` holds the split keys in
+ *  first-render order, which is depth-first from the root: for `build()` that is the root, the
+ *  first row, its nested column, the second row, its nested column. */
 function mount(node: MosaicNode) {
   resetCounts();
   const view = render(<View node={node} />);
+  const [root, row0, nest0, row1, nest1] = Object.keys(splitRenders);
   resetCounts();
   return {
+    splits: { root, row0, nest0, row1, nest1 },
     update: (next: MosaicNode | null, zoomPath?: number[] | null) =>
       act(() => view.rerender(<View node={next} zoomPath={zoomPath} />)),
   };
@@ -123,44 +127,44 @@ beforeEach(() => {
 describe("MosaicView re-renders only the changed path", () => {
   it("(a) a leaf from another team added by splitAt renders and mounts only itself", () => {
     const tree = build();
-    const { update } = mount(tree);
+    const { update, splits } = mount(tree);
     update(splitAt(tree, "a", "row", "after", "agent:other-team/x"));
     expect(screen.getByTestId("cell-agent:other-team/x")).toBeTruthy();
     expect(leafRenders).toEqual({ "agent:other-team/x": 1 });
     expect(leafMounts).toEqual({ "agent:other-team/x": 1 });
     // The root and the row the leaf went into; neither nested split nor the other row.
-    expect(touched(splitRenders)).toHaveLength(2);
+    expect(touched(splitRenders)).toEqual([splits.root, splits.row0].sort());
     expect(splitMounts).toEqual({});
   });
 
   it("(a) a doc leaf added by appendLeaf renders and mounts only itself", () => {
     const tree = build();
-    const { update } = mount(tree);
+    const { update, splits } = mount(tree);
     update(appendLeaf(tree, "doc:other-team/plan.md"));
     expect(leafRenders).toEqual({ "doc:other-team/plan.md": 1 });
     expect(leafMounts).toEqual({ "doc:other-team/plan.md": 1 });
-    expect(touched(splitRenders)).toHaveLength(1);
+    expect(touched(splitRenders)).toEqual([splits.root]);
     expect(splitMounts).toEqual({});
   });
 
   it("(b) committing one split's sizes renders that split and its ancestors, no leaf", () => {
     const tree = build();
-    const { update } = mount(tree);
+    const { update, splits } = mount(tree);
     update(setNodeSizes(tree, [0, 2], [30, 70]));
     expect(leafRenders).toEqual({});
     expect(leafMounts).toEqual({});
-    expect(touched(splitRenders)).toHaveLength(3);
+    expect(touched(splitRenders)).toEqual([splits.root, splits.row0, splits.nest0].sort());
     expect(splitMounts).toEqual({});
   });
 
   it("(c) pruning one leaf renders its row and the root, no other leaf", () => {
     const tree = build();
-    const { update } = mount(tree);
+    const { update, splits } = mount(tree);
     update(pruneLeaf(tree, "e"));
     expect(screen.queryByTestId("cell-e")).toBeNull();
     expect(leafRenders).toEqual({});
     expect(leafMounts).toEqual({});
-    expect(touched(splitRenders)).toHaveLength(2);
+    expect(touched(splitRenders)).toEqual([splits.root, splits.row1].sort());
     expect(splitMounts).toEqual({});
   });
 

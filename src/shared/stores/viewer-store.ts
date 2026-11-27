@@ -1883,6 +1883,24 @@ function savedForegroundLayouts(
   );
 }
 
+/** Every team's per-rail foreground layouts, in their saved form. */
+function savedForegroundLayoutsByRail(
+  byTeam: Record<string, Record<string, ForegroundLayout>>,
+): Record<string, ReturnType<typeof savedForegroundLayouts>> {
+  return Object.fromEntries(
+    Object.entries(byTeam).map(([tk, byRail]) => [tk, savedForegroundLayouts(byRail)]),
+  );
+}
+
+/** The tab-grid layouts in their saved form: every leaf carries both keys. */
+function savedTabGridLayouts(
+  grids: Record<string, SavedPresetTree>,
+): Record<string, Omit<SavedPresetTree, "root"> & { root: SavedMosaicNode | null }> {
+  return Object.fromEntries(
+    Object.entries(grids).map(([k, v]) => [k, { ...v, root: serializeMosaicNode(v.root) }]),
+  );
+}
+
 /** SW-CW-7: the pickable-preset ring the hot-key cycles through, in order. The
  *  `as const` element type is the exact `setForegroundPreset` argument union, so
  *  `cycleForegroundPreset` stays type-safe without a second copy of the literals.
@@ -6125,12 +6143,7 @@ function serializedViewerPrefs(state: ViewerState): Record<string, unknown> {
     // SW-EW-40: persist the per-rail foreground arrangement (railKeyByWorkspaceId
     // is runtime-only — a pure tree derivation — so it is NOT serialized here,
     // like selectedEpicDirName).
-    foregroundLayoutByRail: Object.fromEntries(
-      Object.entries(foregroundLayoutByRail).map(([tk, byRail]) => [
-        tk,
-        savedForegroundLayouts(byRail),
-      ]),
-    ),
+    foregroundLayoutByRail: savedForegroundLayoutsByRail(foregroundLayoutByRail),
     // SW-EW-38: persist the per-team tray lens (selectedEpicDirName is
     // runtime-only — R3 — so it is deliberately NOT serialized here).
     trayMode,
@@ -6168,12 +6181,7 @@ function serializedViewerPrefs(state: ViewerState): Record<string, unknown> {
     // Remote tab focus belongs to this viewer; local focus comes from its host.
     terminalViewerFocus: state.terminalLayout.focus ?? {},
     // The sizes each workspace's tab grid was dragged to (this viewer's own).
-    terminalTabGridSizes: Object.fromEntries(
-      Object.entries(state.tabGridLayout).map(([k, v]) => [
-        k,
-        { ...v, root: serializeMosaicNode(v.root) },
-      ]),
-    ),
+    terminalTabGridSizes: savedTabGridLayouts(state.tabGridLayout),
     statusNavExpandedPaths,
     settings,
     pipelineScope,

@@ -54,6 +54,31 @@ describe("leaf ids", () => {
       expect(parseMosaicNode(pair)).toEqual(leaf("a"));
     });
 
+    it("neither key on every leaf of a nested split: only that branch is pruned", () => {
+      const keyless = {
+        kind: "split",
+        axis: "column",
+        sizes: [50, 50],
+        children: [{ kind: "leaf" }, { kind: "leaf", id: "" }],
+      };
+      const saved = {
+        kind: "split",
+        axis: "row",
+        sizes: [25, 25, 50],
+        children: [{ kind: "leaf", id: "a" }, keyless, { kind: "leaf", id: "b" }],
+      };
+      expect(parseMosaicNode(saved)).toEqual({
+        kind: "split",
+        axis: "row",
+        children: [leaf("a"), leaf("b")],
+        sizes: [(25 / 75) * 100, (50 / 75) * 100],
+      });
+      expect(
+        parseMosaicNode({ ...saved, sizes: [50, 50], children: [keyless, saved.children[2]] }),
+      ).toEqual(leaf("b"));
+      expect(parseMosaicNode(keyless)).toBeNull();
+    });
+
     it("passes any team's agent and doc ids through untouched", () => {
       for (const id of [
         "agent:acme/widgets:ops/reviewer",
