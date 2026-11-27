@@ -2489,6 +2489,14 @@ describe("agents read model verbs", () => {
     },
   );
 
+  it("leaves a records topic with no live frame without preparing a view", async () => {
+    const ctx = { frame: { frameId: "f1" }, liveFrame: async () => null } as never;
+    await expect(
+      runBridgeCommand("unsubscribe", { topic: "records", collection: "care" }, ctx),
+    ).resolves.toBeNull();
+    expect(mockRecordsPrepareView).not.toHaveBeenCalled();
+  });
+
   it.each(["subscribe", "page"])(
     "prepares a %s records view on a string collection",
     async (verb) => {

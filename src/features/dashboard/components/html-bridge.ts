@@ -1014,10 +1014,12 @@ export const HTML_BRIDGE_ALLOWLIST: Record<string, BridgeHandler> = {
   unsubscribe: async (args, ctx) => {
     const a = argObject(args, "unsubscribe");
     const topic = topicArg(a, "unsubscribe");
+    const frame = await ctx?.liveFrame?.();
+    if (!frame) return null;
     const view = await subscriptionView(a, "unsubscribe", ctx, false);
     // A records collection this frame never prepared holds no view to release.
     if (topic === "records" && view === undefined) return null;
-    await (await ctx?.liveFrame?.())?.unsubscribe(topic, view);
+    await frame.unsubscribe(topic, view);
     return null;
   },
   setUiState: async (args, ctx) => {
