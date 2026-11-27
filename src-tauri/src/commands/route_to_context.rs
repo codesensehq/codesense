@@ -317,12 +317,11 @@ pub(crate) async fn derive_context_for<R: tauri::Runtime>(
     org: &str,
     team: &str,
 ) -> Result<ContextResolution, String> {
+    use super::team_resolution_cache::TeamResolutionCache;
     // App setup always manages the cache (`lib.rs`, with its `listen`); only a test app
     // built without setup has none and reads uncached.
-    if app
-        .try_state::<super::team_resolution_cache::TeamResolutionCache>()
-        .is_none()
-    {
+    let managed = Option::is_some(&Manager::try_state::<TeamResolutionCache>(app));
+    if !managed {
         return derive_context_uncached(app, org, team).await;
     }
     super::team_resolution_cache::derive_context_cached(app, org, team).await
@@ -390,7 +389,8 @@ pub(crate) fn synced_contexts_in(
     codesense_home: &Path,
     user_id: u64,
 ) -> Result<Vec<ActiveContext>, String> {
-    SYNCED_CONTEXTS.get(
+    super::config_cache::ConfigCache::get(
+        &SYNCED_CONTEXTS,
         &(codesense_home.to_path_buf(), user_id),
         || synced_stamp(codesense_home, user_id),
         || {
@@ -436,7 +436,7 @@ fn synced_stamp(home: &Path, user_id: u64) -> SyncedStamp {
             .flatten()
             .filter_map(Result::ok)
             .filter(|entry| Result::ok(entry.file_type()).is_some_and(|t| t.is_dir()))
-            .map(|entry| entry.path())
+            .map(|entry| std::fs::DirEntry::path(&entry))
             .collect();
         dirs.sort();
         dirs
@@ -468,7 +468,7 @@ fn synced_stamp(home: &Path, user_id: u64) -> SyncedStamp {
             file(root.join(name));
         }
         let git = root.join(".git");
-        let clone = git.exists();
+        let clone = Path::exists(&git);
         folders.push((git, clone));
         for team in subdirs(&root) {
             let content = team.join(crate::context_repo::TEAM_CONTENT_DIR);

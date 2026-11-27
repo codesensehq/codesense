@@ -493,10 +493,10 @@ pub(crate) fn needs_you_total(
     projection: &inbox::InboxProjection,
     team: &crate::commands::dashboard_launch::LaunchTeam,
 ) -> u32 {
-    projection.counts(team)["needsYouBySender"]
-        .as_object()
+    let counts = inbox::InboxProjection::counts(projection, team);
+    serde_json::Value::as_object(&counts["needsYouBySender"])
         .into_iter()
-        .flat_map(|by_sender| by_sender.values())
+        .flat_map(serde_json::Map::values)
         .filter_map(serde_json::Value::as_u64)
         .sum::<u64>() as u32
 }

@@ -1022,7 +1022,8 @@ pub(crate) fn config_sync<R: tauri::Runtime>(
 /// [`Config::load`], kept in [`CONFIGS`].
 fn config_in(dir: &Path) -> Config {
     let inbox = dir.join("inbox.yml");
-    let loaded = CONFIGS.get(
+    let loaded = crate::commands::config_cache::ConfigCache::get(
+        &CONFIGS,
         &dir.to_path_buf(),
         || crate::commands::config_cache::file_stamp(&inbox),
         || Ok::<_, std::convert::Infallible>(Config::load(dir)),
@@ -1044,7 +1045,7 @@ pub(crate) fn note_config_path<R: tauri::Runtime>(
     if path != team_dir.join("config/inbox.yml") {
         return;
     }
-    CONFIGS.invalidate();
+    crate::commands::config_cache::ConfigCache::invalidate(&CONFIGS);
     let team = crate::commands::dashboard_launch::LaunchTeam {
         org: org.into(),
         team: team.into(),

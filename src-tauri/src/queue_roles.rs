@@ -93,7 +93,8 @@ pub(crate) fn list_for_cached(
         .parent()
         .unwrap_or(content)
         .join("config/sharing.yml");
-    ROLE_CONFIGS.get(
+    ConfigCache::get(
+        &ROLE_CONFIGS,
         &(content.to_path_buf(), scope.cache_key().to_string()),
         || (dir_stamp(&content.join("roles")), file_stamp(&sharing)),
         || list_for(content, scope),
@@ -118,7 +119,7 @@ pub fn save(content: &Path, mut config: RoleConfig) -> Result<RoleConfig, String
     let yaml = serde_yaml::to_string(&config).map_err(|e| e.to_string())?;
     crate::content_engine::atomic_io::write_tmp_fsync_rename(&dest, yaml.as_bytes())
         .map_err(|e| e.to_string())?;
-    ROLE_CONFIGS.invalidate();
+    ConfigCache::invalidate(&ROLE_CONFIGS);
     Ok(config)
 }
 

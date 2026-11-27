@@ -61,14 +61,15 @@ fn armed() -> bool {
     if ARMED_HERE.with(std::cell::Cell::get) {
         return true;
     }
-    ARMED.load(Ordering::Relaxed)
+    AtomicBool::load(&ARMED, Ordering::Relaxed)
 }
 
 /// Drop every config cache's entries. Called on each of the invalidating events.
 pub(crate) fn invalidate_all() {
-    super::route_to_context::SYNCED_CONTEXTS.invalidate();
-    crate::queue_roles::ROLE_CONFIGS.invalidate();
-    crate::media::CONFIGS.invalidate();
+    // Path calls, so the explicit-sync guard resolves them.
+    ConfigCache::invalidate(&super::route_to_context::SYNCED_CONTEXTS);
+    ConfigCache::invalidate(&crate::queue_roles::ROLE_CONFIGS);
+    ConfigCache::invalidate(&crate::media::CONFIGS);
 }
 
 /// One file or folder as stat'ed. A missing one stamps as `None`.
@@ -96,7 +97,7 @@ pub(crate) fn dir_stamp(dir: &Path) -> (Option<FileStamp>, Vec<(OsString, Option
         .into_iter()
         .flatten()
         .filter_map(Result::ok)
-        .map(|entry| (entry.file_name(), file_stamp(&entry.path())))
+        .map(|entry| (entry.file_name(), file_stamp(&std::fs::DirEntry::path(&entry))))
         .collect();
     entries.sort();
     (file_stamp(dir), entries)
