@@ -169,6 +169,83 @@ fn cp2_notes_grant_matrix_keeps_private_records_in_private_panes_under_team_safe
     }
 }
 #[test]
+fn cp2_a_non_string_collection_is_not_admitted_as_notes() {
+    let (_tmp, binding) = fixture();
+    // A private pane that may read its own notes but not the team's records.
+    let mut frame = make_frame(binding, "right-pane", "private", Preset::TeamSafe);
+    frame.effective_grant = vec!["records:read:own".into(), "sessions:read".into()];
+    let policy = Policy {
+        preset: Preset::TeamSafe,
+        ..Policy::default()
+    };
+    let dispatch = |verb: &str, args: serde_json::Value| {
+        Dispatcher::default().dispatch_frame(&frame, verb, args, &policy, 0)
+    };
+    let grant_denied = Decision::Deny {
+        reason: "denied: grant".into(),
+    };
+    for verb in ["subscribe", "unsubscribe", "page"] {
+        let records = |collection: serde_json::Value| json!({"topic":"records","collection":collection,"cursor":"c1"});
+        assert!(
+            matches!(
+                dispatch(verb, records(json!("notes"))),
+                Decision::Admit { .. }
+            ),
+            "{verb} notes"
+        );
+        assert!(
+            matches!(
+                dispatch(verb, json!({"topic":"records","cursor":"c1"})),
+                Decision::Admit { .. }
+            ),
+            "{verb} with no collection defaults to notes"
+        );
+        assert_eq!(
+            dispatch(verb, records(json!("care"))),
+            grant_denied,
+            "{verb} care"
+        );
+        // ["care"] is not "care": it must not slip through on notes' grant.
+        for collection in [
+            json!(["care"]),
+            json!(["notes"]),
+            json!(7),
+            json!(1.5),
+            json!({"care": true}),
+            json!(null),
+            json!(true),
+        ] {
+            assert_eq!(
+                dispatch(verb, records(collection.clone())),
+                Decision::Deny {
+                    reason: format!("invalid: {verb} collection must be a string")
+                },
+                "{verb} {collection}"
+            );
+        }
+        assert_eq!(
+            dispatch(
+                verb,
+                json!({"topic":["records"],"collection":["care"],"cursor":"c1"})
+            ),
+            Decision::Deny {
+                reason: format!("invalid: {verb} topic must be a string")
+            },
+            "{verb}: the topic is checked first"
+        );
+        assert!(
+            matches!(
+                dispatch(
+                    verb,
+                    json!({"topic":"sessions","collection":["care"],"cursor":"c1"})
+                ),
+                Decision::Admit { .. }
+            ),
+            "{verb}: only the records topic reads a collection"
+        );
+    }
+}
+#[test]
 fn cp2_story_declarations_use_team_content_and_team_reach_without_history() {
     let (_tmp, binding) = fixture();
     let root = binding.team_root.as_ref().unwrap();

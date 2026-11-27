@@ -175,6 +175,7 @@ beforeEach(() => {
   liveHub.dispose();
   vi.clearAllMocks();
   mockCheckPathExists.mockReset().mockResolvedValue(true);
+  mockRecordsPrepareView.mockReset().mockResolvedValue("records-view");
 });
 
 describe("sendPrompt", () => {
@@ -2466,6 +2467,49 @@ describe("agents read model verbs", () => {
       expect(live.subscribe).not.toHaveBeenCalled();
       expect(live.unsubscribe).not.toHaveBeenCalled();
       expect(live.page).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["subscribe", "unsubscribe", "page"])(
+    "refuses a %s records collection that is not a string, so ['care'] never becomes care",
+    async (verb) => {
+      const live = { subscribe: vi.fn(), unsubscribe: vi.fn(), page: vi.fn() };
+      const ctx = { frame: { frameId: "f1" }, liveFrame: async () => live as never } as never;
+      for (const collection of [["care"], ["notes"], 7, { care: true }, null, true])
+        await expect(
+          runBridgeCommand(verb, { topic: "records", collection, cursor: "c1" }, ctx),
+        ).rejects.toThrow(`invalid: ${verb} collection must be a string`);
+      expect(mockRecordsPrepareView).not.toHaveBeenCalled();
+      expect(live.subscribe).not.toHaveBeenCalled();
+      expect(live.unsubscribe).not.toHaveBeenCalled();
+      expect(live.page).not.toHaveBeenCalled();
+      // The check is on the records topic only.
+      await runBridgeCommand(verb, { topic: "sessions", collection: ["care"], cursor: "c1" }, ctx);
+      expect(live[verb as keyof typeof live]).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each(["subscribe", "page"])(
+    "prepares a %s records view on a string collection",
+    async (verb) => {
+      const live = { subscribe: vi.fn(), page: vi.fn() };
+      const ctx = { frame: { frameId: "f1" }, liveFrame: async () => live as never } as never;
+      for (const collection of ["care", "notes"])
+        await runBridgeCommand(verb, { topic: "records", collection, cursor: "c1" }, ctx);
+      expect(mockRecordsPrepareView.mock.calls).toEqual([
+        ["f1", "care"],
+        ["f1", "notes"],
+      ]);
+    },
+  );
+
+  it.each(["subscribe", "page"])(
+    "prepares a %s records view on notes when no collection is named, as the host defaults",
+    async (verb) => {
+      const live = { subscribe: vi.fn(), page: vi.fn() };
+      const ctx = { frame: { frameId: "f1" }, liveFrame: async () => live as never } as never;
+      await runBridgeCommand(verb, { topic: "records", cursor: "c1" }, ctx);
+      expect(mockRecordsPrepareView).toHaveBeenCalledExactlyOnceWith("f1", "notes");
     },
   );
 
