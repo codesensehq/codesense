@@ -1,5 +1,100 @@
 // SPDX-License-Identifier: MIT
-//! Release flags.
+//! Release flags: a feature that ships off until its flag is on, and that a remote kill can
+//! switch off again without a new build.
+//!
+//! There is one flag, `tiles`. It is on when both of its inputs say so:
+//!
+//! - the local setting `viewer.settings.tiles` in `app-state.json`, on only when it is the
+//!   boolean `true` (missing or any other value is off);
+//! - no remote kill. The beta and beta-staging builds read the static update manifest
+//!   (`license::static_channel`), and each read that parses caches its override in
+//!   [`CACHE_FILE`] in the app data folder. Only the literal JSON `false` at `flags.tiles`
+//!   kills; the value is unsigned and kill-only, so the manifest can switch tiles off but never
+//!   on. An unreachable or malformed manifest leaves the cache as it was. A cache that is
+//!   missing, malformed or unreadable is no kill, so it can never stop the app starting.
+//!   Internal builds read no manifest and use the local setting alone.
+//!
+//! The value is decided once at startup, before the update tick runs, and held for the session
+//! ([`TilesFlag`]), so a kill takes effect from the next launch. The front end reads the same
+//! boot value through the `tiles_enabled` command, so both sides agree for the whole session.
+//!
+//! With the flag off the app is today's app on untouched old state, and no tile code writes
+//! any file: every tile-file writer and the tile host's mount check `tilesEnabled()` and are
+//! listed in `src/shared/lib/tiles-flag-sites.json`, which a guard test checks.
+
+use std::path::Path;
+
+use serde::{Deserialize, Serialize};
+
+/// The remote overrides the last manifest read carried, in the app data folder.
+pub const CACHE_FILE: &str = "flags-cache.json";
+
+/// The app state file the local setting is read from, in the app data folder.
+const APP_STATE_FILE: &str = "app-state.json";
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Cache {
+    tiles_kill: bool,
+}
+
+/// Whether the cache holds a tiles kill. A missing, malformed or unreadable cache is no kill.
+pub fn cached_kill(app_dir: &Path) -> bool {
+    std::fs::read(app_dir.join(CACHE_FILE))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Cache>(&bytes).ok())
+        .is_some_and(|cache| cache.tiles_kill)
+}
+
+/// Caches the override a manifest read carried. A failed write is logged and never returned,
+/// so it can't fail the update check.
+// Only the beta channels' update check writes the cache.
+#[cfg_attr(all(cs_channel = "internal", not(test)), allow(dead_code))]
+pub fn write_kill(app_dir: &Path, kill: bool) {
+    let written = serde_json::to_vec(&Cache { tiles_kill: kill })
+        .map_err(std::io::Error::other)
+        .and_then(|body| {
+            std::fs::create_dir_all(app_dir)?;
+            std::fs::write(app_dir.join(CACHE_FILE), body)
+        });
+    if let Err(e) = written {
+        log::warn!(target: "flags", "could not cache the release flag overrides: {e}");
+    }
+}
+
+/// The flag from the local setting and, outside an internal build, the cached kill. An
+/// internal build never reads the cache.
+fn decide(local: bool, app_dir: &Path, internal: bool) -> bool {
+    local && (internal || !cached_kill(app_dir))
+}
+
+/// The tiles flag for a launch from the app data folder: the local setting AND NOT a cached
+/// kill (the local setting alone in an internal build).
+pub fn tiles_at_boot(app_dir: &Path) -> bool {
+    let local = std::fs::read_to_string(app_dir.join(APP_STATE_FILE))
+        .is_ok_and(|json| crate::commands::system::parse_tiles_setting(&json));
+    decide(local, app_dir, cfg!(cs_channel = "internal"))
+}
+
+/// The tiles flag this session runs with, decided once at startup.
+pub struct TilesFlag(bool);
+
+impl TilesFlag {
+    /// Reads the flag for this launch. With no app data folder, tiles are off.
+    pub fn at_boot<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Self {
+        let on = tauri::Manager::path(app)
+            .app_data_dir()
+            .is_ok_and(|dir| tiles_at_boot(&dir));
+        log::info!(target: "flags", "tiles release flag: {}", if on { "on" } else { "off" });
+        Self(on)
+    }
+}
+
+/// The tiles flag's boot value, the same for the whole session.
+#[tauri::command]
+pub fn tiles_enabled(flag: tauri::State<'_, TilesFlag>) -> bool {
+    flag.0
+}
 
 #[cfg(test)]
 mod tests {
@@ -90,6 +185,24 @@ mod tests {
         assert!(!tiles_at_boot(dir.path()));
         local_tiles(dir.path(), true);
         assert!(tiles_at_boot(dir.path()));
+    }
+
+    /// The flag is read before the update tick starts, so a manifest read in this session
+    /// can't change it, and it is managed before any command can ask for it.
+    #[test]
+    fn the_flag_is_read_at_setup_before_the_update_tick() {
+        let shipped = include_str!("lib.rs");
+        let read = shipped
+            .find("flags::TilesFlag::at_boot(")
+            .expect("setup reads the flag");
+        let tick = shipped
+            .find("license::install(app.handle())")
+            .expect("setup starts the update tick");
+        assert!(read < tick, "the flag is read before the update tick");
+        assert!(
+            shipped.contains("flags::tiles_enabled,"),
+            "the command is registered"
+        );
     }
 
     /// An internal build ignores a cached kill: it reads no manifest, so nothing it holds is
