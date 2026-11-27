@@ -9,6 +9,7 @@ import { markOfAgentStatus, markOfTerminalStatus } from "@/shared/lib/status-mar
 import type { AgentStatus } from "@/shared/lib/agent-status-config";
 import { formatMarkLabel } from "@/shared/lib/terminal-dot-words";
 import {
+  EMPTY_TERMINAL_LAYOUT,
   sessionTarget,
   type TerminalLayoutProjection,
 } from "@/shared/lib/terminal-layout-projection";
@@ -104,8 +105,15 @@ export function isRunningAgent(
 }
 
 export function useRunningAgent(sessionId: string): boolean {
-  const layout = useViewerStore((s) => s.terminalLayout);
-  return useAgentStateStore((s) => isRunningAgent(s, sessionId, layout));
+  // Only whether the layout holds the session matters, so a layout edit elsewhere is no redraw.
+  const placed = useViewerStore((s) => !!sessionTarget(s.terminalLayout, sessionId));
+  return useAgentStateStore((s) =>
+    isRunningAgent(
+      s,
+      sessionId,
+      placed ? useViewerStore.getState().terminalLayout : EMPTY_TERMINAL_LAYOUT,
+    ),
+  );
 }
 
 /** A session's agent identity, retained for history and offline presentation.

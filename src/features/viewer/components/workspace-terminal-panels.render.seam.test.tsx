@@ -423,8 +423,11 @@ describe("the tab grid's cells", () => {
     });
     await flush();
     expect(probe.mounted("cell:")).toEqual(cells(["g5"]));
-    // A column of five cells: the new cell joins the one split; the four before keep their place.
-    expect(probe.rendered("cell:").filter((id) => id !== "cell:w1/g5")).toEqual([]);
+    // The cell before the new one now has it as its close-neighbour; the three before that, and
+    // every cell's place in the column, are untouched.
+    expect(
+      probe.rendered("cell:").filter((id) => !["cell:w1/g4", "cell:w1/g5"].includes(id)),
+    ).toEqual([]);
   });
 
   it("committing a grid split's sizes draws and mounts no cell", async () => {
