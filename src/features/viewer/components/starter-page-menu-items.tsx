@@ -8,7 +8,7 @@ import { PositionedMenuItem } from "@/shared/components/positioned-context-menu"
 import { userFacingErrorMessage } from "@/shared/lib/error-message";
 import { useOrgStore } from "@/shared/stores/org-store";
 
-/** Set or clear the active team's starter page, saying how it went. Resolves
+/** Set or clear the active team's landing page, saying how it went. Resolves
  *  `true` once it is saved. */
 export async function changeTeamStarterPage(
   teamName: string,
@@ -19,20 +19,20 @@ export async function changeTeamStarterPage(
     await useOrgStore.getState().setTeamLandingPage(teamName, rel, orgSlug);
     toast.success(
       rel
-        ? `${rel} is now ${teamName}'s starter page`
-        : `Cleared ${teamName}'s starter page. It opens its README, if there is one.`,
+        ? `${rel} is ${teamName}'s landing page`
+        : `Cleared ${teamName}'s landing page. It opens its README, if there is one.`,
     );
     return true;
   } catch (e) {
-    toast.error(`Couldn't change the starter page: ${userFacingErrorMessage(e)}`);
+    toast.error(`Couldn't change the landing page: ${userFacingErrorMessage(e)}`);
     return false;
   }
 }
 
 /**
- * The file menus' starter page items for `path` (the left nav's file menu and a
- * file tab's menu): "Set as team starter page" on a file of the active team's
- * content; "Team starter page" + "Clear starter page" on the page already set.
+ * The file menus' landing page items for `path` (the left nav's file menu and a
+ * file tab's menu): "Set as team landing page" on a file of the active team's
+ * content; "Team landing page" + "Clear landing page" on the page already set.
  * A file that can't be the page keeps the item, unavailable, with why under it.
  * Renders nothing for a folder or a file outside every team's content.
  */
@@ -61,7 +61,7 @@ export function StarterPageMenuItems({
   return (
     <>
       {separator === "before" && divider}
-      <div role="group" aria-label="Team starter page" data-testid="starter-page-menu">
+      <div role="group" aria-label="Team landing page" data-testid="starter-page-menu">
         {choice.kind === "settable" && (
           <PositionedMenuItem
             className="flex items-center gap-2"
@@ -72,7 +72,7 @@ export function StarterPageMenuItems({
             }}
           >
             <House size={14} className="flex-shrink-0" aria-hidden="true" />
-            Set as team starter page
+            Set as team landing page
           </PositionedMenuItem>
         )}
         {choice.kind === "blocked" && (
@@ -84,7 +84,7 @@ export function StarterPageMenuItems({
           >
             <House size={14} className="mt-0.5 flex-shrink-0" aria-hidden="true" />
             <span className="min-w-0">
-              <span className="block">Set as team starter page</span>
+              <span className="block">Set as team landing page</span>
               <span className="block max-w-64 text-xs">{choice.reason}</span>
             </span>
           </PositionedMenuItem>
@@ -101,7 +101,7 @@ export function StarterPageMenuItems({
             >
               <Check size={14} className="mt-0.5 flex-shrink-0" aria-hidden="true" />
               <span className="min-w-0">
-                <span className="block text-foreground">Team starter page</span>
+                <span className="block text-foreground">Team landing page</span>
                 <span className="block max-w-64 text-xs">
                   {choice.declared
                     ? `Opens whenever ${team.name} has nothing open.`
@@ -120,7 +120,7 @@ export function StarterPageMenuItems({
               >
                 <RotateCcw size={14} className="mt-0.5 flex-shrink-0" aria-hidden="true" />
                 <span className="min-w-0">
-                  <span className="block">Clear starter page</span>
+                  <span className="block">Clear landing page</span>
                   <span className="block max-w-64 text-xs text-muted-foreground">
                     Falls back to the README, if there is one.
                   </span>

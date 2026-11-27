@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 /**
- * The team starter page, as the file menus offer it: "Set as team starter page"
- * on a file in the active team's content, "Team starter page" + "Clear starter
+ * The team landing page, as the file menus offer it: "Set as team landing page"
+ * on a file in the active team's content, "Team landing page" + "Clear landing
  * page" on the one already set. The page itself is `teams.yml` `landing_page:`
  * (see `team-landing-page.ts`); setting it is a registry edit
  * (`SetTeamLandingPage`), so nobody edits `teams.yml` by hand.
@@ -55,7 +55,7 @@ export function starterPageChoice(input: {
     return owner && owner !== team.name
       ? {
           kind: "blocked",
-          reason: `This file is ${owner}'s. A starter page must be one of ${team.name}'s own files.`,
+          reason: `This file is ${owner}'s. A landing page must be one of ${team.name}'s own files.`,
         }
       : { kind: "hidden" };
   }
@@ -67,8 +67,8 @@ export function starterPageChoice(input: {
     return {
       kind: "blocked",
       reason: name.startsWith(".")
-        ? "Hidden files can't be a starter page."
-        : "Files in hidden folders can't be a starter page.",
+        ? "Hidden files can't be a landing page."
+        : "Files in hidden folders can't be a landing page.",
     };
   }
   const declared = team.landing_page?.trim() || null;

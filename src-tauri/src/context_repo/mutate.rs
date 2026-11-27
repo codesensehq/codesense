@@ -346,13 +346,13 @@ pub fn pr_copy(edit: &RegistryEdit, ctx: &EditContext<'_>) -> PrCopy {
         } => match landing_page {
             Some(page) => PrCopy {
                 commit_title: format!(
-                    "Set the starter page of team {} to {}",
+                    "Set the landing page of team {} to {}",
                     team_name,
                     page.trim()
                 ),
             },
             None => PrCopy {
-                commit_title: format!("Clear the starter page of team {}", team_name),
+                commit_title: format!("Clear the landing page of team {}", team_name),
             },
         },
         RegistryEdit::SetWorkspaceRoot { workspace_root_dir } => match workspace_root_dir {
@@ -1266,7 +1266,7 @@ fn check_landing_page(
 ) -> Result<(), RegistryEditError> {
     if !crate::domain::is_content_relative(page) {
         return Err(RegistryEditError::Parse(format!(
-            "starter page {page:?} must be a file path inside the team's content folder: relative, without `..` and not a hidden file or folder"
+            "landing page {page:?} must be a file path inside the team's content folder: relative, without `..` and not a hidden file or folder"
         )));
     }
     // The resolver's own check: exact on-disk spelling (a case-insensitive disk

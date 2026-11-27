@@ -116,9 +116,9 @@ const SMALL_BUTTON =
   "inline-flex items-center gap-1 rounded border border-border bg-background px-2 py-1 text-xs hover:bg-accent disabled:opacity-50 disabled:hover:bg-background";
 
 /**
- * The team's starter page (`teams.yml` `landing_page:`): the file it opens when
+ * The team's landing page (`teams.yml` `landing_page:`): the file it opens when
  * nothing is open. Shows the declared page (or the README default) with Change
- * and Clear — the same registry edit as the file menus' "Set as team starter page".
+ * and Clear — the same registry edit as the file menus' "Set as team landing page".
  */
 function StarterPageRow({ team, org }: { team: Team; org: Org }) {
   const declared = team.landing_page?.trim() || null;
@@ -170,7 +170,7 @@ function StarterPageRow({ team, org }: { team: Team; org: Org }) {
 
   return (
     <div data-testid={`settings-starter-page-${team.name}`}>
-      <span className="mb-1 block font-medium text-muted-foreground">Starter page</span>
+      <span className="mb-1 block font-medium text-muted-foreground">Landing page</span>
       <div className="flex items-center gap-1.5">
         <House size={12} className="shrink-0 text-muted-foreground" aria-hidden="true" />
         {declared ? (
@@ -193,7 +193,7 @@ function StarterPageRow({ team, org }: { team: Team; org: Org }) {
       <p className="mt-1 text-muted-foreground">
         {readOnly
           ? `${CODESENSE_DOCS_DISPLAY_NAME} are read-only.`
-          : "Opens whenever the team has nothing open. You can also right-click any of the team's files and choose Set as team starter page."}
+          : "Opens when you open this team's folder. Not a group starter."}
       </p>
       {!readOnly && (
         <PermissionGate required="any-writer">
@@ -231,7 +231,7 @@ function StarterPageRow({ team, org }: { team: Team; org: Org }) {
               <div className="flex items-center gap-1.5">
                 <Input
                   autoFocus
-                  aria-label={`Starter page for ${team.name}, relative to its content folder`}
+                  aria-label={`Landing page for ${team.name}, relative to its content folder`}
                   placeholder="guide/start.md"
                   className="h-7 rounded px-2 text-xs md:text-xs"
                   value={draft}

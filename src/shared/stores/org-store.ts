@@ -1083,8 +1083,8 @@ export const useOrgStore = create<OrgState>((set, get) => ({
   setTeamLandingPage: async (teamName, page, targetOrg) => {
     const currentUser = getCurrentUser();
     const orgSlug = targetOrg ?? get().activeOrgSlug;
-    if (!currentUser) throw new Error("You must be signed in to change a team's starter page.");
-    if (!orgSlug) throw new Error("No active workspace to change a team's starter page in.");
+    if (!currentUser) throw new Error("You must be signed in to change a team's landing page.");
+    if (!orgSlug) throw new Error("No active workspace to change a team's landing page in.");
     const landingPage = page?.trim() || null;
     const org = get().orgs.find((o) => o.slug === orgSlug);
     const current = org?.teams.find((t) => t.name === teamName)?.landing_page ?? null;
