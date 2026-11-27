@@ -149,6 +149,32 @@ describe("guard routes: each ends without K @P1", () => {
     expect(windowFocusOwnerMock).not.toHaveBeenCalled();
   });
 
+  it("openFilePreview(K) swap with [A, B(preview)] and B active restores B and its pointer", () => {
+    useViewerStore.setState({
+      openTabs: { [TEAM]: [tab(A), tab(B, true)] },
+      activeTab: { [TEAM]: B },
+    });
+    useViewerStore.getState().openFilePreview(TEAM, REPO, K);
+    expect(useViewerStore.getState().openTabs[TEAM]).toEqual([tab(A), tab(B, true)]);
+    expect(active()).toBe(B);
+    expect(windowFocusOwnerMock).not.toHaveBeenCalled();
+  });
+
+  it("a refused open leaves navHistory and navIndex unchanged", () => {
+    const navHistory = { [TEAM]: [A, B] };
+    const navIndex = { [TEAM]: 0 };
+    useViewerStore.setState({ navHistory, navIndex });
+    useViewerStore.getState().openFile(TEAM, REPO, K);
+    useViewerStore.getState().openFilePreview(TEAM, REPO, K);
+    useViewerStore.getState().setActiveTab(TEAM, null, K);
+    expect(useViewerStore.getState().navHistory).toEqual(navHistory);
+    expect(useViewerStore.getState().navIndex).toEqual(navIndex);
+    useViewerStore.setState({ navHistory: { [TEAM]: [K, A] }, navIndex: { [TEAM]: 1 } });
+    useViewerStore.getState().navigateBack(TEAM, REPO);
+    expect(useViewerStore.getState().navHistory).toEqual({ [TEAM]: [K, A] });
+    expect(useViewerStore.getState().navIndex).toEqual({ [TEAM]: 1 });
+  });
+
   it("setActiveTab's add-if-missing branch", () => {
     useViewerStore.getState().setActiveTab(TEAM, null, K);
     expect(paths()).toEqual([A, B]);
@@ -182,24 +208,27 @@ describe("guard routes: each ends without K @P1", () => {
     expect(paths()).not.toContain(K);
   });
 
-  it("setTabDiff renaming a tab onto K", () => {
-    // `main` holds a tab for K only while K is unsaved here; a rename keeps it then.
+  it("setTabDiff on K", () => {
+    // `setTabDiff` changes a tab's name, never its path. `main` holds a tab for K only
+    // while K is unsaved here, and renaming it keeps it then.
     useViewerStore.setState({
       openTabs: { [TEAM]: [tab(A), tab(K)] },
       editingDirtyPaths: { [TEAM]: [K] },
     });
     useViewerStore.getState().setTabDiff(TEAM, K, { shortSha: "abc1234" } as never);
     expect(paths()).toEqual([A, K]);
+    expect(useViewerStore.getState().openTabs[TEAM][1].name).toBe("k @ abc1234");
     useViewerStore.getState().setTabDiff(TEAM, A, { shortSha: "abc1234" } as never);
     expect(paths()).toEqual([A, K]);
   });
 
-  it("saving K in main drops it", () => {
+  it("dirty rescan: K kept while unsaved is dropped once it leaves editingDirtyPaths", () => {
     useViewerStore.setState({
       openTabs: { [TEAM]: [tab(A), tab(K)] },
       activeTab: { [TEAM]: K },
       editingDirtyPaths: { [TEAM]: [K] },
     });
+    expect(paths()).toEqual([A, K]);
     useViewerStore.getState().setEditingDirtyPaths(TEAM, []);
     expect(paths()).toEqual([A]);
     expect(active()).toBe(A);
@@ -240,17 +269,17 @@ describe("guard routes: each ends without K @P1", () => {
   it("applyOwnedViewerPrefs, the reset and the apply paths", () => {
     applyOwnedViewerPrefs({}, true);
     expect(paths()).not.toContain(K);
-    useViewerStore.setState({
-      openTabs: { [TEAM]: [tab(A), tab(B)] },
-      activeTab: { [TEAM]: A },
-      stateLoaded: true,
-    });
+    // `main`'s tabs match the defaults, so the saved prefs apply with no pending edit.
+    useViewerStore.setState({ openTabs: {}, activeTab: {}, stateLoaded: true });
     applyOwnedViewerPrefs({
       openTabs: { [TEAM]: [tab(A), tab(K)] },
       activeTab: { [TEAM]: K },
     });
     expect(paths()).not.toContain(K);
     expect(active()).not.toBe(K);
+    // Today's behaviour, pinned until an open carries its origin: K becoming active
+    // after load reads as a deliberate open and focuses the owner.
+    expect(windowFocusOwnerMock).toHaveBeenCalledWith(K_KEY);
     useViewerStore.setState({ stateLoaded: false });
   });
 
@@ -261,6 +290,9 @@ describe("guard routes: each ends without K @P1", () => {
     } as Partial<ViewerState>);
     expect(paths()).toEqual([A]);
     expect(active()).toBe(A);
+    // Today's behaviour, pinned until an open carries its origin: the patch making K
+    // active after load focuses the owner.
+    expect(windowFocusOwnerMock).toHaveBeenCalledWith(K_KEY);
   });
 
   it("the Routines tab retirement onto a satellite-owned Agents tab", () => {
@@ -318,6 +350,17 @@ describe("guard scope and exceptions @P1", () => {
     own();
     expect(paths()).toEqual([A]);
     expect(active()).toBe(A);
+    expect(windowFocusOwnerMock).not.toHaveBeenCalled();
+  });
+
+  it("neighbour fallback: a map update removing the active K activates its neighbour", () => {
+    useViewerStore.setState({
+      openTabs: { [TEAM]: [tab(A), tab(K), tab(B)] },
+      activeTab: { [TEAM]: K },
+    });
+    own();
+    expect(paths()).toEqual([A, B]);
+    expect(active()).toBe(B);
     expect(windowFocusOwnerMock).not.toHaveBeenCalled();
   });
 });

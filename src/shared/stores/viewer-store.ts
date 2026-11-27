@@ -6961,6 +6961,7 @@ let paneLayoutRevision = 0;
  * - With an empty owner map (no satellite holds anything) the partial passes through
  *   untouched. Otherwise only buckets whose `openTabs` or `activeTab` changed are
  *   scanned, and when nothing is removed the same references come back.
+ * - A preview swap onto a removed key puts back the preview tab it displaced.
  * - A removed key that was `activeTab[tk]` is repaired first: the bucket's previous
  *   active tab is restored when it is still open. Otherwise a deliberate open drops the
  *   pointer, and any other write (a map update, the hydrate) activates the removed tab's
@@ -6968,6 +6969,8 @@ let paneLayoutRevision = 0;
  *   otherwise rebuild the tab.
  * - A deliberate open (after load, the key became active and its tab was not a preview)
  *   focuses the owner window. A preview swap, the hydrate and a map update focus nothing.
+ *   A refused open after load that moved the bucket's history onto the key keeps its
+ *   `navHistory` and `navIndex` as they were.
  * - A path that is dirty in `main` is kept and logged: the one case where an item is
  *   open in two windows. Once it is saved, the guard drops it.
  */
@@ -6976,6 +6979,21 @@ interface SatelliteFilterResult {
   activeTab: Record<string, string>;
   /** The key a deliberate open asked for, now held by a satellite. */
   focus: ItemKey | null;
+  /** Bucket → the key an open after load asked for and was refused. */
+  refused: Map<string, string>;
+}
+
+/** The tab that the swap onto a removed preview tab displaced: `prev`'s preview tab,
+ *  when this write dropped it. */
+function displacedPreview(
+  before: TabState[] | undefined,
+  tabs: TabState[],
+  removed: TabState[],
+): TabState | undefined {
+  if (!before || before === tabs || !removed.some((t) => t.preview)) return undefined;
+  const preview = before.find((t) => t.preview);
+  if (!preview || tabs.some((t) => t.path === preview.path)) return undefined;
+  return preview;
 }
 
 function filterSatelliteTabs(
@@ -6990,6 +7008,7 @@ function filterSatelliteTabs(
   let nextOpen = openTabs;
   let nextActive = activeTab;
   let focus: ItemKey | null = null;
+  const refused = new Map<string, string>();
   for (const tk of buckets) {
     const paths = owned.get(tk);
     if (!paths) continue;
@@ -7000,10 +7019,14 @@ function filterSatelliteTabs(
       return true;
     };
     const tabs = nextOpen[tk];
-    const filtered = tabs?.filter((t) => !paths.has(t.path) || kept(t.path));
-    if (tabs && filtered && filtered.length !== tabs.length) {
+    const removed = tabs?.filter((t) => paths.has(t.path) && !kept(t.path)) ?? [];
+    if (tabs && removed.length > 0) {
+      const restore = displacedPreview(prev.openTabs[tk], tabs, removed);
       if (nextOpen === openTabs) nextOpen = { ...openTabs };
-      nextOpen[tk] = filtered;
+      nextOpen[tk] = tabs.flatMap((t) => {
+        if (!removed.includes(t)) return [t];
+        return restore && t.preview ? [restore] : [];
+      });
     }
     const active = nextActive[tk];
     if (active === undefined || !paths.has(active) || dirty?.includes(active)) continue;
@@ -7020,11 +7043,12 @@ function filterSatelliteTabs(
       nextActive[tk] = neighborPathAfterClose(remaining, index);
     } else delete nextActive[tk];
     if (deliberate) focus = itemKeyForTab(tk, { path: active });
+    if (allowFocus && prev.stateLoaded && active !== before) refused.set(tk, active);
   }
   if (nextOpen === openTabs && nextActive === activeTab) {
-    return { openTabs, activeTab, focus: null };
+    return { openTabs, activeTab, focus: null, refused };
   }
-  return { ...reconcileActiveTabs(nextOpen, nextActive), focus };
+  return { ...reconcileActiveTabs(nextOpen, nextActive), focus, refused };
 }
 
 /** The buckets whose `openTabs`, `activeTab` or `editingDirtyPaths` entry differs from
@@ -7045,6 +7069,23 @@ function changedBuckets(
   scan(activeTab, prev.activeTab);
   scan(dirtyPaths, prev.editingDirtyPaths);
   return changed;
+}
+
+/** `next`'s team-keyed `map` with each refused bucket put back as `prev` held it. */
+function keepRefusedBuckets<T>(
+  next: Record<string, T>,
+  prev: Record<string, T>,
+  refused: Iterable<string>,
+): Record<string, T> {
+  if (next === prev) return next;
+  let out = next;
+  for (const tk of refused) {
+    if (out[tk] === prev[tk]) continue;
+    if (out === next) out = { ...next };
+    if (tk in prev) out[tk] = prev[tk];
+    else delete out[tk];
+  }
+  return out;
 }
 
 function focusOwner(key: ItemKey): void {
@@ -7080,10 +7121,27 @@ export const guardSatelliteItems =
         changedBuckets(prev, openTabs, activeTab, dirtyPaths),
         true,
       );
-      const filtered =
+      let filtered: Partial<ViewerState> =
         result.openTabs === openTabs && result.activeTab === activeTab
           ? next
           : { ...next, openTabs: result.openTabs, activeTab: result.activeTab };
+      const navHistory = next.navHistory ?? prev.navHistory;
+      const navIndex = next.navIndex ?? prev.navIndex;
+      const refusedNav = [...result.refused]
+        .filter(([tk, key]) => navHistory[tk]?.[navIndex[tk] ?? -1] === key)
+        .map(([tk]) => tk);
+      if (refusedNav.length > 0) {
+        if (next.navHistory)
+          filtered = {
+            ...filtered,
+            navHistory: keepRefusedBuckets(next.navHistory, prev.navHistory, refusedNav),
+          };
+        if (next.navIndex)
+          filtered = {
+            ...filtered,
+            navIndex: keepRefusedBuckets(next.navIndex, prev.navIndex, refusedNav),
+          };
+      }
       (set as ViewerSet)(filtered as ViewerState, replace as true);
       if (result.focus) focusOwner(result.focus);
     }) as ViewerSet;
