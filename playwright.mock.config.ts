@@ -41,7 +41,7 @@ export default defineConfig({
     { name: "chromium", testIgnore: /tiles\//, use: { ...devices["Desktop Chrome"] } },
     {
       name: "webkit",
-      testMatch: /(?:agent-list-qa-live|pane-save)\.spec\.ts/,
+      testMatch: /(?:agent-list-qa-live|pane-save|perf-baseline)\.spec\.ts/,
       testIgnore: /tiles\//,
       use: { ...devices["Desktop Safari"] },
     },
