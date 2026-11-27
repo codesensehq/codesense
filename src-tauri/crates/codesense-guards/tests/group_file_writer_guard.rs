@@ -68,8 +68,17 @@ fn names_test_token(tree: &TokenTree) -> bool {
     }
 }
 
+/// Whether `text` names a path into a group folder. A Rust source path such as
+/// `src/groups/shape.rs` (a generated file's header names its source) is not one.
 fn group_literal(text: &str) -> bool {
-    text.contains("config/groups") || text.contains("groups/")
+    text.contains("config/groups")
+        || text.match_indices("groups/").any(|(at, found)| {
+            let rest = &text[at + found.len()..];
+            let name_len = rest
+                .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+                .unwrap_or(rest.len());
+            !(name_len > 0 && rest[name_len..].starts_with(".rs"))
+        })
 }
 
 struct Scan<'a> {
@@ -263,7 +272,8 @@ fn planted_writers_are_caught() {
 
 #[test]
 fn the_store_tests_and_allowed_uses_pass() {
-    let writer = r#"fn f(p: &std::path::Path) { std::fs::write(p.join("config/groups/x.json"), b""); }"#;
+    let writer =
+        r#"fn f(p: &std::path::Path) { std::fs::write(p.join("config/groups/x.json"), b""); }"#;
     assert!(violations(STORE, writer).is_empty());
     assert!(violations("groups/store_tests.rs", writer).is_empty());
     let in_test = format!("#[cfg(test)] mod tests {{ {writer} }}");
@@ -276,8 +286,25 @@ fn the_store_tests_and_allowed_uses_pass() {
         !violations("context_repo/scratch_space.rs", writer).is_empty(),
         "an allowed file still may not name a group file"
     );
+    let header =
+        r#"const H: &str = "// Generated from src-tauri/src/groups/shape.rs. Do not edit.\n";"#;
+    assert!(
+        violations("groups/shape.rs", header).is_empty(),
+        "a source path is no group path"
+    );
+    for still in [
+        r#"const P: &str = "groups/shape.json";"#,
+        r#"const P: &str = "src/groups/shape.rs and groups/main.json";"#,
+        r#"const P: &str = "groups/";"#,
+    ] {
+        assert!(
+            !violations("elsewhere.rs", still).is_empty(),
+            "missed: {still}"
+        );
+    }
     let documented = "/// Writes `config/groups/<id>.json`.\nfn f() {}";
     assert!(violations("elsewhere.rs", documented).is_empty());
-    let unrelated = r#"fn f() { let _ = serde_json::json!({ "groups": [] }); let _ = "workspace groups"; }"#;
+    let unrelated =
+        r#"fn f() { let _ = serde_json::json!({ "groups": [] }); let _ = "workspace groups"; }"#;
     assert!(violations("elsewhere.rs", unrelated).is_empty());
 }
