@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 const readInboxMedia = vi.hoisted(() => vi.fn());
 const loadInboxMedia = vi.hoisted(() => vi.fn());
@@ -160,8 +160,7 @@ describe("MessageBody image attachments", () => {
     );
     const load = screen.getByRole("button", { name: /^Load GIF from/ });
     fireEvent.click(load);
-    const card = screen.getByTestId("ibx-media-card");
-    expect(await within(card).findByText("media is off in team config")).toBeTruthy();
+    expect(await screen.findByText("media is off in team config")).toBeTruthy();
     expect((load as HTMLButtonElement).disabled).toBe(false);
   });
 

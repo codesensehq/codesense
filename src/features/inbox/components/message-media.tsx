@@ -107,11 +107,9 @@ export function MessageMedia({
   sender?: MediaSender;
   maxHeight?: number;
 }) {
-  // The attachment the person tapped Load on, and the load's error once refused.
-  const [tapped, setTapped] = useState<{
-    at: InboxMediaAttachment;
-    error: string | null;
-  } | null>(null);
+  // Whether the person tapped Load here. The card's status line is then the live region; once
+  // the card gives way to the image (or the figure it loads into), `region` takes over.
+  const [tapped, setTapped] = useState(false);
   const sha256 = a.sha256 ?? "";
   const cached = a.state === "cached" && /^[a-f0-9]{64}$/.test(sha256);
   const media = cached ? (
@@ -126,30 +124,21 @@ export function MessageMedia({
   ) : a.state === "loading" ? (
     <MediaFigure a={a} url={null} failed={false} maxHeight={maxHeight} />
   ) : (
-    <MediaCard
-      key={a.state}
-      a={a}
-      loader={loader}
-      onLoad={(error) => setTapped({ at: a, error })}
-    />
+    <MediaCard a={a} loader={loader} live={tapped} onLoad={() => setTapped(true)} />
   );
-  const announcement = !tapped
-    ? null
-    : cached
-      ? `${mediaKind(a)} loaded: ${a.alt}`
-      : tapped.error
-        ? tapped.error
-        : a.state === "failed" && a !== tapped.at
-          ? `Couldn't load this ${mediaKind(a) === "GIF" ? "GIF" : "image"}. ${mediaReason(a, loader.teamLabel)}`
-          : "Loading GIF…";
+  const afterCard = tapped && (cached || a.state === "loading");
+  const announcement = cached ? `${mediaKind(a)} loaded: ${a.alt}` : "Loading GIF…";
+  // The region mounts empty and is filled after, so a screen reader hears what changed.
+  const region = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (region.current) region.current.textContent = announcement;
+  }, [afterCard, announcement]);
   // GIPHY's terms ask for a conspicuous "Powered by GIPHY", in every state.
   return (
     <>
       {media}
-      {announcement !== null && (
-        <div className="sr-only" aria-live="polite" data-testid="ibx-media-live">
-          {announcement}
-        </div>
+      {afterCard && (
+        <div ref={region} className="sr-only" aria-live="polite" data-testid="ibx-media-live" />
       )}
       {attributionOf(a) === "giphy" && <div className="ibx-media-attr">Powered by GIPHY</div>}
     </>
@@ -430,18 +419,27 @@ function MediaImage({
 
 /** An image not shown (held, blocked or failed): its alt text, why, and Load, Retry or its
  *  source page. `tapToLoad` (the chat's held image) shows as the inbox's `pending`. `onLoad`
- *  hears each tap, then its error if the load is refused. */
+ *  hears each tap; `live` makes the status line a live region, for the card tapped. */
 function MediaCard({
   a,
   loader,
+  live = false,
   onLoad,
 }: {
   a: InboxMediaAttachment;
   loader: MediaLoader;
-  onLoad?: (error: string | null) => void;
+  live?: boolean;
+  onLoad?: () => void;
 }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // A new state (the load settled as failed, say) ends this card's own load.
+  const [shown, setShown] = useState(a.state);
+  if (shown !== a.state) {
+    setShown(a.state);
+    setLoading(false);
+    setError(null);
+  }
   const state = a.state === "tapToLoad" ? "pending" : a.state;
   const icon = state === "failed" ? CircleAlert : state === "blocked" ? ImageOff : ImageIcon;
   // Media that is off in the team's config can't be loaded from here.
@@ -451,13 +449,12 @@ function MediaCard({
   const load = () => {
     setLoading(true);
     setError(null);
-    onLoad?.(null);
+    onLoad?.();
     // Once loaded, the stored row changes and the view refetches it as cached.
     loader.load().catch((e: unknown) => {
       const message = e instanceof Error ? e.message : String(e);
       setError(message);
       setLoading(false);
-      onLoad?.(message);
     });
   };
   const reason = mediaReason({ ...a, state }, loader.teamLabel, loader.machine);
@@ -470,7 +467,7 @@ function MediaCard({
       <Ico icon={icon} sm />
       <div className="alt">{a.alt}</div>
       <div className="meta">
-        <span>
+        <span aria-live={live ? "polite" : undefined}>
           {loading ? (
             "Loading GIF…"
           ) : error ? (
