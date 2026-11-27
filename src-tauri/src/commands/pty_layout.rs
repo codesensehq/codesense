@@ -8,7 +8,9 @@
 //! `terminal-layout-changed`, stamped with its host's epoch.
 
 use codesense_host_proto::agent_cli::NativeLaunch;
-use codesense_pty_core::domain::{ClientBootId, PtySessionId, TerminalDomain, WorkspaceKey};
+use codesense_pty_core::domain::{
+    ClientBootId, PtySessionId, TerminalDomain, ViewerId, WorkspaceKey,
+};
 use codesense_pty_core::layout::{
     CloseMode, CloseOutcome, GridState, LayoutError, LayoutSnapshot, OpenTab, Placement, TabEntry,
     TagPatch, Tags, ViewHint, WorkspaceDescriptor,
@@ -506,13 +508,11 @@ pub struct OpenTabRequest {
 #[tauri::command]
 pub async fn terminal_layout_snapshot(
     app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
     client_boot_id: ClientBootId,
 ) -> Result<Vec<super::machines::RuntimeLayoutReply>, String> {
-    let read = pty_viewer::layout_read(
-        pty_viewer::boots(),
-        &pty_viewer::main_viewer(),
-        &client_boot_id,
-    );
+    let viewer = pty_viewer::window_viewer(&window)?;
+    let read = pty_viewer::layout_read(pty_viewer::boots(), &viewer, &client_boot_id);
     if read.announces() {
         let _ = app.emit("sessions-source-changed", ());
         // A new webview boot is the frontend re-registering: re-read the
@@ -527,7 +527,7 @@ pub async fn terminal_layout_snapshot(
     }
     let read_app = app.clone();
     let replies = await_blocking("terminal_layout_snapshot", move || {
-        pty_backend::admitted_layout_snapshots(&read_app, &client_boot_id)
+        pty_backend::admitted_layout_snapshots_for(&read_app, &viewer, &client_boot_id, true)
     })
     .await?;
     if !read.app_wide {
@@ -592,8 +592,10 @@ pub(crate) async fn webview_layout_snapshots(
 #[tauri::command]
 pub async fn terminal_open_tab(
     app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
     request: OpenTabRequest,
 ) -> Result<TabEntry, String> {
+    let viewer = pty_viewer::window_viewer(&window)?;
     let OpenTabRequest {
         machine_id,
         workspace,
@@ -611,7 +613,7 @@ pub async fn terminal_open_tab(
     refuse_launch_tags(tags.keys())?;
     let open = OpenTab {
         cwd,
-        viewer: pty_viewer::main_viewer(),
+        viewer,
         workspace,
         session,
         descriptor,
@@ -667,7 +669,12 @@ async fn webview_layout_replies(
     };
     Some(
         await_blocking(label, move || {
-            pty_backend::admitted_layout_snapshots_of(&app, &boot, machines)
+            pty_backend::admitted_layout_snapshots_for(
+                &app,
+                &pty_viewer::main_viewer(),
+                &boot,
+                machines,
+            )
         })
         .await,
     )
@@ -984,6 +991,19 @@ where
 #[tauri::command]
 pub async fn terminal_close_tab(
     app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+    session: RuntimeSessionReference,
+    mode: CloseMode,
+) -> Result<CloseOutcome, String> {
+    let viewer = pty_viewer::window_viewer(&window)?;
+    close_tab_as(app, viewer, session, mode).await
+}
+
+/// Close `session`'s entry for `viewer`: the calling window's, or `main`'s for a caller
+/// with no window (an MCP verb).
+pub(crate) async fn close_tab_as(
+    app: tauri::AppHandle,
+    viewer: ViewerId,
     session: RuntimeSessionReference,
     mode: CloseMode,
 ) -> Result<CloseOutcome, String> {
@@ -996,7 +1016,7 @@ pub async fn terminal_close_tab(
         app,
         "terminal_close_tab",
         session,
-        move |host, session, _| host.close_tab(&pty_viewer::main_viewer(), session, mode),
+        move |host, session, _| host.close_tab(&viewer, session, mode),
     )
     .await;
     // A remote tab closed for good is no longer one of this app's launches; one
@@ -1073,9 +1093,11 @@ pub async fn terminal_move_tab(
 #[tauri::command]
 pub async fn terminal_set_active(
     app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
     workspace: super::machines::RuntimeWorkspaceReference,
     session: Option<RuntimeSessionReference>,
 ) -> Result<(), String> {
+    let viewer = pty_viewer::window_viewer(&window)?;
     if let (super::machines::RuntimeWorkspaceReference::Admitted(workspace), Some(session)) =
         (&workspace, &session)
     {
@@ -1096,11 +1118,7 @@ pub async fn terminal_set_active(
                 session,
                 move |host, session, remote| {
                     within_remote_workspace(remote, workspace.workspace())?;
-                    host.set_active(
-                        &pty_viewer::main_viewer(),
-                        workspace.workspace(),
-                        Some(session),
-                    )
+                    host.set_active(&viewer, workspace.workspace(), Some(session))
                 },
             )
             .await
@@ -1110,7 +1128,7 @@ pub async fn terminal_set_active(
                 app,
                 "terminal_set_active",
                 workspace,
-                move |host, workspace| host.set_active(&pty_viewer::main_viewer(), workspace, None),
+                move |host, workspace| host.set_active(&viewer, workspace, None),
             )
             .await
         }
@@ -1135,14 +1153,16 @@ pub async fn terminal_set_grid(
 #[tauri::command]
 pub async fn terminal_set_view_hint(
     app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
     session: RuntimeSessionReference,
     hint: ViewHint,
 ) -> Result<(), String> {
+    let viewer = pty_viewer::window_viewer(&window)?;
     in_session_host(
         app,
         "terminal_set_view_hint",
         session,
-        move |host, session, _| host.set_view_hint(&pty_viewer::main_viewer(), session, hint),
+        move |host, session, _| host.set_view_hint(&viewer, session, hint),
     )
     .await
 }

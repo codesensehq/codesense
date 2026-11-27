@@ -2585,6 +2585,27 @@ pub fn unsubscribe<R: Runtime>(app: &AppHandle<R>, local: u64) -> Result<(), Str
     Ok(())
 }
 
+/// Every terminal host connected now, for a request each must hear (a closed window's viewer
+/// detach): the in-process host, this Mac's sidecar when connected, and each connected
+/// machine's server. Never waits on a connection being made.
+pub(crate) fn connected_viewer_hosts<R: Runtime>(
+    app: &AppHandle<R>,
+) -> Vec<Arc<dyn crate::commands::pty_viewer::ViewerHost>> {
+    let mut hosts: Vec<Arc<dyn crate::commands::pty_viewer::ViewerHost>> = Vec::new();
+    if let Some(local) = Hosts::of(app) {
+        hosts.push(local.in_process);
+        if let Ok(Some(client)) = local.sidecar {
+            hosts.push(client);
+        }
+    }
+    if let Some(manager) = app.try_state::<HostConnectionManager>() {
+        for client in manager.connected_clients() {
+            hosts.push(client);
+        }
+    }
+    hosts
+}
+
 /// Every host's layout as the app's viewer sees it, once a connection being
 /// made to the sidecar settles.
 pub fn layout_snapshots<R: Runtime>(
@@ -2605,16 +2626,19 @@ pub(crate) fn admitted_layout_snapshots<R: Runtime>(
     app: &AppHandle<R>,
     boot: &ClientBootId,
 ) -> Result<Vec<RuntimeLayoutReply>, String> {
-    admitted_layout_snapshots_of(app, boot, true)
+    admitted_layout_snapshots_for(app, &main_viewer(), boot, true)
 }
 
-/// [`admitted_layout_snapshots`], of every admitted host (`machines`) or of this Mac's
-/// own runtimes only.
-pub(crate) fn admitted_layout_snapshots_of<R: Runtime>(
+/// [`admitted_layout_snapshots`] as `viewer` sees them, of every admitted host (`machines`)
+/// or of this Mac's own runtimes only. Only `main`'s reads refresh the machines' cached
+/// layouts: those caches are what `main` shows.
+pub(crate) fn admitted_layout_snapshots_for<R: Runtime>(
     app: &AppHandle<R>,
+    viewer: &ViewerId,
     boot: &ClientBootId,
     machines: bool,
 ) -> Result<Vec<RuntimeLayoutReply>, String> {
+    let caches = crate::commands::pty_viewer::is_main_viewer(viewer);
     let local = app
         .try_state::<SessionServerState>()
         .ok_or("local runtime unavailable")?;
@@ -2636,7 +2660,7 @@ pub(crate) fn admitted_layout_snapshots_of<R: Runtime>(
             resolve_member_backend(app, target, true).and_then(|backend| {
                 let snapshot = backend
                     .domain
-                    .layout_snapshot(&main_viewer(), boot)
+                    .layout_snapshot(viewer, boot)
                     .map_err(|error| error.to_string())?;
                 if snapshot.server_id.as_str() != target.namespace.server_id
                     || snapshot.epoch != target.namespace.epoch
@@ -2644,7 +2668,7 @@ pub(crate) fn admitted_layout_snapshots_of<R: Runtime>(
                     return Err("snapshot does not belong to admitted runtime".into());
                 }
                 validate_member_target(app, target)?;
-                if let Some(token) = &backend.remote_token {
+                if let Some(token) = backend.remote_token.as_ref().filter(|_| caches) {
                     let manager = app.state::<HostConnectionManager>();
                     manager
                         .cache_verified_layout(token, snapshot.clone())

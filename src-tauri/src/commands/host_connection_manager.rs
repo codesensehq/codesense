@@ -3949,6 +3949,26 @@ impl HostConnectionManager {
             .map_err(|_| ConnectedBackendError::IdentityMismatch)
     }
 
+    /// Every connected machine's terminal-server client, for a request each must hear (a
+    /// closed window's viewer detach).
+    pub(crate) fn connected_clients(&self) -> Vec<Arc<SessionServerClient>> {
+        let connected: Vec<String> = {
+            let core = lock(&self.core);
+            core.machines
+                .iter()
+                .filter(|(_, gate)| {
+                    gate.present && matches!(gate.state, HostConnectionState::Connected { .. })
+                })
+                .map(|(id, _)| id.clone())
+                .collect()
+        };
+        connected
+            .iter()
+            .filter_map(|machine_id| self.connected_backend(machine_id).ok())
+            .map(|snapshot| snapshot.client())
+            .collect()
+    }
+
     pub(crate) fn verified_remote_layouts(
         &self,
         viewer: &ViewerId,

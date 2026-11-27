@@ -1283,6 +1283,9 @@ type Pending = Mutex<HashMap<u64, mpsc::Sender<Result<Reply, String>>>>;
 /// Told when a connection to the sidecar ends.
 pub type OnLost = Arc<dyn Fn() + Send + Sync>;
 
+/// Told of each connection to this instance's sidecar once it is installed.
+pub type OnConnected = Arc<dyn Fn(&Arc<SessionServerClient>) + Send + Sync>;
+
 /// Where a connection finds its [`OnLost`] hook as it ends.
 pub(crate) type LostHook = Arc<Mutex<Option<OnLost>>>;
 
@@ -4894,6 +4897,8 @@ pub struct SessionServerState {
     /// Told whenever a connection ends — whichever connection, whenever the
     /// hook was set.
     on_lost: Arc<Mutex<Option<OnLost>>>,
+    /// Told of each connection once it is installed, whenever the hook was set.
+    on_connected: Mutex<Option<OnConnected>>,
     /// A background reconnect is running.
     reconnecting: AtomicBool,
     /// This app process started the sidecar it is connected to (nothing was
@@ -4975,6 +4980,11 @@ impl SessionServerState {
     /// Tell `lost` whenever a connection made from now on ends.
     pub fn on_lost(&self, lost: OnLost) {
         *lock(&self.on_lost) = Some(lost);
+    }
+
+    /// Tell `connected` of each connection installed from now on.
+    pub fn on_connected(&self, connected: OnConnected) {
+        *lock(&self.on_connected) = Some(connected);
     }
 
     /// Connect to the sidecar of the instance rooted at `root`.
@@ -5126,7 +5136,12 @@ impl SessionServerState {
     /// one before (a restart outranks a resume not yet taken).
     fn adopt(&self, client: Arc<SessionServerClient>) -> Result<(), ConnectError> {
         self.admission
-            .install(&client, || self.install_client(client.clone()))
+            .install(&client, || self.install_client(client.clone()))?;
+        let connected = lock(&self.on_connected).clone();
+        if let Some(connected) = connected {
+            connected(&client);
+        }
+        Ok(())
     }
 
     fn install_client(&self, client: Arc<SessionServerClient>) {

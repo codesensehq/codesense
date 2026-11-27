@@ -447,6 +447,37 @@ fn rm5aa_local_candidate_history_is_bounded_across_reconnects() {
     first.sever();
 }
 
+/// The connected hook hears each connection once it is installed, and not one refused.
+#[test]
+fn the_connected_hook_hears_each_installed_connection() {
+    let root = short_root();
+    let _sidecar = TestServer::start_at(root.path());
+    let state = SessionServerState::default();
+    let heard = Arc::new(Mutex::new(Vec::new()));
+    let hears = heard.clone();
+    state.on_connected(Arc::new(move |client: &Arc<SessionServerClient>| {
+        lock(&hears).push(client.clone());
+    }));
+    let first = state
+        .connect(root.path(), Arc::new(RecordingSink::default()))
+        .unwrap();
+    assert!(lock(&heard).is_empty(), "not yet installed");
+    state.adopt(first.clone()).unwrap();
+    assert_eq!(lock(&heard).len(), 1);
+    assert!(Arc::ptr_eq(&lock(&heard)[0], &first));
+
+    let lost = state
+        .connect(root.path(), Arc::new(RecordingSink::default()))
+        .unwrap();
+    lost.sever();
+    assert!(wait_until(
+        || lock(&state.admission.core).candidates.len() == 1
+    ));
+    assert!(state.adopt(lost).is_err());
+    assert_eq!(lock(&heard).len(), 1, "a refused connection is not heard");
+    first.sever();
+}
+
 #[test]
 fn rm5aa_local_candidate_cleanup_preserves_live_pending_until_install() {
     let root = short_root();

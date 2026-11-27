@@ -15,7 +15,6 @@ use crate::commands::pty_backend::{
     resolve_in_process, resolve_live_session_backend, resolve_session_backend,
     resolve_spawn_backend, spawn_on_session_server, SpawnPlacement,
 };
-use crate::commands::pty_viewer::main_viewer;
 use crate::terminal::warm_pool::WarmPoolState;
 
 pub(crate) fn transfer_fallback_scope<R: tauri::Runtime>(
@@ -284,29 +283,27 @@ pub mod admitted_commands {
     #[tauri::command]
     pub async fn resize_pty(
         app: tauri::AppHandle,
+        window: tauri::WebviewWindow,
         session_id: RuntimeSessionReference,
         cols: u16,
         rows: u16,
     ) -> Result<(), String> {
+        let viewer = crate::commands::pty_viewer::window_viewer(&window)?;
         let remote = super::super::pty_layout::authorize_human_terminal(&app, &session_id).await?;
-        super::resize_session_as(app, session_id, main_viewer(), cols, rows, remote).await
+        super::resize_session_as(app, session_id, viewer, cols, rows, remote).await
     }
 
     #[tauri::command]
     pub async fn subscribe_terminal(
         app: tauri::AppHandle,
+        window: tauri::WebviewWindow,
         pty_id: RuntimeSessionReference,
         stream: Option<u64>,
     ) -> Result<SubscribeResponse, String> {
+        let viewport = crate::commands::pty_viewer::window_viewport(&window)?;
         let remote = super::super::pty_layout::authorize_human_terminal(&app, &pty_id).await?;
         await_blocking("subscribe_terminal", move || {
-            let result = subscribe_reference_authorized(
-                &app,
-                &pty_id,
-                &crate::commands::pty_viewer::viewport_for(&main_viewer()),
-                stream,
-                remote,
-            )?;
+            let result = subscribe_reference_authorized(&app, &pty_id, &viewport, stream, remote)?;
             Ok(SubscribeResponse {
                 private_authority_epoch: if remote {
                     crate::commands::pty_backend::resolve_session_reference(&app, &pty_id, true)?
