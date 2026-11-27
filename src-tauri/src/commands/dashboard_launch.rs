@@ -3703,6 +3703,38 @@ pub(crate) fn release_for_session_and_notify<R: tauri::Runtime>(
     released
 }
 
+/// Close of a session that is already gone: release its registry entry, announce it and
+/// audit it as the kill it is, so the row does not outlive its tab. Only a local terminal
+/// session the probe knows has no running child qualifies. An alive or unanswered probe
+/// keeps the entry (it may still run), a headless run has no terminal child for the probe
+/// to see, and a remote tab is its machine's to remove.
+pub(crate) fn release_if_gone<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    state: &DashboardLaunchState,
+    probe: &dyn liveness::SessionProbe,
+    session_id: &str,
+) -> Option<ReleasedSession> {
+    let local_terminal = state
+        .with_entry(session_id, |entry| {
+            entry.remote_shell.is_none() && entry.kind != KIND_HEADLESS
+        })
+        .unwrap_or(false);
+    if !local_terminal
+        || liveness::probe_one(probe, session_id)
+            != super::pty_backend::Liveness::Known(false)
+    {
+        return None;
+    }
+    let released = release_for_session_and_notify(app, state, session_id)?;
+    agent_audit::append(
+        AuditEvent::Kill,
+        &released.handle,
+        Some(session_id),
+        released.kind,
+    );
+    Some(released)
+}
+
 fn chat_workspace_for_entry(entry: &LaunchEntry) -> Option<String> {
     if let Some(remote) = &entry.remote_shell {
         return super::workspace_chat::resolve::remote_workspace_id(
@@ -10916,6 +10948,110 @@ mod tests {
         assert!(release_for_session_and_notify(app.handle(), &st, "sess-1").is_none());
         assert!(release_for_session_and_notify(app.handle(), &st, "plain-tab").is_none());
         assert!(changed.recv_timeout(Duration::from_millis(50)).is_err());
+    }
+
+    #[test]
+    fn closing_a_gone_local_terminal_releases_announces_and_audits_it() {
+        use super::super::pty_backend::Liveness;
+        use liveness::tests::StubProbe;
+        use std::time::Duration;
+        use tauri::Listener;
+        let home = crate::routines::test_support::TempHome::new();
+        let app = tauri::test::mock_builder()
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .unwrap();
+        let (send, changed) = std::sync::mpsc::channel();
+        app.listen(SESSION_STATE_CHANGED, move |_| {
+            let _ = send.send(());
+        });
+        let st = DashboardLaunchState::new(4);
+        st.begin("gone").unwrap();
+        st.bind("gone", "gone-session", None).unwrap();
+        let probe = StubProbe::with(&[("gone-session", Liveness::Known(false))]);
+
+        let released = release_if_gone(app.handle(), &st, &probe, "gone-session")
+            .expect("a gone local terminal is released");
+        assert_eq!(released.handle, "gone");
+        assert!(st.resolve("gone").is_none());
+        assert_eq!(st.available(), 4);
+        assert!(changed.recv_timeout(Duration::from_secs(3)).is_ok());
+        assert!(changed.recv_timeout(Duration::from_millis(50)).is_err());
+        let audit = std::fs::read_to_string(home.codesense_home().join("agent-audit.jsonl"))
+            .expect("the release is audited");
+        let lines: Vec<serde_json::Value> = audit
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0]["event"], "kill");
+        assert_eq!(lines[0]["handle"], "gone");
+        assert_eq!(lines[0]["sessionId"], "gone-session");
+
+        // A second close finds nothing left: no release, no announcement, no audit.
+        assert!(release_if_gone(app.handle(), &st, &probe, "gone-session").is_none());
+        assert!(changed.recv_timeout(Duration::from_millis(50)).is_err());
+    }
+
+    #[test]
+    fn closing_keeps_an_alive_unknown_headless_or_remote_entry() {
+        use super::super::pty_backend::Liveness;
+        use liveness::tests::StubProbe;
+        use std::time::Duration;
+        use tauri::Listener;
+        let home = crate::routines::test_support::TempHome::new();
+        let app = tauri::test::mock_builder()
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .unwrap();
+        let (send, changed) = std::sync::mpsc::channel();
+        app.listen(SESSION_STATE_CHANGED, move |_| {
+            let _ = send.send(());
+        });
+        let st = DashboardLaunchState::new(8);
+        for (handle, session) in [
+            ("alive", "alive-session"),
+            ("unknown", "unknown-session"),
+            ("headless", "headless-session"),
+        ] {
+            st.begin(handle).unwrap();
+            st.bind(handle, session, None).unwrap();
+        }
+        let pgid = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+        st.mark_headless(
+            "headless",
+            pgid,
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        );
+        st.reserve_remote_shell(roster_remote_record("remote", "remote-session", "1", false))
+            .unwrap();
+        // The headless and remote sessions read gone to the terminal probe: neither has a
+        // local terminal child for it to see.
+        let probe = StubProbe::with(&[
+            ("alive-session", Liveness::Known(true)),
+            ("unknown-session", Liveness::Unknown),
+            ("headless-session", Liveness::Known(false)),
+            ("remote-session", Liveness::Known(false)),
+        ]);
+        for session in [
+            "alive-session",
+            "unknown-session",
+            "headless-session",
+            "remote-session",
+        ] {
+            assert!(
+                release_if_gone(app.handle(), &st, &probe, session).is_none(),
+                "{session} is kept"
+            );
+        }
+        assert_eq!(st.resolve("alive").as_deref(), Some("alive-session"));
+        assert_eq!(st.resolve("unknown").as_deref(), Some("unknown-session"));
+        assert!(st.has_live_headless_session("headless-session"));
+        assert_eq!(
+            st.remote_handle_for_session("remote-session").as_deref(),
+            Some("remote")
+        );
+        assert!(changed.recv_timeout(Duration::from_millis(50)).is_err());
+        assert!(!home.codesense_home().join("agent-audit.jsonl").exists());
     }
 
     #[test]
