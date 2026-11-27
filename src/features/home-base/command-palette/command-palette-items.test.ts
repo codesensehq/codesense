@@ -59,7 +59,7 @@ describe("buildStaticItems", () => {
     ],
     canAttach: true,
     canAddMachine: false,
-    routinesNeedingYou: 0,
+    routineRunsWaiting: 0,
   };
 
   it("offers Add machine whenever it can run, and never a machine switch", () => {
@@ -147,14 +147,15 @@ describe("buildStaticItems", () => {
     expect(item?.tier).toBe(CP_TIER.action);
   });
 
-  it("always offers Schedule (routines live in the Agents tab), carrying the needs-you count only above zero", () => {
+  it("always offers Schedule (routines live in the Agents tab), carrying the waiting-runs count only above zero", () => {
     const routines = (n: number) =>
-      buildStaticItems({ ...inputs, canAttach: false, routinesNeedingYou: n }).find(
+      buildStaticItems({ ...inputs, canAttach: false, routineRunsWaiting: n }).find(
         (i) => decodeSelection(i.id)?.kind === "open-routines",
       );
     expect(routines(0)?.label).toBe("Schedule");
     expect(routines(0)?.sublabel).toBe("action · routines, schedule, timers");
-    expect(routines(2)?.sublabel).toBe("action · routines, schedule, timers · 2 need you");
+    expect(routines(1)?.sublabel).toBe("action · routines, schedule, timers · 1 run waiting");
+    expect(routines(2)?.sublabel).toBe("action · routines, schedule, timers · 2 runs waiting");
     expect(routines(2)?.tier).toBe(CP_TIER.action);
   });
 
@@ -311,7 +312,7 @@ describe("dispatchSelection", () => {
       recentEpics: [],
       canAttach: false,
       canAddMachine: false,
-      routinesNeedingYou: 0,
+      routineRunsWaiting: 0,
       panes: [
         { panelId: "pane:acme/api:backend/board", title: "Board", layer: "backend" },
         { panelId: "pane:private:acme/api/board", title: "Board · Private", layer: "Private" },
@@ -365,7 +366,7 @@ describe("dispatchSelection", () => {
       recentEpics: [],
       canAttach: false,
       canAddMachine: false,
-      routinesNeedingYou: 0,
+      routineRunsWaiting: 0,
     }).find((i) => i.label === "Story dashboard")!;
     expect(dispatchSelection(row.id, h, null)).toBe(true);
     expect(h.calls).toEqual([`runCommand:${STORY_DASHBOARD_ACTION_ID}`]);
@@ -406,7 +407,7 @@ describe("dashboard commands", () => {
     recentEpics: [],
     canAttach: false,
     canAddMachine: false,
-    routinesNeedingYou: 0,
+    routineRunsWaiting: 0,
   };
 
   it("lists each active command with its dashboard, icon and chord, and runs it on pick", () => {

@@ -21,7 +21,7 @@ import {
   routineCopyToMine,
   routineGet,
   routineList,
-  routineNeedsYouCount,
+  routineRunsAwaitingCount,
   routineOpenAuthoringAgent,
   routinePreviewSchedule,
   routineRestoreRevision,
@@ -71,7 +71,7 @@ describe("routine command wrappers", () => {
     ],
     ["routine_refresh_on_machine", () => routineRefreshOnMachine(KEY), { key: KEY }],
     ["routine_run_detail", () => routineRunDetail("r-1"), { runId: "r-1" }],
-    ["routine_needs_you_count", () => routineNeedsYouCount(), undefined],
+    ["routine_runs_awaiting_count", () => routineRunsAwaitingCount(), undefined],
     ["routine_scheduler_status", () => routineSchedulerStatus(), undefined],
     ["routine_acknowledge_missed", () => routineAcknowledgeMissed(), undefined],
     [

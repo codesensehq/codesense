@@ -468,8 +468,10 @@ describe("Routines tab over the mock backend", () => {
     );
     fireEvent.click(within(digestRow()).getByRole("switch", { name: "Digest enabled" }));
 
-    // A run that ends needing you: the row says so and the identity menu's dot counts it.
-    expect(screen.queryByTestId("identity-menu-attention")).toBeNull();
+    // A run that ends needing you: the row says so and the store counts it as a waiting
+    // run. The identity menu's needs-you total leaves runs out (the run's Inbox card counts).
+    const runsWaiting = () => useRoutinesStore.getState().runsAwaitingCount;
+    expect(runsWaiting()).toBe(0);
     await waitFor(() =>
       expect(within(digestRow()).getByRole("switch", { name: "Digest enabled" })).toBeChecked(),
     );
@@ -477,7 +479,8 @@ describe("Routines tab over the mock backend", () => {
     await waitFor(() => expect(runRows()[0]?.dataset.phase).toBe("running"));
     const asking = runRows()[0].dataset.runId as string;
     act(() => world.finishRun(asking, "needs_you", "Which repo should I sweep?"));
-    await waitFor(() => expect(screen.getByTestId("identity-menu-attention")).toBeInTheDocument());
+    await waitFor(() => expect(runsWaiting()).toBe(1));
+    expect(screen.queryByTestId("identity-menu-attention")).toBeNull();
     expect(within(digestRow()).getByTestId("routine-needs-you")).toHaveTextContent("Needs you");
     expect(within(digestRow()).getByTestId("routine-needs-you-text")).toHaveTextContent(
       "Which repo should I sweep?",
@@ -485,7 +488,7 @@ describe("Routines tab over the mock backend", () => {
     expect(within(runRows()[0]).getByTestId("routine-run-result")).toHaveTextContent(
       "Which repo should I sweep?",
     );
-    expect(screen.getByTestId("identity-menu-trigger")).toHaveAccessibleName(/— 1 needs you$/);
+    expect(screen.getByTestId("identity-menu-trigger")).not.toHaveAccessibleName(/need/);
 
     // Clicking the result opens the run detail.
     fireEvent.click(within(runRows()[0]).getByTestId("routine-run-result"));
@@ -501,14 +504,14 @@ describe("Routines tab over the mock backend", () => {
     expect(runRows()[0]).toHaveTextContent("Ended");
     expect(within(runRows()[0]).queryByTestId("routine-run-result")).toBeNull();
     expect(within(runRows()[0]).queryByTestId("routine-run-reason")).toBeNull();
-    expect(screen.getByTestId("identity-menu-trigger")).toHaveAccessibleName(/— 1 needs you$/);
+    expect(runsWaiting()).toBe(1);
     expect(within(digestRow()).getByTestId("routine-needs-you")).toHaveTextContent("Needs you");
 
     // The next run that ends any other way clears both.
     fireEvent.click(within(digestRow()).getByRole("button", { name: /Run now/ }));
     await waitFor(() => expect(runRows()[0]?.dataset.phase).toBe("running"));
     act(() => world.finishRun(runRows()[0].dataset.runId as string, "succeeded", "All clear."));
-    await waitFor(() => expect(screen.queryByTestId("identity-menu-attention")).toBeNull());
+    await waitFor(() => expect(runsWaiting()).toBe(0));
     expect(within(digestRow()).queryByTestId("routine-needs-you")).toBeNull();
 
     expect(order()).toEqual(initialOrder);

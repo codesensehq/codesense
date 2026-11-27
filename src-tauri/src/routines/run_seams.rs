@@ -401,7 +401,7 @@ async fn a_headless_agent_that_exits_cleanly_without_a_signal_simply_ends() {
     let state = store(&home).state(&key("quiet")).unwrap().unwrap();
     assert_eq!(state.last_run_id.as_deref(), Some(run_id.as_str()));
     assert_eq!(state.last_result_text, None);
-    assert_eq!(service::needs_you_count(&home, &alice()).unwrap(), 1);
+    assert_eq!(service::runs_awaiting_count(&home, &alice()).unwrap(), 1);
     let needing = store(&home).needing_you().unwrap();
     assert_eq!(needing[&key("quiet").to_string()].run_id, asked);
 }
@@ -455,7 +455,7 @@ async fn a_headless_agent_that_exits_non_zero_or_crashes_fails_with_the_exit_rea
             Some("agent exited non-zero")
         )
     );
-    assert_eq!(service::needs_you_count(&home, &alice()).unwrap(), 0);
+    assert_eq!(service::runs_awaiting_count(&home, &alice()).unwrap(), 0);
 
     // What it reported is read back from run history, so a secret is scrubbed.
     let run_id = manual(&home, "crashy").run_id;

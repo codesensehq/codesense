@@ -15,6 +15,7 @@
 
 import { STORY_DASHBOARD_ACTION_ID } from "@/features/dashboard/lib/story-dashboard-action-id";
 import type { QuickPickerItem } from "@/features/viewer/components/quick-open-dialog";
+import { runsWaitingText } from "@/shared/components/menu-section";
 import { basename } from "@/shared/lib/path";
 import type { Team } from "@/shared/types/domain";
 
@@ -167,8 +168,8 @@ export interface StaticIndexInputs {
   canAddMachine: boolean;
   /** Foreman mail waits and no Foreman is live: the Foreman row shows a dot. */
   foremanMailWaiting?: boolean;
-  /** How many of the user's routines need them; shown on the Routines row above 0. */
-  routinesNeedingYou: number;
+  /** How many of the user's routine runs wait on them; shown on the Routines row above 0. */
+  routineRunsWaiting: number;
   /** The custom right panes the active team sees, offered as "Open pane: …" (empty
    *  outside a team view). */
   panes?: PalettePane[];
@@ -241,8 +242,8 @@ export function buildStaticItems(inputs: StaticIndexInputs): QuickPickerItem[] {
     id: encodeSelection({ kind: "open-routines" }),
     label: "Schedule",
     sublabel:
-      inputs.routinesNeedingYou > 0
-        ? `action · routines, schedule, timers · ${inputs.routinesNeedingYou} need you`
+      inputs.routineRunsWaiting > 0
+        ? `action · routines, schedule, timers · ${runsWaitingText(inputs.routineRunsWaiting)}`
         : "action · routines, schedule, timers",
     tier: CP_TIER.action,
   });

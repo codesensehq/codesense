@@ -147,7 +147,7 @@ function resetStores(
     noTeamTabs: [],
     noTeamActiveTab: null,
   });
-  useRoutinesStore.setState({ needsYouCount: 0 });
+  useRoutinesStore.setState({ runsAwaitingCount: 0 });
 }
 
 const trigger = () => screen.getByTestId("identity-menu-trigger");
@@ -229,24 +229,22 @@ describe("IdentityMenu — trigger", () => {
     expect(trigger()).toHaveAccessibleName("CodeSense Docs");
   });
 
-  it("the Needs you mark (and the accessible name) say when routines need you; none at zero", async () => {
+  it("counts waiting routine runs on the Schedule row, never in the trigger's needs-you total", async () => {
     seedEveryday();
     render(<IdentityMenu />);
+    act(() => useRoutinesStore.setState({ runsAwaitingCount: 2 }));
+    // A run that waits on you has posted an Inbox card, which the needs-you set counts.
     expect(screen.queryByTestId("identity-menu-attention")).toBeNull();
-    act(() => useRoutinesStore.setState({ needsYouCount: 2 }));
-    // the identity-menu's aggregate needs-you glyph is `question`
-    // (the generic needs-you mark; the specific kind is only known at a
-    // per-item level, not for a count roll-up).
-    expect(screen.getByTestId("identity-menu-attention")).toHaveAttribute("data-mark", "question");
-    expect(trigger()).toHaveAccessibleName("Acme / default — 2 need you");
+    expect(trigger()).toHaveAccessibleName("Acme / default");
     await openByClick();
     expect(screen.getByTestId("identity-menu-routines")).toHaveAccessibleName(
-      "Schedule — 2 need you",
+      "Schedule — 2 runs waiting",
     );
-    expect(screen.getByTestId("identity-menu-routines-count")).toHaveTextContent("2 need you");
-    act(() => useRoutinesStore.setState({ needsYouCount: 1 }));
-    expect(screen.getByTestId("identity-menu-routines-count")).toHaveTextContent("1 needs you");
-    expect(trigger()).toHaveAccessibleName("Acme / default — 1 needs you");
+    expect(screen.getByTestId("identity-menu-routines-count")).toHaveTextContent("2 runs waiting");
+    act(() => useRoutinesStore.setState({ runsAwaitingCount: 1 }));
+    expect(screen.getByTestId("identity-menu-routines-count")).toHaveTextContent("1 run waiting");
+    act(() => useRoutinesStore.setState({ runsAwaitingCount: 0 }));
+    expect(screen.queryByTestId("identity-menu-routines-count")).toBeNull();
   });
 });
 

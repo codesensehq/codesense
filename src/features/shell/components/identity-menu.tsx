@@ -32,6 +32,7 @@ import {
   MenuSeparator,
   MenuShortcut,
   needsYouText,
+  runsWaitingText,
 } from "@/shared/components/menu-section";
 import { menuItems, useMenuRoving } from "@/shared/hooks/use-menu-roving";
 import { formatKeystrokeDisplay } from "@/shared/lib/shortcuts/keystroke";
@@ -150,8 +151,9 @@ function IdentityMenuBody({ machinesNeedYou }: { machinesNeedYou: number }) {
   const reopen = () => useUiStore.getState().setOrgSwitcherOpen(true);
 
   useEffect(() => watchRoutineCounts(), []);
-  const routinesNeedYou = useRoutinesStore((s) => s.needsYouCount);
-  const needsYou = routinesNeedYou + machinesNeedYou;
+  const routineRunsWaiting = useRoutinesStore((s) => s.runsAwaitingCount);
+  // Routine runs stay out of the total: a run that waits on you has posted an Inbox card.
+  const needsYou = machinesNeedYou;
 
   // Clear the flags on unmount so the menu doesn't reopen unbidden on remount.
   useEffect(() => () => useUiStore.getState().closeIdentityMenu(), []);
@@ -290,7 +292,7 @@ function IdentityMenuBody({ machinesNeedYou }: { machinesNeedYou: number }) {
             </>
           )}
           <MenuSeparator />
-          <YouSection routinesNeedYou={routinesNeedYou} onDone={close} />
+          <YouSection routineRunsWaiting={routineRunsWaiting} onDone={close} />
           <AppSection machinesNeedYou={machinesNeedYou} onDone={close} />
         </PopoverContent>
       )}
@@ -431,14 +433,20 @@ function ContextRepoSection({
 
 /** What's yours in this space: Private, agent definitions, routines (with how many
  *  wait on you). Agent accounts have no menu row yet (SV-ENG-78). */
-function YouSection({ routinesNeedYou, onDone }: { routinesNeedYou: number; onDone: () => void }) {
+function YouSection({
+  routineRunsWaiting,
+  onDone,
+}: {
+  routineRunsWaiting: number;
+  onDone: () => void;
+}) {
   const go = (open: () => void) => () => {
     onDone();
     open();
   };
   // Routines live in the Agents tab (SPEC §10): this opens Agents → Schedule.
   const routinesLabel =
-    routinesNeedYou > 0 ? `Schedule — ${needsYouText(routinesNeedYou)}` : "Schedule";
+    routineRunsWaiting > 0 ? `Schedule — ${runsWaitingText(routineRunsWaiting)}` : "Schedule";
   // The section mounts with the open menu, so mail is read only while it is on screen.
   const foremanMail = useForemanMailWaiting(true);
   return (
@@ -508,7 +516,11 @@ function YouSection({ routinesNeedYou, onDone }: { routinesNeedYou: number; onDo
           <Repeat size={15} strokeWidth={1.75} />
         </MenuLeadIcon>
         <span>Schedule</span>
-        <MenuNeedsCount count={routinesNeedYou} testId="identity-menu-routines-count" />
+        <MenuNeedsCount
+          count={routineRunsWaiting}
+          testId="identity-menu-routines-count"
+          text={runsWaitingText}
+        />
       </button>
     </MenuSection>
   );
