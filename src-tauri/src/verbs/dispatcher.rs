@@ -249,6 +249,43 @@ pub fn check_frame_capability(
     )
 }
 
+/// The scope the private records pair is kept to: a team or message frame's kind, else its
+/// grant's scope.
+fn records_scope(kind: crate::dashboard_stream::frame::FrameCallerKind, scope: &str) -> &str {
+    match kind {
+        crate::dashboard_stream::frame::FrameCallerKind::Team => "team",
+        crate::dashboard_stream::frame::FrameCallerKind::Message => "message",
+        _ => scope,
+    }
+}
+
+/// Whether `grant` holds `capability` as admission counts it: listed and, under team-safe,
+/// where the private records pair may be used.
+fn grant_holds(
+    grant: &[String],
+    slot: &str,
+    scope: &str,
+    team_safe: bool,
+    capability: &str,
+) -> bool {
+    Iterator::any(&mut <[String]>::iter(grant), |g| g == capability)
+        && (!team_safe || super::capabilities::records_allows(slot, scope, capability))
+}
+
+/// Whether a frame holds `capability` as admission counts it.
+pub(crate) fn frame_holds(
+    frame: &crate::dashboard_stream::frame::FrameRecord,
+    capability: &str,
+) -> bool {
+    grant_holds(
+        &frame.effective_grant,
+        &frame.grant.slot,
+        records_scope(frame.kind, &frame.grant.scope),
+        frame.policy.team_safe,
+        capability,
+    )
+}
+
 fn check_capability(
     caller: &Caller,
     grant: &[String],
@@ -256,20 +293,11 @@ fn check_capability(
     args: &Value,
     team_safe: bool,
 ) -> Result<(), &'static str> {
-    let scope = match caller.kind {
-        crate::dashboard_stream::frame::FrameCallerKind::Team => "team",
-        crate::dashboard_stream::frame::FrameCallerKind::Message => "message",
-        _ => &caller.scope,
-    };
-    let allowed =
-        |cap: &str| !team_safe || super::capabilities::records_allows(&caller.slot, scope, cap);
+    let scope = records_scope(caller.kind, &caller.scope);
+    let holds = |cap: &str| grant_holds(grant, &caller.slot, scope, team_safe, cap);
     if !(spec.name == "records.collections"
-        && grant
-            .iter()
-            .any(|g| matches!(g.as_str(), "records:read:own" | "records:read:team") && allowed(g)))
-        && !grant
-            .iter()
-            .any(|g| g == spec.required_capability(caller, args) && allowed(g))
+        && (holds("records:read:own") || holds("records:read:team")))
+        && !holds(spec.required_capability(caller, args))
     {
         return Err("denied: grant");
     }

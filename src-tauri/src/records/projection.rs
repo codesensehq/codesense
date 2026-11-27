@@ -208,8 +208,12 @@ pub fn prepare<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     binding: &super::binding::Binding,
     name: &str,
+    frame: Option<&crate::dashboard_stream::frame::FrameRecord>,
 ) -> Result<String, String> {
     let store = binding.resolve(name)?;
+    if let Some(frame) = frame {
+        super::binding::require_store_grant(&store, false, frame)?;
+    }
     store.list()?;
     let _serial = serial();
     let key = binding.view_key(&store);
@@ -370,7 +374,7 @@ mod tests {
             .unwrap();
         app.manage(crate::live_hub::LiveHub::default());
         app.manage(Views::default());
-        let key = prepare(app.handle(), &binding, "care").unwrap();
+        let key = prepare(app.handle(), &binding, "care", None).unwrap();
         let first =
             crate::live_hub::subscribe(app.handle(), "records", &key, None, Some("pane"), None)
                 .unwrap();
@@ -469,7 +473,7 @@ mod tests {
                 .unwrap();
             app.manage(crate::live_hub::LiveHub::default());
             app.manage(Views::default());
-            let team_key = prepare(app.handle(), &binding, "care").unwrap();
+            let team_key = prepare(app.handle(), &binding, "care", None).unwrap();
             assert_eq!(team_key, "records:team:acme/ctx/family:care");
             let initial = crate::live_hub::subscribe(
                 app.handle(),
@@ -530,7 +534,7 @@ mod tests {
             assert!(check_frame_capability(&frame, "subscribe", &args).is_err());
             let private_frame = make_frame(true);
             assert!(check_frame_capability(&private_frame, "subscribe", &args).is_ok());
-            let private_key = prepare(app.handle(), &binding, "care").unwrap();
+            let private_key = prepare(app.handle(), &binding, "care", None).unwrap();
             assert_eq!(private_key, "records:private:acme/ctx:care");
             let private = crate::live_hub::subscribe(
                 app.handle(),
@@ -606,7 +610,7 @@ mod tests {
         app.manage(Views::default());
         let agent = Actor::agent("Helper", None, Some("helper#1".into()));
         let note = super::super::notes::create(&loc, "Plan", "Old", false, &agent, None).unwrap();
-        let key = prepare(app.handle(), &binding, "notes").unwrap();
+        let key = prepare(app.handle(), &binding, "notes", None).unwrap();
         assert_eq!(key, "records:private:acme/ctx:notes");
         let before =
             crate::live_hub::subscribe(app.handle(), "records", &key, None, Some("native"), None)
@@ -695,7 +699,7 @@ mod tests {
             .collect();
         let reads = || HISTORY_READS.with(|r| r.replace(0));
         reads();
-        let key = prepare(app.handle(), &binding, "notes").unwrap();
+        let key = prepare(app.handle(), &binding, "notes", None).unwrap();
         let rows = crate::live_hub::subscribe(app.handle(), "records", &key, None, Some("n"), None)
             .unwrap()
             .snapshot
@@ -772,7 +776,7 @@ mod tests {
         care()
             .create(Some("same"), &[], "Current", &agent, None)
             .unwrap();
-        let care_key = prepare(app.handle(), &binding, "care").unwrap();
+        let care_key = prepare(app.handle(), &binding, "care", None).unwrap();
         let care_head = || {
             crate::live_hub::subscribe(app.handle(), "records", &care_key, None, None, None)
                 .unwrap()
