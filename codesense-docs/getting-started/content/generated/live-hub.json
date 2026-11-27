@@ -1154,7 +1154,7 @@
     "src-tauri/src/live_hub/inbox.rs": "89c54696f40c6b37d90e052bcf3ed39c15d122d6111f1c24f849fbf1830948b6",
     "src-tauri/src/live_hub/agent_list/rows.rs": "86be0bbd951d279e47bd938be31f1f5a4f8c70e24c0fc9e2db4fd9d07fa6dce2",
     "src-tauri/src/live_hub/agent_list/views.rs": "0fbc27242d28517476f53c8395fab13ba460850539003dd7d5bea97b685c5ebf",
-    "src-tauri/src/records/projection.rs": "894917f2372d57b52f9289a8dda9e81acd1f24f8c074feffbee6b869de9dcf46",
+    "src-tauri/src/records/projection.rs": "cb55ec6eb89f2f604c3be1bce7438b5bf4e3cc80818954665640adc5794843fd",
     "src/features/dashboard/lib/live-hub.ts": "cadb23fbb4b324b99054c1e75961aca8df6befa58e12c77ecaa2cea958285175",
     "src-tauri/src/records/binding.rs": "364e7f3a67b461224017950b82486fe2ae670a64274f0d0836969d79ef1e0bcd"
   },
