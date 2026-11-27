@@ -1330,11 +1330,13 @@ pub(crate) fn launcher_matches(recorded: Option<&str>, filter: &str) -> bool {
     if recorded == filter {
         return true;
     }
-    let legacy_name = |raw: &str| raw.strip_prefix(LEGACY_ROUTINE_LAUNCHER_PREFIX).map(str::trim);
-    let routine_id = |raw: &str| {
+    fn legacy_name(raw: &str) -> Option<&str> {
+        raw.strip_prefix(LEGACY_ROUTINE_LAUNCHER_PREFIX).map(str::trim)
+    }
+    fn routine_id(raw: &str) -> Option<&str> {
         raw.strip_prefix(ROUTINE_LAUNCHER_PREFIX)
             .and_then(|key| key.rsplit('/').next())
-    };
+    }
     let slug = |name: &str| {
         name.split(|c: char| !c.is_alphanumeric())
             .filter(|part| !part.is_empty())
