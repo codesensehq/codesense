@@ -384,6 +384,28 @@ test("record on another runner says it dropped team_switch", (t) => {
   assert.equal(JSON.parse(fs.readFileSync(base, "utf8")).sets[1].keys.team_switch, undefined);
 });
 
+test("record on another runner names each key it carries over unmeasured; m1 keeps its own quietly", (t) => {
+  const { write } = tmp(t);
+  const start = baseline();
+  start.sets[1].keys.renamed_key = setKey(50);
+  const base = write("base.json", formatBaseline(start));
+  const cur = write("cur.json", current({ open_cold: ms([310, 290, 300, 305, 295]) }));
+  const c = capture();
+  assert.equal(
+    run(["record", "--current", cur, "--runner", "macos-15", "--baseline", base], c.io),
+    0,
+  );
+  assert.deepEqual(c.out, [
+    "recorded macos-15: 1 keys, 5 runs, commit abc1234",
+    "carried renamed_key: not measured, kept from the commit cisha00 set",
+    "spread open_cold 7% (20 ms): can be compared",
+  ]);
+  assert.deepEqual(JSON.parse(fs.readFileSync(base, "utf8")).sets[1].keys.renamed_key, setKey(50));
+  const m1 = capture();
+  assert.equal(run(["record", "--current", cur, "--runner", "m1", "--baseline", base], m1.io), 0);
+  assert.ok(!m1.out.some((line) => line.startsWith("carried")), m1.out.join("\n"));
+});
+
 test("record writes the file, leaves the M1 set byte-identical and reports each key's spread", (t) => {
   const { write } = tmp(t);
   const startText = formatBaseline(baseline({ sets: [baseline().sets[0]] }));

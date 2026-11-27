@@ -22,7 +22,9 @@
  * engine mismatch, a bad argument).
  *
  * record: replaces (or adds) only that runner's set; every other set keeps its bytes. A runner
- * other than m1 never records the `M1_ONLY_KEYS` (`team_switch`): they are dropped. Prints each
+ * other than m1 never records the `M1_ONLY_KEYS` (`team_switch`): they are dropped. A key of the
+ * previous set that this run didn't measure is kept; outside m1 (whose hand-measured keys are
+ * meant to stay) record names each one, since the set now carries the new commit. Prints each
  * key's spread over its samples: a key can join `compare.keys` when the spread is ≤ 10% of the
  * median or the range is within floor.ms. `compare.keys` itself is edited by hand.
  */
@@ -107,23 +109,30 @@ function checkBaseline(file) {
 /** Whether `runner`'s set may hold `key`: every key for m1, all but the M1-only keys elsewhere. */
 const keepsKey = (runner, key) => runner === M1_RUNNER || !M1_ONLY_KEYS.includes(key);
 
-/** The measured keys `runner`'s set takes, and the M1-only ones it drops. */
-export function recordedKeys(measured, runner) {
+/**
+ * What a record of `measured` does to `runner`'s set: the measured keys it takes, the M1-only ones
+ * it drops, and the keys of its previous set it carries over unmeasured.
+ */
+export function recordedKeys(baseline, measured, runner) {
+  const previous = baseline.sets.find((set) => set.runner === runner);
   const all = Object.keys(measured.keys);
+  const kept = all.filter((key) => keepsKey(runner, key));
   return {
-    kept: all.filter((key) => keepsKey(runner, key)),
+    previous,
+    kept,
     dropped: all.filter((key) => !keepsKey(runner, key)),
+    carried: Object.keys(previous?.keys ?? {}).filter(
+      (key) => keepsKey(runner, key) && !kept.includes(key),
+    ),
   };
 }
 
 /** The baseline with `runner`'s set replaced by (or added from) the measured file. */
 export function upsertSet(baseline, measured, runner) {
   checkMeasured(measured);
-  const previous = baseline.sets.find((set) => set.runner === runner);
-  const keys = Object.fromEntries(
-    Object.entries(previous?.keys ?? {}).filter(([key]) => keepsKey(runner, key)),
-  );
-  for (const key of recordedKeys(measured, runner).kept) {
+  const { previous, kept, carried } = recordedKeys(baseline, measured, runner);
+  const keys = Object.fromEntries(carried.map((key) => [key, previous.keys[key]]));
+  for (const key of kept) {
     const { unit, values, endState } = measuredKey(measured, key);
     keys[key] = { ...summarize({ unit, samples: values }), samples: values, endState };
   }
@@ -260,11 +269,16 @@ export function run(argv, io = { log: console.log, error: console.error, env: pr
     const next = upsertSet(baseline, measured, opts.runner);
     fs.writeFileSync(opts.baseline, formatBaseline(next));
     const floorMs = baseline.compare.floor.ms;
-    const { kept, dropped } = recordedKeys(measured, opts.runner);
+    const { previous, kept, dropped, carried } = recordedKeys(baseline, measured, opts.runner);
     io.log(
       `recorded ${opts.runner}: ${kept.length} keys, ${measured.runs} runs, commit ${measured.commit}`,
     );
     for (const key of dropped) io.log(`dropped ${key}: only the ${M1_RUNNER} set records it`);
+    if (opts.runner !== M1_RUNNER) {
+      for (const key of carried) {
+        io.log(`carried ${key}: not measured, kept from the commit ${previous.commit} set`);
+      }
+    }
     for (const key of kept) {
       const { unit, values } = measuredKey(measured, key);
       const { ratio, range } = spread(values);
