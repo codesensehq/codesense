@@ -228,8 +228,9 @@ pub(crate) struct Pending {
     pub onload: Option<String>,
     pub sha: Option<String>,
     pub expires: i64,
-    /// The send is still being registered: an onload may yet be armed.
-    pub waiting: bool,
+    /// `Some(true)` while the send is still being registered (an onload may yet be armed),
+    /// `Some(false)` once it is, `None` when no send said either (a fetch made the entry).
+    pub waiting: Option<bool>,
 }
 
 /// The pending onloads a serve took, with GIPHY's install epoch in force when it took them.
@@ -687,7 +688,7 @@ impl Registration {
             onload: None,
             sha: None,
             expires: now + ONLOAD_WINDOW_MS,
-            waiting: false,
+            waiting: None,
         });
         change(pending);
     }
@@ -709,7 +710,7 @@ impl Registration {
                     onload: newer.onload.or(p.onload),
                     sha: newer.sha.or(p.sha),
                     expires: newer.expires.max(p.expires),
-                    waiting: newer.waiting,
+                    waiting: newer.waiting.or(p.waiting),
                 },
                 None => p,
             };
@@ -722,7 +723,7 @@ impl Registration {
     pub(crate) fn expect_send(&self, slot: &Slot) {
         self.follow_epoch();
         let now = (self.clock)();
-        self.with_pending(slot, now, |p| p.waiting = true);
+        self.with_pending(slot, now, |p| p.waiting = Some(true));
     }
 
     /// Register a stored message's provider GIF, only for a GIF a search returned with the URL
@@ -736,7 +737,7 @@ impl Registration {
         // Registered: a serve now settles the slot, firing an armed onload or marking one never
         // armed. Kept so a serve settling meanwhile merges with it instead of waiting again.
         let now = (self.clock)();
-        self.with_pending(&slot, now, |p| p.waiting = false);
+        self.with_pending(&slot, now, |p| p.waiting = Some(false));
     }
 
     async fn register_inner(&self, sent: Sent) {
@@ -893,7 +894,7 @@ impl Registration {
         for slot in claimed {
             let at = Iterator::position(&mut taken.iter(), |(s, _)| *s == slot);
             match at.map(|at| taken.swap_remove(at).1) {
-                Some(p) if p.waiting && p.onload.is_none() => {
+                Some(p) if p.waiting == Some(true) && p.onload.is_none() => {
                     settled.retry.push(slot.clone());
                     back.push((slot, p));
                 }

@@ -892,7 +892,7 @@ async fn an_entry_armed_while_a_serve_settles_is_merged_back_not_lost() {
     assert_eq!(settled.retry, vec![slot(1)]);
     let taken = h.registration.take_onloads(SHA);
     assert_eq!(taken.entries.len(), 1);
-    assert!(taken.entries[0].1.onload.is_some() && !taken.entries[0].1.waiting);
+    assert!(taken.entries[0].1.onload.is_some() && taken.entries[0].1.waiting == Some(false));
     let settled = h.registration.settle_serve(vec![slot(1)], taken).await;
     assert_eq!(settled.marks, vec![slot(1)]);
     assert_eq!(h.wire.actions(), vec!["SENT", "SEEN"]);
@@ -985,7 +985,7 @@ async fn after_a_failed_keychain_read_serves_wait_before_reading_it_again() {
         onload: all_pingbacks().onload,
         sha: Some(SHA.into()),
         expires: h.now() + ONLOAD_WINDOW_MS,
-        waiting: false,
+        waiting: Some(false),
     };
     let epoch = install_epoch(h.dir.path(), Provider::Giphy);
     h.registration.put_back(vec![(slot(1), armed())], epoch);
