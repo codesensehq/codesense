@@ -182,7 +182,7 @@ describe.each(LOADERS)("MessageMedia with the $name loader", (c) => {
       "https://media.example/dog.gif",
     );
     expect(screen.queryByRole("figure")).toBeNull();
-    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Retry/ })).toBeNull();
   });
 });
 

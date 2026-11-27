@@ -293,7 +293,7 @@ describe("WorkspaceChatMessageRow failed and blocked", () => {
     expect(screen.getByTestId("ibx-media-card").textContent).toContain(
       "Couldn't load this GIF. The file is over 8 MB.",
     );
-    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    fireEvent.click(screen.getByRole("button", { name: "Retry GIF: A cat waves" }));
     expect(loadWorkspaceChatMedia).toHaveBeenCalledWith("story:ws-1", 7);
     unmount();
     row({
@@ -304,7 +304,7 @@ describe("WorkspaceChatMessageRow failed and blocked", () => {
     expect(screen.getByTestId("ibx-media-card").textContent).toContain(
       "Couldn't load this GIF. i.giphy.com didn't answer.",
     );
-    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Retry/ })).toBeNull();
   });
 
   it("shows the failed card when the image won't decode", async () => {

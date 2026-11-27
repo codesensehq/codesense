@@ -191,7 +191,7 @@ describe("MessageBody image attachments", () => {
     expect(screen.getByTestId("ibx-media-card").textContent).toContain(
       "Couldn't load this GIF. The file is over 8 MB.",
     );
-    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    fireEvent.click(screen.getByRole("button", { name: "Retry GIF: a cat waving" }));
     expect(loadInboxMedia).toHaveBeenCalledWith(team, 7);
     unmount();
     const { unmount: unmount2 } = render(
@@ -202,11 +202,30 @@ describe("MessageBody image attachments", () => {
     expect(screen.getByTestId("ibx-media-card").textContent).toContain(
       "Couldn't load this image. cdn.example didn't answer.",
     );
-    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Retry/ })).toBeNull();
     unmount2();
     render(<MessageBody m={withMedia(image({ state: "failed", reason: "changed" }))} />);
     expect(screen.getByTestId("ibx-media-card").textContent).toContain(
       "Couldn't load this GIF. The source now serves a different image.",
+    );
+  });
+
+  it("a failed card's Retry names the kind and the alt", () => {
+    const { unmount } = render(
+      <MessageBody m={withMedia(image({ state: "failed", reason: "size", retryable: true }))} />,
+    );
+    const retry = screen.getByRole("button", { name: "Retry GIF: a cat waving" });
+    expect(retry.textContent).toBe("Retry");
+    unmount();
+    render(
+      <MessageBody
+        m={withMedia(
+          image({ state: "failed", reason: "size", retryable: true, mime: "image/png" }),
+        )}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Retry Image: a cat waving" }).textContent).toBe(
+      "Retry",
     );
   });
 });

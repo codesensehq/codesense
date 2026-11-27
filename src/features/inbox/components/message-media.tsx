@@ -502,7 +502,9 @@ function MediaCard({
             type="button"
             className="ibx-chip primary"
             aria-label={
-              state === "failed" ? "Retry" : `Load ${mediaKind(a)} from ${a.sourceHost}: ${a.alt}`
+              state === "failed"
+                ? `Retry ${mediaKind(a)}: ${a.alt}`
+                : `Load ${mediaKind(a)} from ${a.sourceHost}: ${a.alt}`
             }
             disabled={loading}
             onClick={load}
