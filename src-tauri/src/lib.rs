@@ -72,6 +72,7 @@ mod exit_coordinator;
 #[cfg_attr(not(feature = "dashboard-publish"), allow(dead_code))]
 mod feedback;
 mod flags;
+mod groups;
 #[cfg(any(feature = "e2e-webdriver", test))]
 mod harness_guard;
 mod http;
