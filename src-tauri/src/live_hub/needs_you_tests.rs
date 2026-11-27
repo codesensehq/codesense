@@ -186,3 +186,116 @@ fn a_question_reads_its_summary_else_its_first_line() {
     assert_eq!(cut.chars().count(), 200);
     assert!(cut.ends_with('…'));
 }
+
+/// What one recompute publishes: per view, the ids it upserts and removes.
+fn publish(
+    hub: &mut crate::live_hub::projection::TopicRegistry,
+    inputs: &NeedsYouInputs,
+) -> Vec<(String, Vec<String>, Vec<String>)> {
+    hub.replace(TOPIC, rows(&needs_you(inputs)), None)
+        .unwrap()
+        .into_iter()
+        .filter(|d| !d.upserts.is_empty() || !d.removes.is_empty())
+        .map(|d| {
+            let upserts = d
+                .upserts
+                .iter()
+                .map(|r| r["id"].as_str().unwrap().to_string());
+            (d.view_key, upserts.collect(), d.removes)
+        })
+        .collect()
+}
+
+/// Each kind shows in the next recompute and clears in the one after, in the `all` view
+/// and its own team's view only; a launch that changes nobody's needs-you state, or a
+/// recompute with nothing changed, publishes nothing.
+#[test]
+fn the_topic_patches_each_change_in_its_own_place_and_nothing_else() {
+    let mut hub = crate::live_hub::projection::TopicRegistry::default();
+    let (_, mut inputs) = sample_day();
+    publish(&mut hub, &inputs);
+    let views = ["all", "team:acme/delivery", "team:acme/steward"];
+    let sizes: Vec<_> = views
+        .iter()
+        .map(|key| hub.snapshot(TOPIC, key).unwrap().snapshot.len())
+        .collect();
+    assert_eq!(sizes, [4, 4, 0]);
+    assert!(publish(&mut hub, &inputs).is_empty(), "nothing changed");
+
+    let at = |id: &str| {
+        vec![
+            ("all".to_string(), vec![id.to_string()], vec![]),
+            (
+                "team:acme/steward".to_string(),
+                vec![id.to_string()],
+                vec![],
+            ),
+        ]
+    };
+    let gone = |id: &str| {
+        vec![
+            ("all".to_string(), vec![], vec![id.to_string()]),
+            (
+                "team:acme/steward".to_string(),
+                vec![],
+                vec![id.to_string()],
+            ),
+        ]
+    };
+    type Change = fn(&mut NeedsYouInputs, bool);
+    let cases: [(&str, Change); 4] = [
+        ("inbox:9201", |inputs, on| {
+            inputs.cards.retain(|c| c.message_id != 9201);
+            if on {
+                inputs.cards.push(CardInput {
+                    message_id: 9201,
+                    from: "tab-steward-lead".into(),
+                    org: Some("acme".into()),
+                    team: Some("steward".into()),
+                    summary: Some("rerun the judge?".into()),
+                    text: "Rerun the weekly judge?".into(),
+                });
+            }
+        }),
+        ("agent:tab-steward-lead:permission", |inputs, on| {
+            let s = inputs
+                .sessions
+                .iter_mut()
+                .find(|s| s.session == "tab-steward-lead");
+            s.unwrap().needs_you_kind = on.then(|| "permission".into());
+        }),
+        ("agent:tab-steward-lead:capped", |inputs, on| {
+            let s = inputs
+                .sessions
+                .iter_mut()
+                .find(|s| s.session == "tab-steward-lead");
+            s.unwrap().capped = on;
+        }),
+        ("agent:tab-steward-lead:failed", |inputs, on| {
+            let s = inputs
+                .sessions
+                .iter_mut()
+                .find(|s| s.session == "tab-steward-lead");
+            s.unwrap().needs_you_kind = on.then(|| "failed".into());
+        }),
+    ];
+    for (id, change) in cases {
+        change(&mut inputs, true);
+        assert_eq!(publish(&mut hub, &inputs), at(id), "{id} added");
+        change(&mut inputs, false);
+        assert_eq!(publish(&mut hub, &inputs), gone(id), "{id} cleared");
+    }
+
+    // Another team's agent launched (minting its work item) with no ask of its own.
+    inputs.sessions.push(SessionInput {
+        session: "tab-new".into(),
+        org: Some("acme".into()),
+        team: Some("quick-fix".into()),
+        work_item: Some("wi_00000000000000e5".into()),
+        ..Default::default()
+    });
+    assert!(
+        publish(&mut hub, &inputs).is_empty(),
+        "a quiet launch is no delta"
+    );
+}

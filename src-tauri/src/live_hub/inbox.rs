@@ -361,6 +361,26 @@ impl InboxProjection {
             .collect();
         json!({"id":format!("counts:{key}"),"rowType":"counts","team":team,"humanUnread":recipients.get(HUMAN).copied().unwrap_or(0),"recipients":recipients,"needsYouBySender":needs,"sessions":fields})
     }
+    /// Every team's needs-you cards to the human that still wait on them: the cards
+    /// `needsYouBySender` counts.
+    pub(crate) fn needs_you_cards(&self) -> Vec<super::needs_you::CardInput> {
+        self.teams
+            .values()
+            .flat_map(|(team, state)| {
+                state.needs.values().flatten().filter_map(move |id| {
+                    let (m, _) = state.messages.get(id)?;
+                    Some(super::needs_you::CardInput {
+                        message_id: m.id,
+                        from: m.from.clone(),
+                        org: Some(team.org.clone()),
+                        team: Some(team.team.clone()),
+                        summary: m.summary.clone(),
+                        text: m.text.clone(),
+                    })
+                })
+            })
+            .collect()
+    }
     pub fn count_rows(&self) -> Vec<(Option<String>, Value)> {
         self.teams
             .values()

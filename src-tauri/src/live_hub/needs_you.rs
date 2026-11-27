@@ -12,6 +12,9 @@ use std::sync::LazyLock;
 
 use regex::Regex;
 use serde::Serialize;
+use serde_json::Value;
+
+use crate::mcp::session_list::SessionListRow;
 
 pub const TOPIC: &str = "needsYou";
 
@@ -186,6 +189,70 @@ pub fn question_text(summary: Option<&str>, text: &str) -> String {
     } else {
         line
     }
+}
+
+/// The set's inputs as the hub holds them: its session rows, their `sessions` topic rows
+/// (`needsYouKind` and `pendingAsk`), the Inbox's waiting cards, the spend rows and each
+/// handle's work item. A session is keyed by its session id, else its handle, and a card's
+/// sender (either one) is keyed the same way.
+pub(crate) fn hub_inputs(
+    rows: &[SessionListRow],
+    sessions: &[Value],
+    mut cards: Vec<CardInput>,
+    spend_rows: &[Value],
+    work_items: &BTreeMap<String, String>,
+) -> NeedsYouInputs {
+    let key = |row: &SessionListRow| row.session.clone().unwrap_or_else(|| row.handle.clone());
+    let capped = |agent: &str| {
+        spend_rows.iter().any(|spend| {
+            spend["scopeKind"] == "agent"
+                && spend["key"] == agent
+                && spend["spend"]["state"] == "reached"
+        })
+    };
+    let live = rows
+        .iter()
+        .filter_map(|row| {
+            let id = key(row);
+            let wire = Iterator::find(&mut sessions.iter(), |s| s["id"] == id)?;
+            (wire["alive"] != false).then(|| SessionInput {
+                org: row.team.as_ref().map(|t| t.org.clone()),
+                team: row.team.as_ref().map(|t| t.team.clone()),
+                work_item: work_items.get(&row.handle).cloned(),
+                needs_you_kind: serde_json::Value::as_str(&wire["needsYouKind"]).map(str::to_string),
+                question: serde_json::Value::as_str(&wire["pendingAsk"]).map(str::to_string),
+                capped: row.agent.as_deref().is_some_and(capped),
+                session: id,
+            })
+        })
+        .collect();
+    for card in &mut cards {
+        if let Some(row) = Iterator::find(&mut rows.iter(), |row| {
+            row.handle == card.from || row.session.as_deref() == Some(&card.from)
+        }) {
+            card.from = key(row);
+        }
+    }
+    NeedsYouInputs {
+        sessions: live,
+        cards,
+    }
+}
+
+/// The topic's rows: each item scoped to its team, so a team's view holds only its own
+/// and the `all` view holds every item.
+pub(crate) fn rows(items: &[NeedsYouItem]) -> Vec<(Option<String>, Value)> {
+    items
+        .iter()
+        .map(|item| {
+            let scope = item
+                .org
+                .as_deref()
+                .zip(item.team.as_deref())
+                .map(|(org, team)| super::view_key::team_key(org, team));
+            (scope, serde_json::to_value(item).unwrap())
+        })
+        .collect()
 }
 
 #[cfg(test)]

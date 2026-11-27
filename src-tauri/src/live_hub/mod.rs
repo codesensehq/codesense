@@ -184,6 +184,8 @@ struct Model {
     processes: BTreeMap<String, String>,
     agent_rows: Vec<agent_list::AgentListRow>,
     spend_rows: Vec<serde_json::Value>,
+    /// Each live handle's work item, read from the launch registry with `rows`.
+    work_items: BTreeMap<String, String>,
     agent_views: BTreeSet<String>,
     agent_ready: bool,
     agent_home_team: String,
@@ -1305,7 +1307,23 @@ fn project_agent_views(model: &mut Model) -> Result<Vec<projection::Delta>, Stri
             )?);
         }
     }
+    deltas.extend(project_needs_you(model)?);
     Ok(deltas)
+}
+
+/// Recompute the needs-you set on the events that refresh its inputs (sessions, the Inbox
+/// and spend), never on a timer. An unchanged set publishes nothing.
+fn project_needs_you(model: &mut Model) -> Result<Vec<projection::Delta>, String> {
+    let sessions = TopicRegistry::snapshot(&mut model.projections, "sessions", "all")?.snapshot;
+    let inputs = needs_you::hub_inputs(
+        &model.rows,
+        &sessions,
+        model.inbox.needs_you_cards(),
+        &model.spend_rows,
+        &model.work_items,
+    );
+    let rows = needs_you::rows(&needs_you::needs_you(&inputs));
+    TopicRegistry::replace(&mut model.projections, needs_you::TOPIC, rows, None)
 }
 
 pub(crate) fn spend_changed<R: tauri::Runtime>(
@@ -1735,6 +1753,11 @@ async fn rebuild(app: &tauri::AppHandle, cause: u8) -> Result<(), String> {
         &hub.providers,
     );
     let workspace_rollups = agent_list::presentation::workspace_rollups(&resolved.rows, &wire);
+    // Read before the hub lock: the registry is never locked under it.
+    let work_items: BTreeMap<String, String> = rows
+        .iter()
+        .filter_map(|row| Some((row.handle.clone(), launch.work_item(&row.handle)?.to_string())))
+        .collect();
     let deltas = {
         let mut model = hub.model.lock().unwrap();
         let previous = model.projections.snapshot("sessions", "all")?.snapshot;
@@ -1775,6 +1798,7 @@ async fn rebuild(app: &tauri::AppHandle, cause: u8) -> Result<(), String> {
             .chain(launch_deadline)
             .min();
         model.agent_definitions.sessions(&rows);
+        model.work_items = work_items;
         model.rows = rows;
         model.active_team = active.clone();
         model.agent_ready = durable_ready
