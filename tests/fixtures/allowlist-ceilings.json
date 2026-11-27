@@ -1,0 +1,7 @@
+{
+  "about": "Per-release ceilings on the guard allow-lists that may only shrink. `current` is the release in progress, moved on by that release's first change; each list's guard fails when the list is longer than its ceiling for `current`. needsYouPredicates is src-tauri/crates/codesense-guards/tests/needs_you_predicates_allowlist.txt.",
+  "current": "R0",
+  "ceilings": {
+    "needsYouPredicates": { "R0": 97, "R1": 97, "R2a": 97, "R2b": 97, "R3a": 97, "R3b": 0 }
+  }
+}
