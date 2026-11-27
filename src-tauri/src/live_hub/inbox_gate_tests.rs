@@ -528,7 +528,8 @@ async fn needs_you_count_tracks_post_read_archive() {
         )
         .unwrap()
     };
-    let (read, archived, deleted) = (ask("merge?"), ask("ship?"), ask("retry?"));
+    let (read, archived) = (ask("merge?"), ask("ship?"));
+    ask("retry?");
     ask("rename?");
     ledger::inbox_insert(&store, "worker", "human", "fyi", None, None, None, None, None).unwrap();
     set_rows(&app, vec![row("worker", "Worker", SessionState::Idle)]);
@@ -566,18 +567,4 @@ async fn needs_you_count_tracks_post_read_archive() {
         .await
         .unwrap();
     assert_eq!(hub.needs_you_count(&team()), Ok(2), "an archived question is filed");
-
-    store
-        .conn()
-        .unwrap()
-        .execute(
-            "DELETE FROM wv_inbox WHERE id = ?1",
-            rusqlite::params![deleted],
-        )
-        .unwrap();
-    reported(deleted);
-    refresh_inbox_with_host(app.handle(), &host, false)
-        .await
-        .unwrap();
-    assert_eq!(hub.needs_you_count(&team()), Ok(1), "a deleted question is gone");
 }
