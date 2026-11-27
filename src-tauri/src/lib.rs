@@ -121,6 +121,7 @@ mod test_logger;
 /// sanctioned write path (one writer per record, live-max/AUTOINCREMENT id
 /// minting, atomic audit trail). See [`weft`] for the load-bearing rules.
 mod weft;
+/// The window registry: every window, its Layout and the items satellites hold.
 mod windows;
 /// Work items: minted once per lead launch, inherited by its workers.
 mod work_item;

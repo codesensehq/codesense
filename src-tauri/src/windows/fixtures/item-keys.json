@@ -1,0 +1,75 @@
+{
+  "keys": [
+    {
+      "name": "plain file",
+      "key": { "kind": "tab", "team": "acme:docs", "id": "notes/a.md" },
+      "canonical": "[\"tab\",\"acme:docs\",\"notes/a.md\"]"
+    },
+    {
+      "name": "colon in team",
+      "key": { "kind": "tab", "team": "org:with:colons", "id": "a.md" },
+      "canonical": "[\"tab\",\"org:with:colons\",\"a.md\"]"
+    },
+    {
+      "name": "virtual id",
+      "key": { "kind": "tab", "team": "acme:docs", "id": "virtual://agents" },
+      "canonical": "[\"tab\",\"acme:docs\",\"virtual://agents\"]"
+    },
+    {
+      "name": "query x then session",
+      "key": { "kind": "tab", "team": "acme:docs", "id": "a.md?x=1&session=2" },
+      "canonical": "[\"tab\",\"acme:docs\",\"a.md?x=1&session=2\"]"
+    },
+    {
+      "name": "query session then x",
+      "key": { "kind": "tab", "team": "acme:docs", "id": "a.md?session=2&x=1" },
+      "canonical": "[\"tab\",\"acme:docs\",\"a.md?session=2&x=1\"]"
+    },
+    {
+      "name": "upper case",
+      "key": { "kind": "tab", "team": "acme:docs", "id": "A.md" },
+      "canonical": "[\"tab\",\"acme:docs\",\"A.md\"]"
+    },
+    {
+      "name": "lower case",
+      "key": { "kind": "tab", "team": "acme:docs", "id": "a.md" },
+      "canonical": "[\"tab\",\"acme:docs\",\"a.md\"]"
+    },
+    {
+      "name": "percent encoded",
+      "key": { "kind": "tab", "team": "acme:docs", "id": "my%20notes.md" },
+      "canonical": "[\"tab\",\"acme:docs\",\"my%20notes.md\"]"
+    },
+    {
+      "name": "story md",
+      "key": { "kind": "tab", "team": "acme:docs", "id": "stories/epic/AB-1-story.md" },
+      "canonical": "[\"tab\",\"acme:docs\",\"stories/epic/AB-1-story.md\"]"
+    },
+    {
+      "name": "quote and comma in team",
+      "key": { "kind": "tab", "team": "acme:say \"hi\", there", "id": "a,b.md" },
+      "canonical": "[\"tab\",\"acme:say \\\"hi\\\", there\",\"a,b.md\"]"
+    },
+    {
+      "name": "non-ascii id",
+      "key": { "kind": "tab", "team": "acme:docs", "id": "notes/café ☕.md" },
+      "canonical": "[\"tab\",\"acme:docs\",\"notes/café ☕.md\"]"
+    },
+    {
+      "name": "unknown kind",
+      "key": { "kind": "future-kind", "team": "acme:docs", "id": "x" },
+      "canonical": "[\"future-kind\",\"acme:docs\",\"x\"]"
+    },
+    {
+      "name": "another unknown kind",
+      "key": { "kind": "other-kind", "team": "acme:docs", "id": "x" },
+      "canonical": "[\"other-kind\",\"acme:docs\",\"x\"]"
+    }
+  ],
+  "distinct": [
+    ["query x then session", "query session then x"],
+    ["upper case", "lower case"],
+    ["unknown kind", "another unknown kind"],
+    ["plain file", "colon in team"]
+  ]
+}
