@@ -8,7 +8,7 @@
 //! Nothing here gates the app: `view` is a fixed "no license" view that only carries the
 //! update fields. The license records an older build stored are removed once, locally.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -32,13 +32,25 @@ pub const MANIFEST_MAX_BYTES: usize = 64 * 1024;
 /// The Keychain services the license used, in both beta channels.
 pub const LICENSE_SERVICES: [&str; 2] = ["ai.codesense.beta", "ai.codesense.beta-staging"];
 
-/// What the static manifest says. Only the version and the notes are read here; the updater
-/// reads the rest (`url`, `signature`) through the plugin.
+/// What the static manifest says. The version, the notes and the release flags are read here;
+/// the updater reads the rest (`url`, `signature`) through the plugin.
 #[derive(Debug, Deserialize)]
 pub struct Manifest {
     pub version: String,
     #[serde(default)]
     pub notes: String,
+    /// The remote release-flag overrides (`crate::flags`). Kept as a raw value, never a struct,
+    /// so a `flags` of any shape can't make a manifest that parses today malformed.
+    #[serde(default)]
+    pub flags: serde_json::Value,
+}
+
+impl Manifest {
+    /// Whether the manifest kills tiles: only when `flags` is an object whose `tiles` is the
+    /// literal `false`. Any other shape is no override, so the manifest can't turn tiles on.
+    pub fn tiles_kill(&self) -> bool {
+        self.flags.get("tiles") == Some(&serde_json::Value::Bool(false))
+    }
 }
 
 /// The updater's endpoint for this Mac, with the target and arch filled in the way the plugin
@@ -76,6 +88,8 @@ pub struct StaticChannel {
     /// This build gets no updates: it was built without its channel's updater config. No entry
     /// point (the tick, Check now) then makes any request.
     updates_off: bool,
+    /// Where each manifest read caches the release-flag overrides (`crate::flags`).
+    flags_dir: PathBuf,
     /// A check is running. Another one (Check now during a tick) is skipped, so two reads can't
     /// land out of order in `latest`.
     checking: AtomicBool,
@@ -93,12 +107,14 @@ impl Drop for CheckGuard<'_> {
 
 impl StaticChannel {
     /// `base` is the channel's download host, for example `https://dl.codesense.ai`. The updater
-    /// is gated on the manifest from here on.
+    /// is gated on the manifest from here on. `flags_dir` is the app data folder the flag
+    /// overrides are cached in.
     pub fn new(
         base: &str,
         running: String,
         updater: Arc<Updates>,
         updates_off: bool,
+        flags_dir: PathBuf,
         emit: Box<dyn Fn(&View) + Send + Sync>,
     ) -> Result<Arc<Self>, String> {
         let channel = Arc::new(Self {
@@ -107,6 +123,7 @@ impl StaticChannel {
             updater: updater.clone(),
             latest: Mutex::new(None),
             updates_off,
+            flags_dir,
             checking: AtomicBool::new(false),
             emit,
         });
@@ -161,12 +178,7 @@ impl StaticChannel {
                 return Err("the update manifest is larger than allowed");
             }
         }
-        let manifest: Manifest =
-            serde_json::from_slice(&body).map_err(|_| "the update manifest is malformed")?;
-        if parse_version(&manifest.version).is_none() {
-            return Err("the update manifest names no version");
-        }
-        Ok(manifest)
+        serde_json::from_slice(&body).map_err(|_| "the update manifest is malformed")
     }
 
     /// One check: reads the manifest, drops a staged build it no longer names, and hands a newer
@@ -189,6 +201,13 @@ impl StaticChannel {
                 return false;
             }
         };
+        // Every manifest that parses carries the flag overrides, a withdrawn one included, so
+        // they are cached before the version is looked at.
+        crate::flags::write_kill(&self.flags_dir, manifest.tiles_kill());
+        if parse_version(&manifest.version).is_none() {
+            log::warn!(target: "license", "update check failed: the update manifest names no version");
+            return false;
+        }
         let version = manifest.version;
         *lock(&self.latest) = Some(version.clone());
         self.updater
