@@ -19,9 +19,9 @@
 //! - **A helper use.** An [`ALLOWED`] site's function installs the hook for
 //!   whoever calls it, so every mention of that function's name outside its
 //!   definition and `use` items (a call through any re-export path, or a
-//!   function pointer) is a use, named the same way. A file with its own
-//!   same-named function (another platform's stub) reaches that one through a
-//!   bare, `self::` or `super::` path, so those uses are not counted.
+//!   function pointer) is a use, named the same way. Uses in a Windows-only
+//!   module (its parent declares it under `#[cfg(windows)]`, or it sits inside
+//!   one) are not counted: `pre_exec` is unix-only, so that code cannot fork.
 //! - **Fails** on a site not in [`ALLOWED`], a helper use not in [`CALLERS`],
 //!   a `use` that renames a helper (it would hide its callers), and an
 //!   [`ALLOWED`] or [`CALLERS`] row with nothing left (remove the row).
@@ -267,24 +267,11 @@ fn in_use_item(code: &[u8], at: usize) -> bool {
         .is_some_and(|&start| !code[start..at].contains(&b';'))
 }
 
-/// Whether the path before `at` is empty, `self::` or `super::`: it names an
-/// item of this file's own module tree.
-fn local_path(code: &[u8], at: usize) -> bool {
-    let Some(before) = code[..at].trim_ascii_end().strip_suffix(b"::") else {
-        return true;
-    };
-    let before = before.trim_ascii_end();
-    let segment = before.len() - before.iter().rev().take_while(|&&c| is_ident(c)).count();
-    matches!(&before[segment..], b"self" | b"super")
-}
-
 /// Uses of `helper` in blanked `code`, and the `use` items that rename it.
-/// `own_stub`: this file defines a same-named function that is not the
-/// allowed one, so local paths reach the stub.
-fn helper_uses(file: &str, code: &[u8], helper: &str, own_stub: bool) -> (Vec<Site>, Vec<Site>) {
+fn helper_uses(file: &str, code: &[u8], helper: &str) -> (Vec<Site>, Vec<Site>) {
     let (mut uses, mut renames) = (Vec::new(), Vec::new());
     for at in idents(code, helper) {
-        if is_definition(code, at) || (own_stub && local_path(code, at)) {
+        if is_definition(code, at) {
             continue;
         }
         if !in_use_item(code, at) {
@@ -347,6 +334,60 @@ fn sources(app: &Path) -> Vec<(String, Vec<u8>)> {
         .collect()
 }
 
+/// The module path of a source label: `a/b.rs` and `a/b/mod.rs` are `a/b`;
+/// `lib.rs` and `main.rs` are their directory.
+fn module_path(file: &str) -> &str {
+    let stem = file.strip_suffix(".rs").unwrap_or(file);
+    let stem = stem.strip_suffix("/mod").unwrap_or(stem);
+    stem.strip_suffix("/lib")
+        .or_else(|| stem.strip_suffix("/main"))
+        .unwrap_or(stem)
+}
+
+/// The module paths each source declares as `#[cfg(windows)] mod name;`.
+fn windows_modules(sources: &[(String, Vec<u8>)]) -> BTreeSet<String> {
+    let mut found = BTreeSet::new();
+    for (file, code) in sources {
+        let attribute = b"#[cfg(windows)]";
+        let mut i = 0;
+        while let Some(n) = code[i..].windows(attribute.len()).position(|w| w == attribute) {
+            i += n + attribute.len();
+            let mut rest = code[i..].trim_ascii_start();
+            // Further attributes and a visibility may sit between it and `mod`.
+            while rest.starts_with(b"#[") {
+                let close = rest.iter().position(|&c| c == b']').map_or(rest.len(), |n| n + 1);
+                rest = rest[close..].trim_ascii_start();
+            }
+            if rest.starts_with(b"pub") {
+                rest = rest[3..].trim_ascii_start();
+                if rest.starts_with(b"(") {
+                    let close = rest.iter().position(|&c| c == b')').map_or(rest.len(), |n| n + 1);
+                    rest = rest[close..].trim_ascii_start();
+                }
+            }
+            let Some(after) = rest.strip_prefix(b"mod") else { continue };
+            if after.first().is_some_and(|&c| is_ident(c)) {
+                continue;
+            }
+            let after = after.trim_ascii_start();
+            let name_len = after.iter().take_while(|&&c| is_ident(c)).count();
+            if name_len > 0 && after[name_len..].trim_ascii_start().starts_with(b";") {
+                let name = String::from_utf8_lossy(&after[..name_len]);
+                found.insert(format!("{}/{name}", module_path(file)));
+            }
+        }
+    }
+    found
+}
+
+/// Whether `file` is a Windows-only module or inside one.
+fn windows_only(windows: &BTreeSet<String>, file: &str) -> bool {
+    let module = module_path(file);
+    windows
+        .iter()
+        .any(|w| module == w || module.strip_prefix(w.as_str()).is_some_and(|r| r.starts_with('/')))
+}
+
 type Allowed<'a> = &'a [(&'a str, &'a str, &'a str)];
 type Callers<'a> = &'a [(&'a str, &'a str, &'a str, &'a str)];
 
@@ -356,6 +397,7 @@ fn violations(sources: &[(String, Vec<u8>)], allowed: Allowed, callers: Callers)
     let mut out = Vec::new();
     let mut sites_seen = BTreeSet::new();
     let mut callers_seen = BTreeSet::new();
+    let windows = windows_modules(sources);
     for (file, code) in sources {
         for site in hook_sites(file, code) {
             let listed = allowed
@@ -370,10 +412,11 @@ fn violations(sources: &[(String, Vec<u8>)], allowed: Allowed, callers: Callers)
             }
             sites_seen.insert((site.file, site.function));
         }
-        for (allowed_file, helper, _) in allowed {
-            let own_stub = file.as_str() != *allowed_file
-                && idents(code, helper).into_iter().any(|at| is_definition(code, at));
-            let (uses, renames) = helper_uses(file, code, helper, own_stub);
+        if windows_only(&windows, file) {
+            continue;
+        }
+        for (_, helper, _) in allowed {
+            let (uses, renames) = helper_uses(file, code, helper);
             for site in renames {
                 out.push(format!(
                     "{}:{} renames {helper} in a use: call it by its name so CALLERS sees it",
@@ -500,18 +543,29 @@ fn a_new_caller_of_an_allowed_helper_fails() {
         assert_eq!(failures.len(), 1, "{mutant}: {failures:?}");
         assert!(failures[0].starts_with(expected), "{mutant}: {failures:?}");
     }
-    let stub = "pub fn limit(_: &mut Command) {}\nfn t() { super::limit(&mut c); limit(&mut c); }";
-    let mut with_stub = base.to_vec();
-    with_stub.push(blanked("crates/p/src/stub.rs", stub));
-    let stub_only = violations(&with_stub, &allowed, &callers);
-    assert!(stub_only.is_empty(), "a stub's own calls reach the stub: {stub_only:?}");
-    with_stub.push(blanked(
-        "crates/p/src/other.rs",
-        "pub fn limit() {}\nfn t() { p::l::limit(&mut c); }",
-    ));
-    let through_path = violations(&with_stub, &allowed, &callers);
-    assert_eq!(through_path.len(), 1, "{through_path:?}");
-    assert!(through_path[0].starts_with("crates/p/src/other.rs:2 uses limit in fn t"));
+    // A same-named decoy fn exempts nothing: both calls below are new callers.
+    let decoy = "fn limit() {}\nfn t() { use p::l::limit; limit(&mut c); }\n\
+                 fn u() { super::limit(&mut c); }";
+    let mut with_decoy = base.to_vec();
+    with_decoy.push(blanked("src/decoy.rs", decoy));
+    let failures = violations(&with_decoy, &allowed, &callers);
+    assert_eq!(failures.len(), 2, "{failures:?}");
+    assert!(failures[0].starts_with("src/decoy.rs:2 uses limit in fn t"), "{failures:?}");
+    assert!(failures[1].starts_with("src/decoy.rs:3 uses limit in fn u"), "{failures:?}");
+    // A Windows-only module's code cannot fork, so its stub calls are not callers;
+    // the same file declared without the cfg is scanned.
+    let stub = "pub fn limit(_: &mut Command) {}\nfn t() { super::limit(&mut c); }";
+    for (parent, exempt) in [
+        ("#[cfg(windows)]\n#[allow(dead_code)]\npub(crate) mod w;", true),
+        ("#[cfg(unix)]\nmod w;", false),
+    ] {
+        let mut sources = base.to_vec();
+        sources.push(blanked("crates/p/src/lib.rs", parent));
+        sources.push(blanked("crates/p/src/w.rs", stub));
+        sources.push(blanked("crates/p/src/w/inner.rs", "fn i() { p::l::limit(&mut c); }"));
+        let failures = violations(&sources, &allowed, &callers);
+        assert_eq!(failures.is_empty(), exempt, "{parent}: {failures:?}");
+    }
     let gone = violations(&base[..1], &allowed, &callers);
     assert_eq!(gone.len(), 1, "{gone:?}");
     assert!(gone[0].contains("CALLERS row limit src/s.rs fn sidecar no longer uses it"));
