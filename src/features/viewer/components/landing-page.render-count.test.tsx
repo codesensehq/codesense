@@ -4,8 +4,8 @@ import { act, render } from "@testing-library/react";
 import { Profiler, type ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-// The team landing page's menu items and nav mark are copy only: opening and
-// tiling another team's agent and doc must not render them again.
+// The team landing page's menu items, nav mark and Settings row are copy only:
+// opening and tiling another team's agent and doc must not render them again.
 
 vi.mock("@/tauri/commands", () => ({
   LOCAL_MACHINE_ID: "local",
@@ -13,6 +13,7 @@ vi.mock("@/tauri/commands", () => ({
   loadAppState: vi.fn().mockResolvedValue("{}"),
   pushViewerState: vi.fn().mockResolvedValue(undefined),
   checkPathExists: vi.fn().mockResolvedValue(true),
+  listAttachmentsByRemote: vi.fn().mockResolvedValue(new Map()),
   resolveTeamLandingPage: vi
     .fn()
     .mockResolvedValue({ kind: "found", path: "/orgs/acme/web/content/README.md" }),
@@ -22,12 +23,17 @@ vi.mock("@/shared/lib/logger", () => ({
   initLogging: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
+vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(() => Promise.resolve(() => {})) }));
+vi.mock("@/features/dashboard/components/attach-repo-dialog", () => ({
+  AttachRepoDialog: () => null,
+}));
 
 import {
   renderRow,
   type RowInteractionModel,
 } from "@/features/dashboard/components/status-nav/rows";
 import type { FlatNavItem } from "@/features/dashboard/lib/flatten-nav-tree";
+import { TeamTile } from "@/features/settings/components/workspace-section/team-tile";
 import { invalidateLandingPages } from "@/features/viewer/lib/team-landing-page";
 import { installTerminalLayoutHarness, seedTerminalTabs } from "@/test/terminal-layout-harness";
 import { useOrgStore } from "@/shared/stores/org-store";
@@ -85,26 +91,42 @@ beforeEach(() => {
 });
 
 describe("the team landing page's copy", () => {
-  it("opening and tiling another team's agent and doc renders neither the menu nor the mark", async () => {
-    const renders = { menu: 0, mark: 0 };
+  it("opening and tiling another team's agent and doc renders none of them again", async () => {
+    const renders = { menu: 0, mark: 0, settings: 0 };
     const counted = (id: keyof typeof renders, node: ReactNode) => (
       <Profiler id={id} onRender={() => void renders[id]++}>
         {node}
       </Profiler>
     );
     const model = rowModel();
-    const { getByTestId } = render(
+    const { getByTestId, getByText } = render(
       <>
         {counted("menu", <StarterPageMenuItems path={README} onClose={vi.fn()} />)}
         {counted("mark", renderRow(fileItem, model))}
+        {counted(
+          "settings",
+          <TeamTile
+            team={ORG.teams[0]}
+            org={ORG}
+            attachmentsByRemote={new Map()}
+            expanded
+            trackDialogOpen={false}
+            onExpandedChange={vi.fn()}
+            onTrackDialogOpenChange={vi.fn()}
+          />,
+        )}
       </>,
     );
     await act(async () => {});
     expect(getByTestId("starter-page-menu")).toBeInTheDocument();
     expect(getByTestId("starter-page-mark")).toBeInTheDocument();
+    expect(
+      getByText("Opens when you open this team's folder. Not a group starter."),
+    ).toBeInTheDocument();
     const settled = { ...renders };
     expect(settled.menu).toBeGreaterThan(0);
     expect(settled.mark).toBeGreaterThan(0);
+    expect(settled.settings).toBeGreaterThan(0);
     const before = useViewerStore.getState();
 
     await act(async () => {
