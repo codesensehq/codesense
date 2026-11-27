@@ -12,9 +12,9 @@
 //! - **One Layout per window.** `layoutRef` is an opaque Layout id or `None`; two windows
 //!   never hold the same non-null one.
 //!
-//! A few std calls are written as paths (`Iterator::find(..)`, `Vec::is_empty(..)`) so
-//! `explicit_sync_unattended_writer_guard`'s call graph resolves them without a ceiling
-//! raise.
+//! A few std calls are written as paths (`Iterator::find(..)`, `Vec::is_empty(..)`) or
+//! reborrows (`&*label`) so `explicit_sync_unattended_writer_guard`'s call graph resolves
+//! them without a ceiling raise.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Mutex;
@@ -91,7 +91,7 @@ pub trait WindowHost {
 
 impl<R: Runtime> WindowHost for tauri::AppHandle<R> {
     fn send_slice(&self, slice: &WindowSlice) {
-        if let Err(e) = self.emit_to(String::as_str(&slice.label), SLICE_EVENT, slice) {
+        if let Err(e) = self.emit_to(&*slice.label, SLICE_EVENT, slice) {
             log::warn!(target: "windows", "slice v{} to {} not sent: {e}", slice.version, slice.label);
         }
     }
