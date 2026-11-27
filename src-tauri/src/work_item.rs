@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 //! Work items: the one piece of work a lead launch starts, shared by every session below it.
 //!
-//! A work item is minted when an agent session starts and its launcher has none (a person,
-//! the Foreman, a routine, or an agent outside a work item). A launch by a session that has
+//! A work item is minted when an agent session or a routine run starts and its launcher has
+//! none (a person, the Foreman, a routine, or an agent outside a work item). A launch by a session that has
 //! one inherits it, a restore keeps the id it had and never mints, and a plain shell never
 //! gets one. [`resolve_for_launch`] is the one place that rule lives, and
 //! [`WorkItemId::mint`] is private to this module so no other code can make an id.
