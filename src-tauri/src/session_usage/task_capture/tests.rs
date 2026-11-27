@@ -812,7 +812,7 @@ fn links(store: &UsageStore, task: &str, kind: &str) -> Vec<String> {
     out
 }
 
-/// SV-CDE-83 I1, case 1: a restore relaunch (which keeps its original launcher)
+/// Case 1: a restore relaunch (which keeps its original launcher)
 /// keeps its story, team and task parent, and its task continues the predecessor's.
 #[test]
 fn cde83_a_restore_relaunch_continues_its_predecessor() {
