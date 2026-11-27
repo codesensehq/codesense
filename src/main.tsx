@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 import { AppThemeProvider } from "@/themes/theme-provider";
 import { HostMenuLayer } from "@/features/shell/host-menu-layer";
-import React from "react";
+import React, { type ReactNode } from "react";
 import ReactDOM from "react-dom/client";
 import { ThemeProvider } from "next-themes";
 import type { useConfigStore } from "@/shared/stores/config-store";
@@ -11,8 +11,8 @@ import type { useViewerStore } from "@/shared/stores/viewer-store";
 import { RootCrashFallback } from "@/features/shell/components/root-crash-fallback";
 import { ErrorBoundary } from "@/shared/components/error-boundary";
 import { initCodesenseHome } from "@/shared/lib/codesense-home";
+import { isMainWindow } from "@/shared/lib/current-window";
 import { initLogging } from "@/shared/lib/logger";
-import App from "./app/App";
 import { VerbConfirmationProvider } from "@/features/dashboard/components/verb-confirmation-provider";
 import { installGlobalErrorHandlers } from "./app/install-global-error-handlers";
 import { startRendererHeartbeat } from "./app/renderer-heartbeat";
@@ -222,6 +222,19 @@ function renderApp(): void {
     });
     return;
   }
+  // A satellite window renders its registry slice, never `App`: neither `App`'s
+  // module scope nor its effects run there (`boot-inventory.ts`).
+  if (!isMainWindow()) {
+    void import("@/shared/windows/satellite-root").then(({ SatelliteRoot }) =>
+      mountRoot(<SatelliteRoot />),
+    );
+    return;
+  }
+  void import("./app/App").then(({ default: App }) => mountRoot(<App />));
+}
+
+/** Both roots render inside the same providers. */
+function mountRoot(root: ReactNode): void {
   ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
     <React.StrictMode>
       <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
@@ -230,9 +243,7 @@ function renderApp(): void {
           boundary degrades to RootCrashFallback instead of blanking the window. */}
         <ErrorBoundary scope="root" fallback={<RootCrashFallback />}>
           <VerbConfirmationProvider>
-            <HostMenuLayer>
-              <App />
-            </HostMenuLayer>
+            <HostMenuLayer>{root}</HostMenuLayer>
           </VerbConfirmationProvider>
         </ErrorBoundary>
       </ThemeProvider>

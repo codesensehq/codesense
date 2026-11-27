@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 import { useCallback, useSyncExternalStore } from "react";
 import { listenScoped } from "@/shared/windows/listen-scoped";
+import { ownsSession } from "@/shared/windows/slice";
 
 import { logger } from "@/shared/lib/logger";
 
@@ -37,10 +38,15 @@ function ensureListener(): void {
   listenPending = true;
   try {
     void Promise.resolve(
-      listenScoped<{ session_id?: string; cwd?: string }>("pty-osc7", "owning-window", (event) => {
-        const sid = event.payload?.session_id;
-        if (typeof sid === "string" && sid) bump(sid);
-      }),
+      listenScoped<{ session_id?: string; cwd?: string }>(
+        "pty-osc7",
+        "owning-window",
+        (event) => {
+          const sid = event.payload?.session_id;
+          if (typeof sid === "string" && sid) bump(sid);
+        },
+        (payload) => ownsSession(payload?.session_id),
+      ),
     )
       .then((un) => {
         // A reset while `listen` was pending, or every subscriber dropped out

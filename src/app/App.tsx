@@ -15,7 +15,6 @@ import {
 } from "@/shared/lib/team-key";
 import { useLocalProfileStore } from "@/shared/stores/local-profile-store";
 import { AccountSection } from "@/features/settings/components/account-section";
-import { useShortcutsStore } from "@/shared/stores/shortcuts-store";
 import { useUiStore } from "@/shared/stores/ui-store";
 import { useShortcutHandler } from "@/shared/hooks/use-shortcut-handler";
 import { dispatchMenuAction } from "@/app/menu-action-dispatch";
@@ -27,7 +26,7 @@ import { emit } from "@tauri-apps/api/event";
 import { listenScoped } from "@/shared/windows/listen-scoped";
 import { safeUnlisten } from "@/shared/lib/tauri-listeners";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { initLogging, logger } from "@/shared/lib/logger";
+import { logger } from "@/shared/lib/logger";
 import {
   exitTopmostOverlay,
   isCmdW,
@@ -58,7 +57,6 @@ import { useTerminalServerMenuBarSetting } from "@/features/settings/hooks/use-t
 import { useBackgroundModeNotification } from "@/features/viewer/hooks/use-background-mode-notification";
 import { useBackgroundAgentLimit } from "@/features/viewer/hooks/use-background-agent-limit";
 import { useBackgroundSetupCap } from "@/features/viewer/hooks/use-background-setup-cap";
-import { hydrateTerminalLayout } from "@/shared/lib/terminal-layout";
 import { useWorkspaceViewerSync } from "@/app/hooks/use-workspace-viewer-sync";
 import { useTeamLandingPage } from "@/features/viewer/hooks/use-team-landing-page";
 import { useStaleArrowFilterCleanup } from "@/features/viewer/hooks/use-stale-arrow-filter";
@@ -66,8 +64,6 @@ import { useShellScrollContainment } from "@/app/hooks/use-shell-scroll-containm
 import { useResolvedRepositoryPathsSync } from "@/app/hooks/use-resolved-repository-paths-sync";
 import { useSyncWaveRescan } from "@/app/hooks/use-sync-wave-rescan";
 import { useCompositeOverlayRefresh } from "@/app/hooks/use-composite-overlay-refresh";
-import { useStatusTaxonomy } from "@/features/viewer/hooks/use-status-taxonomy";
-import { useActiveTeamKey } from "@/shared/lib/team-key";
 import { useDashboardStream } from "@/app/hooks/use-dashboard-stream";
 import { useEpicReposReassembly } from "@/app/hooks/use-epic-repos-reassembly";
 import { useOrgRegistrySync } from "@/features/org/hooks/use-org-registry-sync";
@@ -100,40 +96,25 @@ import { PanePanelsMount } from "@/features/shell/right-pane/panes/use-register-
 import { useOrgDiscovery } from "@/features/org/hooks/use-org-discovery";
 import { OrgPicker } from "@/features/org/components/org-picker";
 import { usePendingJoinLanding } from "@/features/org/hooks/use-pending-join-landing";
-import { registerManageTeamsTab } from "@/features/shell/manage-teams-virtual-tab";
-import { registerWorkspacesTab } from "@/features/org/workspaces-virtual-tab";
-import { registerMessageTab } from "@/features/weft/components/inbox-message-dashboard";
 import { NoTeamTabHost } from "@/features/shell/components/no-team-tab-host";
 import { Workbench } from "@/features/shell/components/workbench";
-import { registerDashboardsTab } from "@/features/dashboard-publishing/dashboards-virtual-tab";
-import { registerMachinesTab } from "@/features/shell/machines-virtual-tab";
-import { registerRoutinesTab } from "@/features/routines/routines-virtual-tab";
-import { registerAgentsTab } from "@/features/agents/agents-virtual-tab";
-import { registerOpenDiffTab } from "@/features/git-sync/lib/open-diff";
-import { registerScratchSpaceTab } from "@/features/scratch-space/scratch-space-virtual-tab";
-import { registerSourceReposTab } from "@/features/dashboard/source-repos-virtual-tab";
 import { AppShell } from "@/features/shell/components/app-shell";
 import { WatchedSplash } from "@/features/shell/components/boot-wait";
 import { useCurrentUser } from "@/shared/lib/get-current-user";
-import { registerSettingsTab } from "@/features/settings/settings-virtual-tab";
 import { SETTINGS_VIRTUAL_PATH } from "@/features/settings/lib/open-settings-tab";
 import { DependencyInstallView } from "@/features/deps/views/dependency-install-view";
 import { getDependencyStatus, type DependencyStatus } from "@/tauri/commands";
 import { computeDepsReady, UNAVAILABLE_DEP_STATUS } from "@/app/deps-gate";
 import { startUpdateCheck } from "@/app/update-check";
 import { DEFAULT_AGENT_CLI } from "@/shared/lib/default-agent";
+import {
+  registerVirtualTabs,
+  useActiveTeamStatusTaxonomy,
+  useBootLoad,
+  useTerminalLayoutRestore,
+} from "@/shared/windows/boot-inventory";
 
-registerMachinesTab();
-registerDashboardsTab();
-registerRoutinesTab();
-registerAgentsTab();
-registerScratchSpaceTab();
-registerOpenDiffTab();
-registerSourceReposTab();
-registerSettingsTab();
-registerManageTeamsTab();
-registerWorkspacesTab();
-registerMessageTab();
+registerVirtualTabs();
 
 if (import.meta.env.MODE === "webdriver") {
   void import("./e2e-configuration-control").then(({ registerConfigurationE2eControl }) =>
@@ -178,7 +159,6 @@ function App() {
   // may displace the shell (black band at the bottom). Enforced app-wide in ONE
   // place rather than per scroll-into-view caller.
   useShellScrollContainment();
-  const loadState = useConfigStore((s) => s.loadState);
   const initialized = useConfigStore((s) => s.initialized);
   const stateLoaded = useViewerStore((s) => s.stateLoaded);
   const orgCount = useOrgStore((s) => s.orgs.length);
@@ -199,6 +179,7 @@ function App() {
   const activeSettingsTabPath = useViewerStore((s) =>
     activeTeamKey ? s.activeTab[activeTeamKey] : undefined,
   );
+  // boot: settings-tab-flag
   useEffect(() => {
     const shouldBeOpen = activeSettingsTabPath === SETTINGS_VIRTUAL_PATH;
     if (settingsPanelOpen !== shouldBeOpen) {
@@ -221,6 +202,7 @@ function App() {
   // Cmd+, / switcher (App.tsx) and Cmd+\ / ⌘J (TeamWorkspaceView)
   // branches. Reads user overrides from `useShortcutsStore`; matches
   // against the canonical registry (`allShortcutActions`).
+  // boot: navigation-capture
   useEffect(() => installUserNavigationCapture(document), []);
   useShortcutHandler();
 
@@ -352,7 +334,7 @@ function App() {
   // every switcher/board surface derives from the team's states (not the compile-time
   // seed). Store is seeded at import → this never gates paint; it swaps in a custom
   // taxonomy once the off-thread load settles, and re-loads on team switch (AC-3).
-  useStatusTaxonomy(useActiveTeamKey());
+  useActiveTeamStatusTaxonomy();
 
   // SW-DX-3: the ONE app-root listener for the live status stream — funnels
   // context-file-change / agent-done / agent-message into the dashboard-stream
@@ -400,49 +382,17 @@ function App() {
   const { repoPath: activeWorkspaceRepoPath } = useActiveWorkspaceContext();
   useSourceRepoAttachment(activeWorkspaceRepoPath);
 
+  // boot: deps-ready-ref
   useEffect(() => {
     depsReadyRef.current = dependenciesReady;
   }, [dependenciesReady]);
 
   // Remote Machines' last-known census and last-reached times.
+  // boot: machine-memory
   useEffect(() => startMachineMemory(), []);
 
-  useEffect(() => {
-    // Kick off org-store rehydrate OUTSIDE the `await initLogging()`
-    // chain so it fires even if logging init fails. F-25 removed the
-    // currentUser projection (and its two-gate race), so the rehydrate
-    // no longer needs to serialize against an auth-projection hook —
-    // it only needs to restore the persisted session block before any
-    // setter writes live state on top of it.
-    useOrgStore
-      .getState()
-      .loadPersistedState()
-      .catch(() => {
-        // Failures are logged inside loadPersistedState.
-      });
-
-    // Shortcut overrides load in parallel with org-store. No
-    // ordering constraint — the keyboard handler reads whatever is
-    // in the store at match time; pre-rehydrate it uses the
-    // registry's defaults, post-rehydrate it uses the user's overrides.
-    // `loadPersistedState` logs its own failures; this tail-catch
-    // guards sync throws before the promise chain.
-    useShortcutsStore
-      .getState()
-      .loadPersistedState()
-      .catch((e) => {
-        logger.warn("App", `shortcuts loadPersistedState failed — ${e}`);
-      });
-
-    // Which optional features this OS supports: read once, fixed for the run (`useCapability`).
-    void useConfigStore.getState().loadPlatformCaps();
-
-    (async () => {
-      await initLogging();
-      loadState();
-      initializeAuth();
-    })().catch(() => {});
-  }, [loadState, initializeAuth]);
+  // The boot reads (config, org, shortcuts, platform caps, profile).
+  useBootLoad();
 
   // SW-FX-75: boot-gate watchdog. If any splash-blocking gate is still stuck
   // after the deadline (a never-settling await in its owner), force it open and
@@ -451,6 +401,7 @@ function App() {
   // `useOrgDiscovery` itself; this covers the store- and dep-owned gates. Reads
   // live state (Zustand `getState`, `depsReadyRef`) so it never acts on a stale
   // render closure. Runs once; the timer is cleared on unmount.
+  // boot: boot-gate-watchdog
   useEffect(() => {
     const timer = setTimeout(() => {
       const stuck: string[] = [];
@@ -485,6 +436,7 @@ function App() {
   }, []);
 
   // Intercept external link clicks — open in system browser via Tauri opener
+  // boot: external-links
   useEffect(() => {
     const handler = (e: MouseEvent) => {
       const anchor = (e.target as HTMLElement).closest("a[href]") as HTMLAnchorElement | null;
@@ -501,6 +453,7 @@ function App() {
   }, []);
 
   // Check dependency status once after auth completes
+  // boot: deps-check
   useEffect(() => {
     if (!entered || depsCheckedRef.current) return;
     depsCheckedRef.current = true;
@@ -519,6 +472,7 @@ function App() {
   // SW-WC-1: prime the workspace-archive mirror from disk and subscribe to
   // `codesense:workspace-archive-changed` so every pill re-renders at the
   // same tick as an archive/unarchive. One-shot per app lifetime.
+  // boot: workspace-archive
   useEffect(() => {
     let cancelled = false;
     let unlisten: (() => void) | null = null;
@@ -538,6 +492,7 @@ function App() {
     };
   }, []);
 
+  // boot: dep-status-changed
   useEffect(() => {
     let unlisten: (() => void) | null = null;
     let cancelled = false;
@@ -573,6 +528,7 @@ function App() {
 
   // Check for updates after auth is complete (Toaster must be mounted). Internal builds
   // only: in the beta channels updates follow the license check (SW-PB-13 AC-2).
+  // boot: update-check
   useEffect(() => {
     if (initialized && entered) void startUpdateCheck();
   }, [initialized, entered]);
@@ -592,6 +548,7 @@ function App() {
   // Terminal / Toggle Scratch Note. The fix ensures late-arriving
   // promise resolutions unlisten immediately when the effect is
   // already cleaned up.
+  // boot: menu-action
   useEffect(() => {
     let cancelled = false;
     let unlisten: (() => void) | null = null;
@@ -621,6 +578,7 @@ function App() {
   // the changed path is the file it has open (clean → reload, dirty → warn). The
   // `cancelled` flag mirrors the menu:action idiom (non-idempotent event: a
   // leaked StrictMode listener would double-fire reloads).
+  // boot: worktree-file-change
   useEffect(() => {
     let cancelled = false;
     let unlisten: (() => void) | null = null;
@@ -645,6 +603,7 @@ function App() {
     };
   }, []);
 
+  // boot: local-profiles-changed
   useEffect(() => {
     const subscription = listenScoped(
       "local-profiles-changed",
@@ -661,6 +620,7 @@ function App() {
   // tracked-paths probe lands over `LARGE_REPO_THRESHOLD` (5000); the banner
   // teaches `git config core.fsmonitor true` so `git status` on the remote
   // doesn't walk the tree. Dismiss is the toast's default close.
+  // boot: fsmonitor-nudge
   useEffect(() => {
     void import("@/features/viewer/lib/use-remote-cadence").then(
       ({ registerFsmonitorNudgeHandler }) => {
@@ -690,6 +650,7 @@ function App() {
   // the gate — so neither runs a background timer here anymore.
 
   // Global keyboard shortcuts
+  // boot: close-tab-shortcut
   useEffect(() => {
     // Global shortcut listener. Meta-chorded shortcuts (Cmd+,,
     // Cmd+Shift+P / O / T) are deliberately NOT gated by a
@@ -793,6 +754,7 @@ function App() {
   }, []);
 
   // Restore viewer state after config loads, auto-detect tools on first run.
+  // boot: viewer-restore
   useEffect(() => {
     if (initialized) {
       useViewerStore
@@ -841,6 +803,7 @@ function App() {
   // so we use Tauri's `onCloseRequested` which supports async work.
   // Uses the cancelled-flag pattern (see menu:action listener above) to
   // handle React StrictMode's mount-unmount-remount cycle.
+  // boot: close-flush
   useEffect(() => {
     let cancelled = false;
     let unlisten: (() => void) | null = null;
@@ -870,6 +833,7 @@ function App() {
     };
   }, []);
 
+  // boot: quit-flush
   useEffect(() => {
     let cancelled = false;
     let off: (() => void) | undefined;
@@ -888,22 +852,9 @@ function App() {
 
   // The terminal hosts own the terminal layout: restoring it is subscribing to
   // their changes and fetching their snapshots. It never opens a terminal.
-  useEffect(() => {
-    if (!initialized) return;
-    let teardown: (() => void) | null = null;
-    let cancelled = false;
-    hydrateTerminalLayout()
-      .then((stop) => {
-        if (cancelled) stop();
-        else teardown = stop;
-      })
-      .catch((e) => logger.warn("terminal", `terminal layout restore failed: ${e}`));
-    return () => {
-      cancelled = true;
-      teardown?.();
-    };
-  }, [initialized]);
+  useTerminalLayoutRestore();
 
+  // boot: watcher
   useEffect(() => {
     if (!initialized) return;
 

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 import { useEffect } from "react";
 import { listenScoped } from "@/shared/windows/listen-scoped";
+import { ownsTerminalLayout } from "@/shared/windows/slice";
 import {
   getViewerState,
   subscribeViewerState,
@@ -41,9 +42,14 @@ export function useTerminalActivity() {
     const cleanup: Array<() => void> = [];
     const group = createListenerGroup();
     const listeners = [
-      listenScoped<TerminalRuntimeEvent>(TERMINAL_RUNTIME_EVENT, "owning-window", ({ payload }) => {
-        if (!cancelled) recovery.event(payload);
-      }),
+      listenScoped<TerminalRuntimeEvent>(
+        TERMINAL_RUNTIME_EVENT,
+        "owning-window",
+        ({ payload }) => {
+          if (!cancelled) recovery.event(payload);
+        },
+        ownsTerminalLayout,
+      ),
       listenScoped(TERMINAL_LAYOUT_RESYNC_EVENT, "every-window", () => {
         if (!cancelled) recovery.resync();
       }),

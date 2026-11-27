@@ -43,6 +43,7 @@ import {
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { listenScoped } from "@/shared/windows/listen-scoped";
+import { ownsSession, ownsTerminalLayout } from "@/shared/windows/slice";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import "@xterm/xterm/css/xterm.css";
 
@@ -679,12 +680,17 @@ export function createTerminalManager(deps: TerminalManagerDeps = {}): TerminalM
     if (globalsInstalled) return;
     globalsInstalled = true;
     installEvictHook();
-    listenScoped<{ session_id: string }>("pty-exit", "owning-window", (event) => {
-      const entry = sessions.get(event.payload.session_id);
-      if (!entry) return;
-      entry.exited = true;
-      notify(entry, (l) => l.exit?.());
-    }).catch(() => {});
+    listenScoped<{ session_id: string }>(
+      "pty-exit",
+      "owning-window",
+      (event) => {
+        const entry = sessions.get(event.payload.session_id);
+        if (!entry) return;
+        entry.exited = true;
+        notify(entry, (l) => l.exit?.());
+      },
+      (payload) => ownsSession(payload.session_id),
+    ).catch(() => {});
     const purgeRemote = () => {
       for (const entry of [...sessions.values()]) {
         if (typeof entry.reference !== "string" && !currentTerminalDisplay(entry.reference))
@@ -1313,12 +1319,20 @@ export function createTerminalManager(deps: TerminalManagerDeps = {}): TerminalM
           openLiveStream({
             reserve: reserveTerminalStream,
             listen: (channel, onEvent) =>
-              listenScoped<TerminalStreamEvent>(channel, "owning-window", (event) => {
-                if (!currentTerminalDisplay(entry.reference)) return;
-                const epoch = remoteEpoch();
-                if (epoch !== undefined && event.payload.privateAuthorityEpoch !== epoch) return;
-                onEvent(event.payload);
-              }),
+              listenScoped<TerminalStreamEvent>(
+                channel,
+                "owning-window",
+                (event) => {
+                  if (!currentTerminalDisplay(entry.reference)) return;
+                  const epoch = remoteEpoch();
+                  if (epoch !== undefined && event.payload.privateAuthorityEpoch !== epoch) return;
+                  onEvent(event.payload);
+                },
+                () =>
+                  typeof entry.reference === "string"
+                    ? ownsSession(entry.reference)
+                    : ownsTerminalLayout(),
+              ),
             subscribe: async (streamId) => {
               const reply = await subscribeTerminal(
                 terminalSessionReference(entry.reference),
