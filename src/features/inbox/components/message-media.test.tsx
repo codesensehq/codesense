@@ -20,7 +20,7 @@ import type { InboxMediaAttachment, WorkspaceChatMessage } from "@/tauri/command
 import { chatMediaLoader } from "@/features/workspace-chat/lib/chat-media-loader";
 import { fixtureMessages } from "../fixtures";
 import { formatClock } from "../model";
-import { MessageMedia, type MediaLoader } from "./message-media";
+import { isCachedImage, MessageMedia, type MediaLoader } from "./message-media";
 import { inboxMediaLoader } from "./primitives";
 
 const SHA = "b".repeat(64);
@@ -189,6 +189,15 @@ describe("MessageMedia while an image loads on its own", () => {
     expect(figure.style.getPropertyValue("--h")).toBe("270");
     expect(screen.queryByRole("button", { name: /Load/ })).toBeNull();
     expect(readWorkspaceChatMedia).not.toHaveBeenCalled();
+  });
+});
+
+describe("isCachedImage", () => {
+  it("is a cached image with a well-formed hash", () => {
+    expect(isCachedImage(image())).toBe(true);
+    expect(isCachedImage(image({ sha256: undefined }))).toBe(false);
+    expect(isCachedImage(image({ sha256: "B".repeat(64) }))).toBe(false);
+    expect(isCachedImage(image({ state: "pending" }))).toBe(false);
   });
 });
 

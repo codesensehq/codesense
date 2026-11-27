@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-import type { MediaLoader } from "@/features/inbox/components/message-media";
+import { isCachedImage, type MediaLoader } from "@/features/inbox/components/message-media";
 import {
   loadWorkspaceChatMedia,
   readWorkspaceChatMedia,
@@ -30,10 +30,12 @@ export function chatMediaAttachment(message: WorkspaceChatMessage): InboxMediaAt
   if (!a) return null;
   if (a.state === "blocked") return a;
   switch (message.mediaState) {
-    case "cached":
-      return a.sha256 && /^[a-f0-9]{64}$/.test(a.sha256)
-        ? { ...a, state: "cached" }
+    case "cached": {
+      const cached: InboxMediaAttachment = { ...a, state: "cached" };
+      return isCachedImage(cached)
+        ? cached
         : { ...a, state: "failed", reason: "cache", retryable: false };
+    }
     case "pending":
       return { ...a, state: "loading" };
     case "tapToLoad":

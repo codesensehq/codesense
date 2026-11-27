@@ -85,6 +85,10 @@ export function mediaReason(
   return "GIF · not on your auto-load list";
 }
 
+/** Whether `a` is a cached image this view can read: cached, with a well-formed hash. */
+export const isCachedImage = (a: InboxMediaAttachment): boolean =>
+  a.state === "cached" && /^[a-f0-9]{64}$/.test(a.sha256 ?? "");
+
 /** The failed card an image shows when its bytes won't decode. */
 const damaged = (a: InboxMediaAttachment): InboxMediaAttachment => ({
   ...a,
@@ -111,7 +115,7 @@ export function MessageMedia({
   // the card gives way to the image (or the figure it loads into), `region` takes over.
   const [tapped, setTapped] = useState(false);
   const sha256 = a.sha256 ?? "";
-  const cached = a.state === "cached" && /^[a-f0-9]{64}$/.test(sha256);
+  const cached = isCachedImage(a);
   const media = cached ? (
     <MediaImage
       key={sha256}
