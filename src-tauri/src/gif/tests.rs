@@ -582,7 +582,7 @@ fn the_pingback_map_holds_at_most_2000_entries_and_drops_the_oldest() {
         }),
     };
     let batch: Vec<Found> = (0..2100).map(found).collect();
-    held.record(Provider::Giphy, &batch, Rating::Pg, None, START_MS);
+    held.record(Provider::Giphy, &batch, Rating::Pg, None, START_MS, 0);
     assert_eq!(held.held_count(), analytics::MAX_ENTRIES);
     assert!(held
         .pingbacks_for(Provider::Giphy, "id0", START_MS)
@@ -600,6 +600,7 @@ fn the_pingback_map_holds_at_most_2000_entries_and_drops_the_oldest() {
         Rating::Pg,
         None,
         START_MS + 1,
+        0,
     );
     assert_eq!(held.held_count(), analytics::MAX_ENTRIES);
     assert!(held
@@ -628,6 +629,38 @@ fn giphy_found(id: &str) -> Found {
             ..Default::default()
         }),
     }
+}
+
+/// Catches a record that holds a search whatever epoch it ran under. Epochs only rise: a lower
+/// one is stale and dropped, the held one records, and a higher one is followed first.
+#[test]
+fn a_record_under_a_stale_epoch_is_dropped() {
+    let held = analytics::Analytics::new();
+    let record = |id: &str, epoch: u64| {
+        held.record(
+            Provider::Giphy,
+            &[giphy_found(id)],
+            Rating::Pg,
+            None,
+            START_MS,
+            epoch,
+        )
+    };
+    let e = 4;
+    held.start_epoch(Provider::Giphy, e + 1);
+    record("old", e);
+    assert_eq!(held.held_count(), 0, "a stale epoch's search is dropped");
+    record("now", e + 1);
+    assert_eq!(held.held_count(), 1, "the held epoch's search records");
+    record("next", e + 2);
+    let holds = |id: &str| held.pingbacks_for(Provider::Giphy, id, START_MS).is_some();
+    assert_eq!(
+        (holds("now"), holds("next")),
+        (false, true),
+        "a newer epoch lets go of the older one's entries, then records"
+    );
+    record("late", e + 1);
+    assert_eq!(held.held_count(), 1, "the epoch it left is stale now");
 }
 
 /// A provider that answers from memory, to show the service runs any adapter through the trait.

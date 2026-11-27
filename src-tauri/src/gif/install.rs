@@ -34,11 +34,15 @@ impl Epochs {
             Provider::Klipy => self.klipy,
         }
     }
-    fn bump(&mut self, provider: Provider) {
+    /// `provider`'s epoch, to change.
+    pub(crate) fn of_mut(&mut self, provider: Provider) -> &mut u64 {
         match provider {
-            Provider::Giphy => self.giphy += 1,
-            Provider::Klipy => self.klipy += 1,
+            Provider::Giphy => &mut self.giphy,
+            Provider::Klipy => &mut self.klipy,
         }
+    }
+    fn bump(&mut self, provider: Provider) {
+        *self.of_mut(provider) += 1;
     }
 }
 

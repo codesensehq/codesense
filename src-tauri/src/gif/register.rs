@@ -359,7 +359,9 @@ impl Registration {
     fn follow_epoch_held(&self, seen: &mut Epochs) -> Epochs {
         let now = install_epochs(self.service.data_dir());
         for provider in [Provider::Giphy, Provider::Klipy] {
-            if Epochs::of(*seen, provider) == Epochs::of(now, provider) {
+            let epoch = Epochs::of(now, provider);
+            analytics::Analytics::start_epoch(&self.service.analytics, provider, epoch);
+            if Epochs::of(*seen, provider) == epoch {
                 continue;
             }
             HashMap::retain(&mut lock(&self.sent), |(sent, ..), _| *sent != provider);
@@ -370,13 +372,6 @@ impl Registration {
             }
         }
         *seen = now;
-        for provider in [Provider::Giphy, Provider::Klipy] {
-            analytics::Analytics::start_epoch(
-                &self.service.analytics,
-                provider,
-                Epochs::of(now, provider),
-            );
-        }
         now
     }
 

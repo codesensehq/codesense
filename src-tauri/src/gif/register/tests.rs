@@ -213,6 +213,7 @@ impl Harness {
             crate::gif::Rating::Pg,
             Some("ship it"),
             self.now(),
+            epoch,
         );
     }
     pub(crate) fn found_all(&self, id: &str) {
@@ -276,6 +277,7 @@ impl Harness {
             crate::gif::Rating::Pg,
             query,
             self.now(),
+            epoch,
         );
         let fp = crate::gif::fingerprint(&Secret::new(key));
         crate::gif::install::customer_id(self.dir.path(), &fp, epoch).unwrap()
@@ -1392,6 +1394,7 @@ async fn klipy_load_and_click_send_nothing_and_read_no_keychain() {
         crate::gif::Rating::Pg,
         Some("ship it"),
         START_MS,
+        install_epoch(dir.path(), Provider::Klipy),
     );
     // A pick of a GIF a KLIPY search returned.
     registration.register_click(Provider::Klipy, SLUG).await;
