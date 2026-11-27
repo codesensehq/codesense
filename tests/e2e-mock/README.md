@@ -128,3 +128,35 @@ node scripts/perf-baseline.mjs compare --current test-results/perf-baseline-curr
 
 `record` in place of `compare` writes the set. The tool exits 0 on a pass (or
 with no set for the runner), 1 on a regression and 2 on bad input.
+
+### Measuring the perf baselines
+
+`perf-baseline.spec.ts` is opt-in and never a gate. It runs only with
+`MEASURE_PERF_BASELINE=1`; `0` or any other value skips every case and writes
+nothing. Measure a production build on WebKit (`--project=webkit --workers=1`).
+
+- `MEASURE_RUNS`: samples per key, a whole number of at least 3 (default 5). Any
+  other value stops the run before it starts.
+- `PERF_BASELINE_OUT`: where the measured file goes (default
+  `test-results/perf-baseline-current.json`). It holds every key measured in the
+  run, with each sample's time and the end state it stopped on.
+- `END_STATES`: the rows in the spec that say when a click on an agent in the
+  left bar has drawn its first usable frame. Exactly one row must match; none
+  within 5 s or two at once fails the sample. The story that adds the agent
+  overlay or the tiles adds its row in the same change.
+
+Then compare the file with a runner's recorded set, or record it as that set:
+
+```bash
+node scripts/perf-baseline.mjs compare --current <file> --runner <name>
+node scripts/perf-baseline.mjs record  --current <file> --runner <name>
+```
+
+Exit codes: 0 when every compared key passes or the runner has no set (the tool
+prints `perf lane skipped: no <runner> rows`), 1 on a regression, 2 on bad input
+(a bad file, a missing key, fewer than 3 samples, an engine mismatch) or any
+unexpected error.
+
+`record` replaces only that runner's set. Keys listed in `M1_ONLY_KEYS`
+(`scripts/perf-baseline.mjs`) belong to the `m1` set alone: CI never writes
+them, and `record` drops them for any other runner.
