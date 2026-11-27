@@ -2415,9 +2415,10 @@ button.ibx-media-open {
   .ibx-media.loading {
     animation: ibx-shim 1.4s ease-in-out infinite;
   }
+  /* The background pulses, not the figure, so its copy keeps full contrast. */
   @keyframes ibx-shim {
     50% {
-      opacity: 0.55;
+      background-color: color-mix(in srgb, var(--ibx-muted) 45%, var(--ibx-bg));
     }
   }
 }
