@@ -480,6 +480,40 @@ mod tests {
         );
     }
 
+    // ----- The tiles release flag's local setting -----------------------------
+
+    #[test]
+    fn the_tiles_setting_is_on_only_when_it_is_true() {
+        let at =
+            |value: &str| format!(r#"{{ "viewer": {{ "settings": {{ "tiles": {value} }} }} }}"#);
+        assert!(parse_tiles_setting(&at("true")));
+        for off in ["false", "\"true\"", "1", "null", "{}", "[]"] {
+            assert!(!parse_tiles_setting(&at(off)), "{off}");
+        }
+    }
+
+    #[test]
+    fn a_missing_tiles_setting_is_off() {
+        for json in [
+            "{}",
+            r#"{ "viewer": {} }"#,
+            r#"{ "viewer": { "settings": {} } }"#,
+            r#"{ "settings": { "tiles": true } }"#,
+            "not json {{",
+            "",
+        ] {
+            assert!(!parse_tiles_setting(json), "{json}");
+        }
+    }
+
+    #[test]
+    fn viewer_setting_reads_under_viewer_settings_only() {
+        let json = r#"{ "viewer": { "settings": { "a": [1] } }, "settings": { "b": 2 } }"#;
+        assert_eq!(viewer_setting(json, "a"), Some(serde_json::json!([1])));
+        assert_eq!(viewer_setting(json, "b"), None);
+        assert_eq!(viewer_setting("not json", "a"), None);
+    }
+
     #[test]
     fn config_headings_are_trimmed() {
         let json = r#"{ "viewer": { "settings": { "summaryHeadings": [" Purpose ", "Story"] } } }"#;

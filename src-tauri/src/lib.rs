@@ -71,6 +71,7 @@ mod exit_coordinator;
 // `redact`'s callers are behind the `dashboard-publish` feature.
 #[cfg_attr(not(feature = "dashboard-publish"), allow(dead_code))]
 mod feedback;
+mod flags;
 #[cfg(any(feature = "e2e-webdriver", test))]
 mod harness_guard;
 mod http;

@@ -478,6 +478,7 @@ mod tests {
             RUNNING.into(),
             updater.clone(),
             updates_off,
+            dir.path().to_path_buf(),
             Box::new(|_| {}),
         )
         .expect("the channel");
@@ -1188,5 +1189,87 @@ mod tests {
                 serde_json::from_str(body).unwrap_or_else(|e| panic!("{body} must parse: {e}"));
             assert_eq!(manifest.tiles_kill(), kill, "{body}");
         }
+    }
+
+    /// The tiles override cache follows each manifest read: a kill is kept, a manifest without
+    /// one clears it, and a manifest that can't be read or parsed leaves it as it was. A
+    /// manifest that carries `flags` still offers its update.
+    #[tokio::test]
+    async fn the_tiles_override_cache_follows_each_manifest_read() {
+        let server = MockServer::start().await;
+        let (app, dir) = (app(), tempfile::tempdir().unwrap());
+        let (ch, updater) = channel(&server, &dir);
+        let cached = || crate::flags::cached_kill(dir.path());
+        let reply = |body: serde_json::Value| ResponseTemplate::new(200).set_body_json(body);
+        assert!(!cached(), "no cache before the first read");
+
+        let kill = serde_json::json!({ "version": RUNNING, "flags": { "tiles": false } });
+        mount_manifest(&server, reply(kill)).await;
+        assert!(ch.check(app.handle(), false).await);
+        assert!(cached(), "a kill is cached");
+
+        mount_manifest(&server, ResponseTemplate::new(503)).await;
+        assert!(!ch.check(app.handle(), false).await);
+        assert!(cached(), "an unreachable manifest keeps the last value");
+        mount_manifest(
+            &server,
+            ResponseTemplate::new(200).set_body_string("{not json"),
+        )
+        .await;
+        assert!(!ch.check(app.handle(), false).await);
+        assert!(cached(), "a malformed manifest keeps the last value");
+
+        mount_manifest(&server, manifest(&server, RUNNING, good().sig)).await;
+        assert!(ch.check(app.handle(), false).await);
+        assert!(!cached(), "a manifest without flags clears the kill");
+
+        let withdrawn = serde_json::json!({
+            "version": "0.0.0",
+            "notes": "",
+            "withdrawn": "0.5.0",
+            "flags": { "tiles": false },
+        });
+        mount_manifest(&server, reply(withdrawn)).await;
+        ch.check(app.handle(), false).await;
+        assert!(cached(), "a withdrawn manifest still delivers the kill");
+
+        // A newer build on a manifest with flags stages as before.
+        let mut newer = serde_json::json!({
+            "version": NEXT,
+            "notes": "Manifest notes",
+            "pub_date": "2026-10-29T00:00:00Z",
+            "url": format!("{}{SIGNED_PATH}", server.uri()),
+            "signature": good().sig.trim(),
+        });
+        newer["flags"] = serde_json::json!({ "tiles": true });
+        mount_manifest(&server, reply(newer)).await;
+        mount_file(&server, good().bytes.to_vec(), None).await;
+        assert!(ch.check(app.handle(), false).await);
+        assert_eq!(updater.staged_version().as_deref(), Some(NEXT), "staged");
+        assert!(!cached(), "`true` is no override");
+    }
+
+    /// A cache that can't be written never fails the update check.
+    #[tokio::test]
+    async fn a_failed_cache_write_never_fails_the_check() {
+        let server = MockServer::start().await;
+        let (app, dir) = (app(), tempfile::tempdir().unwrap());
+        let body = serde_json::json!({ "version": RUNNING, "flags": { "tiles": false } });
+        mount_manifest(&server, ResponseTemplate::new(200).set_body_json(body)).await;
+        let (_, updater) = channel(&server, &dir);
+        // The cache's folder is a file, so the write fails.
+        let blocked = dir.path().join("blocked");
+        std::fs::write(&blocked, "").unwrap();
+        let ch = StaticChannel::new(
+            &server.uri(),
+            RUNNING.into(),
+            updater,
+            false,
+            blocked.clone(),
+            Box::new(|_| {}),
+        )
+        .expect("the channel");
+        assert!(ch.check(app.handle(), false).await, "the manifest was read");
+        assert!(!crate::flags::cached_kill(&blocked));
     }
 }
