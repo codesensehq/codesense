@@ -1009,10 +1009,7 @@ fn cp2_child_frame_drift_cannot_serve_team_records_on_own_grant() {
             } else {
                 "records:read:team"
             };
-            !out.starts_with("Err(")
-                || !out.contains(needed)
-                || out.contains("ambiguous")
-                || out.contains("team-x-row")
+            *out != format!("{:?}", Err::<(), _>(format!("denied: grant ({needed})")))
         })
         .collect::<Vec<_>>();
     assert!(

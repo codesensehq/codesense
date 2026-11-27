@@ -166,13 +166,11 @@ pub fn execute(
             crate::context_repo::caller_scope::CallerScope::Human
         )
     {
-        // The write keeps main's policy. Its result may contain retained fields/body.
+        // The write keeps main's policy. Its result may contain retained fields/body. The
+        // baseline call checks the frame's grant against the store it writes, before writing.
         let baseline = binding.clone().for_caller(Default::default());
         let result = execute(&baseline, operation, args, actor, index, frame);
         let store = binding.resolve(required(args, "collection")?)?;
-        if let Some(frame) = frame {
-            require_store_grant(&store, true, frame)?;
-        }
         if let Some(id) = args["id"].as_str().or_else(|| {
             result
                 .as_ref()

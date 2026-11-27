@@ -250,7 +250,10 @@ async function subscriptionView(
       return viewKey === undefined ? undefined : { viewKey };
     }
     const viewKey = await recordsPrepareView(ctx!.frame!.frameId, collection);
-    if (live) preparedRecordsViews.set(live, (views ?? new Map()).set(collection, viewKey));
+    // The first key stays until the frame leaves: a later page must not replace the one its
+    // subscription holds.
+    if (live && !views?.has(collection))
+      preparedRecordsViews.set(live, (views ?? new Map()).set(collection, viewKey));
     return { viewKey };
   }
   if (args.topic === "pins") {

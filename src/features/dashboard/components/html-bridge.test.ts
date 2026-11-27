@@ -2319,6 +2319,32 @@ describe("agents read model verbs", () => {
     }
   });
 
+  it("a records page keeps the subscription's view for unsubscribe to release", async () => {
+    mockRecordsPrepareView
+      .mockResolvedValueOnce("records:sub")
+      .mockResolvedValueOnce("records:page");
+    const live = {
+      subscribe: vi.fn(async () => ({ topic: "records", rev: 1, snapshot: [] })),
+      page: vi.fn(async () => ({ topic: "records", rows: [] })),
+      unsubscribe: vi.fn(async () => undefined),
+    };
+    const ctx = { ...DOC, frame: { frameId: "f1" } as never, liveFrame: async () => live as never };
+    const care = { topic: "records", collection: "care" };
+    try {
+      await runBridgeCommand("subscribe", care, ctx);
+      await runBridgeCommand("page", { ...care, cursor: "c" }, ctx);
+      expect(live.page).toHaveBeenCalledWith("records", "c", { viewKey: "records:page" });
+      await expect(runBridgeCommand("unsubscribe", care, ctx)).resolves.toBeNull();
+      expect(live.unsubscribe).toHaveBeenCalledWith("records", { viewKey: "records:sub" });
+      // Nothing is left behind: a second unsubscribe has no view to release.
+      await expect(runBridgeCommand("unsubscribe", care, ctx)).resolves.toBeNull();
+      expect(live.unsubscribe).toHaveBeenCalledTimes(1);
+      expect(mockRecordsPrepareView).toHaveBeenCalledTimes(2);
+    } finally {
+      mockRecordsPrepareView.mockReset();
+    }
+  });
+
   it("a messageDelivery subscription takes the frame's granted view, as the inbox does", async () => {
     const subscribe = vi.fn(async () => ({ topic: "messageDelivery", rev: 1, snapshot: [] }));
     await runBridgeCommand(
