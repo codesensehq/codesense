@@ -12,12 +12,18 @@ import {
   findPanelLocation,
 } from "@/features/shell/right-pane/right-pane-layout";
 import { useViewerStore } from "@/shared/stores/viewer-store";
+import { useOrgStore } from "@/shared/stores/org-store";
 
 import { useMcpActions } from "./use-mcp-actions";
 
 // Capture each event's handler so a test can emit a payload the way the Rust
 // backend would. `capturedHandler` is the "mcp:set-viewer-state" one.
 type Handler = (event: { payload: Record<string, unknown> }) => void;
+const host = vi.hoisted(() => ({ main: true }));
+vi.mock("@/shared/lib/current-window", async (importActual) => ({
+  ...(await importActual<typeof import("@/shared/lib/current-window")>()),
+  isMainWindow: () => host.main,
+}));
 const handlers = new Map<string, Handler>();
 let capturedHandler: Handler | null = null;
 vi.mock("@tauri-apps/api/event", () => ({
@@ -40,9 +46,46 @@ vi.mock("@/tauri/commands", () => ({
 }));
 
 beforeEach(() => {
+  host.main = true;
   capturedHandler = null;
   handlers.clear();
   useViewerStore.setState({ rightPaneLayout: defaultRightPaneLayout() });
+});
+
+describe("useMcpActions — a satellite window acts on nothing the main window owns", () => {
+  /** What mounting the hook registers: Tauri events, document listeners and store subscriptions. */
+  function mount() {
+    const documentEvents: string[] = [];
+    const add = vi.spyOn(document, "addEventListener").mockImplementation((type: string) => {
+      documentEvents.push(type);
+    });
+    const viewer = vi.spyOn(useViewerStore, "subscribe");
+    const org = vi.spyOn(useOrgStore, "subscribe");
+    const { unmount } = renderHook(() => useMcpActions());
+    const registered = {
+      events: [...handlers.keys()],
+      documentEvents: documentEvents.filter((type) => type === "pointerdown" || type === "keydown"),
+      subscriptions: viewer.mock.calls.length + org.mock.calls.length,
+    };
+    unmount();
+    add.mockRestore();
+    viewer.mockRestore();
+    org.mockRestore();
+    return registered;
+  }
+
+  it("main registers the MCP events, the reveal's document listeners and store subscriptions (control)", () => {
+    const registered = mount();
+    expect(registered.events).toContain("mcp:set-viewer-state");
+    expect(registered.events).toContain("mcp:reorder-workspace");
+    expect(registered.documentEvents).toEqual(["pointerdown", "keydown"]);
+    expect(registered.subscriptions).toBeGreaterThan(0);
+  });
+
+  it("a satellite registers no MCP event, document listener or store subscription", () => {
+    host.main = false;
+    expect(mount()).toEqual({ events: [], documentEvents: [], subscriptions: 0 });
+  });
 });
 
 /** The right-pane History panel's id, retired when History moved into the left nav. */
