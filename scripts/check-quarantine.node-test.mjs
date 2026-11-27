@@ -10,6 +10,7 @@ import {
   loadEntries,
   validate,
   validEntries,
+  quarantineApplies,
   quarantineReason,
 } from "./lib/quarantine.mjs";
 import {
@@ -157,4 +158,35 @@ test("the guard lets through only the named Linux WebKit media skip", () => {
     1,
   );
   assert.equal(missed(skipped({ annotation: null })), 1);
+});
+
+test("a Playwright quarantine can name the projects it covers, and the guard holds it to them", () => {
+  const now = Date.parse("2026-11-27T00:00:00Z");
+  const title = "focusOut returns to the previous host control";
+  const entry = {
+    id: `playwright:tests/frame-security/lifecycle.spec.ts#${title}`,
+    reason: "Chromium refocuses the frame after focusOut",
+    issue: "https://github.com/codesensehq/codesense/issues/463",
+    added: "2026-11-27",
+    projects: ["chromium"],
+  };
+  assert.doesNotThrow(() => validate([entry], now));
+  for (const projects of [[], ["chromium", 1], "chromium"])
+    assert.throws(() => validate([{ ...entry, projects }], now), /projects/);
+  assert.throws(
+    () => validate([{ ...entry, id: "vitest:src/a.test.ts#x", projects: ["chromium"] }], now),
+    /projects/,
+  );
+  const skipped = (project) => ({
+    outcome: () => "skipped",
+    location: { file: resolve("tests/frame-security/lifecycle.spec.ts") },
+    titlePath: () => ["", project, "lifecycle.spec.ts", title],
+    annotations: [{ type: "fixme", description: quarantineReason(entry) }],
+  });
+  assert.equal(unexecutedTests([skipped("chromium")], [entry], now).length, 0);
+  // The same title skipped on WebKit still fails the run.
+  assert.equal(unexecutedTests([skipped("webkit")], [entry], now).length, 1);
+  assert.equal(quarantineApplies(entry, "chromium"), true);
+  assert.equal(quarantineApplies(entry, "webkit"), false);
+  assert.equal(quarantineApplies({ ...entry, projects: undefined }, "webkit"), true);
 });

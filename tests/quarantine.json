@@ -66,6 +66,13 @@
     "added": "2026-11-07"
   },
   {
+    "id": "playwright:tests/frame-security/lifecycle.spec.ts#focusOut returns to the previous host control",
+    "reason": "Chromium refocuses the out-of-process frame just after focusOut moves focus to the host",
+    "issue": "https://github.com/codesensehq/codesense/issues/463",
+    "added": "2026-11-27",
+    "projects": ["chromium"]
+  },
+  {
     "id": "cargo:codesense_lib::commands::workspace_open::tests::team_workspace_handle_is_readable_by_shipped_read_verbs",
     "reason": "fails only in full multi-crate runs (load/env)",
     "issue": "https://github.com/codesensehq/codesense/issues/5",

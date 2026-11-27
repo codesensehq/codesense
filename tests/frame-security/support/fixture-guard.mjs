@@ -6,6 +6,7 @@ import { relative, resolve } from "node:path";
 import process from "node:process";
 import {
   loadEntries,
+  quarantineApplies,
   quarantineId,
   validEntries,
   quarantineReason,
@@ -77,7 +78,8 @@ export function unexecutedTests(
     if (!t.location?.file) return true;
     if (linuxWebkitMediaSkip(t, platform)) return false;
     const id = quarantineId("playwright", t.location.file, t.titlePath().slice(3));
-    const entry = valid.find((entry) => entry.id === id);
+    const project = t.titlePath()[1];
+    const entry = valid.find((entry) => entry.id === id && quarantineApplies(entry, project));
     if (!entry) return true;
     const reason = quarantineReason(entry);
     return !t.annotations?.some((a) => a.type === "fixme" && a.description === reason);
