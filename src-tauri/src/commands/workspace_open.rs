@@ -301,7 +301,8 @@ pub(crate) trait OpenHost: Send + Sync {
     ) -> Result<(), String> {
         Ok(())
     }
-    /// Record that `handle`'s launch, named `name`, started in `destination`.
+    /// Record that `handle`'s launch, named `name`, started in `destination`: see
+    /// [`context::note_used`] and [`context_work_item`].
     async fn context_used(
         &self,
         _destination: &context::ContextDestination,
@@ -2517,6 +2518,20 @@ impl AppOpenHost {
     }
 }
 
+/// The work item a launch stamps on the worktree it created: `handle`'s, with its lead.
+/// The launch is reserved by now, so its work item is settled; its lead may not be bound
+/// yet, so the lead is named by handle as well. None for a reused worktree.
+pub(crate) fn context_work_item(
+    launch: Option<&super::dashboard_launch::DashboardLaunchState>,
+    destination: &context::ContextDestination,
+    handle: &str,
+) -> Option<crate::install::worktree_index::ContextWorkItem> {
+    if !destination.created {
+        return None;
+    }
+    super::dashboard_launch::DashboardLaunchState::work_item_lead(launch?, handle)
+}
+
 #[async_trait::async_trait]
 impl OpenHost for AppOpenHost {
     fn sweep_seats(&self, story_id: &str) {
@@ -2811,19 +2826,21 @@ impl OpenHost for AppOpenHost {
         name: &str,
         handle: &str,
     ) {
-        // The launch is bound by now, so its work item and lead are settled.
-        let work_item = self
-            .app
-            .try_state::<super::dashboard_launch::DashboardLaunchState>()
-            .and_then(|state| state.work_item_lead(handle));
-        let (home, principal, row, name) = (
+        let work_item = context_work_item(
+            self.app
+                .try_state::<super::dashboard_launch::DashboardLaunchState>()
+                .as_deref(),
+            destination,
+            handle,
+        );
+        let (home, principal, destination, name) = (
             self.codesense_home.clone(),
             self.principal.clone(),
-            destination.record.clone(),
+            destination.clone(),
             name.to_string(),
         );
         if let Err(error) = super::await_blocking("open_workspace.context_used", move || {
-            context::note_used(&home, &principal, &row, &name, work_item)
+            context::note_used(&home, &principal, &destination, &name, work_item)
         })
         .await
         {

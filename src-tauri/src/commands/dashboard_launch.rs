@@ -3345,7 +3345,7 @@ impl DashboardLaunchState {
     }
 
     /// `handle`'s work item and its lead: the session up the launcher chain that minted
-    /// it, by session id (its handle until bound) and agent name. A lead no longer
+    /// it, by session id (none until bound), handle and agent name. A lead no longer
     /// registered leaves the lead fields to the last session still known.
     pub(crate) fn work_item_lead(
         &self,
@@ -3366,8 +3366,10 @@ impl DashboardLaunchState {
         }
         Some(crate::install::worktree_index::ContextWorkItem {
             id,
-            lead_session: Some(lead.session_id.clone().unwrap_or_else(|| lead_handle.clone())),
-            lead_agent: Some(lead.meta.display_name.clone().unwrap_or(lead_handle)),
+            lead_session: lead.session_id.clone(),
+            lead_agent: Some(lead.meta.display_name.clone().unwrap_or_else(|| lead_handle.clone())),
+            lead_handle: Some(lead_handle),
+            sprint_id: None,
         })
     }
 

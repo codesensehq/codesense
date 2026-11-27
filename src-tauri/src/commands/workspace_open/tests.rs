@@ -70,6 +70,8 @@ struct FakeHost {
     registered_spawn_probe: Mutex<Option<RegisteredSpawnProbe>>,
     /// The stories whose seat sweep a launch started, in order.
     swept: Mutex<Vec<String>>,
+    /// When set, a launch records its use of its context worktree as the app does.
+    records_context: std::sync::atomic::AtomicBool,
 }
 
 impl FakeHost {
@@ -111,6 +113,7 @@ impl FakeHost {
             registered_spawn_probe: Mutex::new(None),
             show_outcome: Mutex::new(RevealOutcome::Shown(ShownAs::Tab)),
             swept: Mutex::new(Vec::new()),
+            records_context: Default::default(),
         }
     }
 
@@ -170,6 +173,19 @@ impl FakeHost {
 
 #[async_trait::async_trait]
 impl OpenHost for FakeHost {
+    async fn context_used(
+        &self,
+        destination: &context::ContextDestination,
+        name: &str,
+        handle: &str,
+    ) {
+        if self.records_context.load(Ordering::SeqCst) {
+            let work_item = context_work_item(Some(&self.registry), destination, handle);
+            context::note_used(&self.home, &self.principal, destination, name, work_item)
+                .unwrap();
+        }
+    }
+
     fn sweep_seats(&self, story_id: &str) {
         self.swept.lock().unwrap().push(story_id.to_string());
     }
@@ -617,17 +633,41 @@ async fn cde36_team_workspace_inherits_the_story_its_launcher_opened() {
 async fn open_workspace_records_its_launcher_and_work_item() {
     let home = tempfile::tempdir().unwrap();
     let host = FakeHost::new(home.path(), 4);
+    host.records_context.store(true, Ordering::SeqCst);
     let lead = open_agent(&host, &active(), &team_workspace("Lead", None)).await.unwrap();
     let lead = lead.handle.unwrap();
     let lead_item = host.registry.work_item(&lead).expect("a person's open mints");
     let lead_session = host.registry.resolve(&lead).expect("the lead is bound");
-    let worker = open_agent(&host, &active(), &team_workspace("Worker", Some(&lead_session)))
-        .await
-        .unwrap();
+    // The worker creates its own worktree.
+    let worker = OpenRequest {
+        worktree: Some("Worker tree".into()),
+        create_worktree: true,
+        ..team_workspace("Worker", Some(&lead_session))
+    };
+    let worker = open_agent(&host, &active(), &worker).await.unwrap();
     let worker = worker.handle.unwrap();
     let snapshot = host.registry.snapshot().into_iter().find(|s| s.handle == worker).unwrap();
     assert_eq!(snapshot.meta.launched_by.as_deref(), Some(lead.as_str()));
-    assert_eq!(host.registry.work_item(&worker), Some(lead_item));
+    assert_eq!(host.registry.work_item(&worker), Some(lead_item.clone()));
+
+    // Each worktree a launch created records the lead's work item, keyed by the launch's
+    // handle (its name or nothing would find no work item).
+    let stamped = |name: &str| {
+        crate::install::worktree_index::context_records(&host.home, &host.principal)
+            .unwrap()
+            .into_iter()
+            .find(|r| r.name == name)
+            .unwrap_or_else(|| panic!("no worktree named {name}"))
+            .work_item
+            .unwrap_or_else(|| panic!("{name} records no work item"))
+    };
+    for name in ["Lead", "Worker tree"] {
+        let item = stamped(name);
+        assert_eq!(item.id, lead_item, "{name}");
+        assert_eq!(item.lead_session.as_deref(), Some(lead_session.as_str()), "{name}");
+        assert_eq!(item.lead_handle.as_deref(), Some(lead.as_str()), "{name}");
+        assert_eq!(item.sprint_id, None, "{name}");
+    }
 }
 
 #[tokio::test]
