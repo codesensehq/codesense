@@ -184,7 +184,7 @@ pub(crate) struct OrgTeamEntry {
     pub org: String,
     pub team: String,
     pub synced: bool,
-    /// The team's declared starter page (`teams.yml` `landing_page:`), relative
+    /// The team's declared landing page (`teams.yml` `landing_page:`), relative
     /// to its content folder; absent ⇒ the README/index fallback.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub starter_page: Option<String>,

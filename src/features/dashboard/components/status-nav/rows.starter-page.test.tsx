@@ -43,7 +43,7 @@ describe("renderRow — team starter page marker", () => {
   it("marks the starter page, as a generic file or a doc row", () => {
     const cb = rowModel({ isStarterPage: (p) => p === README });
     const { unmount } = render(renderRow(fileItem(README), cb));
-    expect(screen.getByRole("img", { name: "Team starter page" })).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "Team landing page" })).toBeInTheDocument();
     unmount();
     render(renderRow(docItem(README), cb));
     expect(screen.getByTestId("starter-page-mark")).toBeInTheDocument();

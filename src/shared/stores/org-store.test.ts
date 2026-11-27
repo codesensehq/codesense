@@ -2021,7 +2021,7 @@ describe("SW-HB-7 setShownTeams archived-awareness (V-3)", () => {
   });
 });
 
-describe("setTeamLandingPage (team starter page)", () => {
+describe("setTeamLandingPage (team landing page)", () => {
   beforeEach(() => {
     mockedCommitRegistryEdit.mockClear();
     mockedCommitRegistryEdit.mockResolvedValue(undefined);
@@ -2069,5 +2069,16 @@ describe("setTeamLandingPage (team starter page)", () => {
       "no file",
     );
     expect(web().landing_page ?? null).toBeNull();
+  });
+  it("says why it can't change the landing page without a user or a workspace", async () => {
+    mockedGetCurrentUser.mockReturnValueOnce(null);
+    await expect(useOrgStore.getState().setTeamLandingPage("web", "a.md")).rejects.toThrow(
+      "You must be signed in to change a team's landing page.",
+    );
+    useOrgStore.setState({ activeOrgSlug: null });
+    await expect(useOrgStore.getState().setTeamLandingPage("web", "a.md")).rejects.toThrow(
+      "No active workspace to change a team's landing page in.",
+    );
+    expect(mockedCommitRegistryEdit).not.toHaveBeenCalled();
   });
 });

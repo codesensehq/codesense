@@ -453,15 +453,15 @@ function ShadowedBadge({ label = "Shadows a team-workspace version" }: { label?:
   );
 }
 
-/** The team's starter page: a quiet house right after the file name, in the
+/** The team's landing page: a quiet house right after the file name, in the
  *  file icon's neutral ink — present, never louder than the name. */
 function StarterPageMark() {
   return (
     <span
       className="inline-flex flex-shrink-0 items-center"
-      title="Team starter page: opens whenever the team has nothing open"
+      title="Team landing page: opens whenever the team has nothing open"
       role="img"
-      aria-label="Team starter page"
+      aria-label="Team landing page"
       data-testid="starter-page-mark"
     >
       <House size={11} className="cs-nav-ink" aria-hidden />

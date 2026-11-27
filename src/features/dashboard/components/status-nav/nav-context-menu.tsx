@@ -415,7 +415,7 @@ export function NavContextMenu({
             </>
           )}
           {agentContext && <AgentContextItems {...agentContext} onClose={onClose} />}
-          {/* The team's starter page: set it from any of the team's files. */}
+          {/* The team's landing page: set it from any of the team's files. */}
           {menu && (
             <StarterPageMenuItems
               path={menu.path}

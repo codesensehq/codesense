@@ -71,7 +71,7 @@ describe("useActiveTeamStarterPage", () => {
   });
 });
 
-it("keeps an owning team's starter page when another team becomes active", async () => {
+it("keeps an owning team's landing page when another team becomes active", async () => {
   useOrgStore.setState({
     orgs: [{ ...ORG, teams: [...ORG.teams, { name: "other", source_repos: [] }] }],
   });

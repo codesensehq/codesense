@@ -318,6 +318,7 @@ export const META = {
   set_active_team: { arc: "L", write: true },
   set_epic_repos: { arc: "L", write: true },
   set_team_parent: { arc: "L", write: true },
+  set_team_landing_page: { arc: "L", write: true },
   set_team_starter_page: { arc: "L", write: true },
   validate_story: { arc: "L", write: false },
   list_out_of_date_terminal_servers: { arc: "D", write: false },

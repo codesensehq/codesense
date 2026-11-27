@@ -181,7 +181,7 @@ describe("useTeamLandingPage", () => {
     expect(invalidateLandingPages).toHaveBeenCalledWith(TOUR);
   });
 
-  it("a registry edit (a starter page set or cleared) drops every memoised page", async () => {
+  it("a registry edit (a landing page set or cleared) drops every memoised page", async () => {
     renderHook(() => useTeamLandingPage());
     await act(async () => {});
     registryHandlers[0]?.({ payload: {} });

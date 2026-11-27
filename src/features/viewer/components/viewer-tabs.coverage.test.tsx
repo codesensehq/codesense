@@ -409,7 +409,7 @@ describe("ViewerTabs — team starter page", () => {
     });
     render(<ViewerTabs repoPath={REPO} />);
     fireEvent.contextMenu(screen.getByText("guide.md"));
-    expect(screen.getByRole("menuitem", { name: "Set as team starter page" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "Set as team landing page" })).toBeInTheDocument();
     fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
   });
 
@@ -420,7 +420,7 @@ describe("ViewerTabs — team starter page", () => {
     });
     render(<ViewerTabs repoPath={REPO} />);
     fireEvent.contextMenu(screen.getByText("README.md"));
-    expect(screen.getByTestId("starter-page-current")).toHaveTextContent("Team starter page");
+    expect(screen.getByTestId("starter-page-current")).toHaveTextContent("Team landing page");
   });
 });
 

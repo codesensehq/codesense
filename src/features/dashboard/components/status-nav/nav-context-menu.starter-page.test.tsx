@@ -49,7 +49,7 @@ function props(path: string, menuNodeKind: "file" | "dir" | null) {
 describe("NavContextMenu — team starter page", () => {
   it("offers Set on a team file (an extensionless one too, by its real kind)", () => {
     render(<NavContextMenu {...props("/orgs/acme/web/content/LICENSE", "file")} />);
-    expect(screen.getByRole("menuitem", { name: "Set as team starter page" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "Set as team landing page" })).toBeInTheDocument();
   });
 
   it("shows the set page as current with Clear", () => {

@@ -183,14 +183,16 @@
         <p>
           You don't edit <code>teams.yml</code> for this. Right-click one of the team's own
           files, in the left nav or on its tab, and choose
-          <strong>Set as team starter page</strong>; the page shows a small house in the
-          nav. On that page, <strong>Clear starter page</strong> goes back to the default
+          <strong>Set as team landing page</strong>; the page shows a small house in the
+          nav. On that page, <strong>Clear landing page</strong> goes back to the default
           (<code>README.md</code>, <code>README.html</code> or <code>index.html</code>).
           Files a parent team shares, hidden files and the read-only CodeSense Docs can't be
           set. The file must exist when you set it; if it is later moved or deleted, the team
           opens its default page instead, and Settings → Workspace says so. Settings →
-          Workspace also shows each team's starter page with Change and Clear, and agents use
-          the <code>set_team_starter_page</code> MCP tool. The change is a local edit of the
+          Workspace also shows each team's landing page with Change and Clear, and agents use
+          the <code>set_team_landing_page</code> MCP tool (its old name,
+          <code>set_team_starter_page</code>, still works as an alias). The landing page is
+          not a group starter. The change is a local edit of the
           context repo until you, or an agent, commit and push it.
         </p>
         <p>

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { act, fireEvent, render, screen } from "@testing-library/react";
+import { toast } from "sonner";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { invalidateLandingPages } from "@/features/viewer/lib/team-landing-page";
@@ -48,16 +49,34 @@ async function show(path: string, team: Team = { name: "web", source_repos: [] }
 beforeEach(() => {
   invalidateLandingPages();
   setTeamLandingPage.mockClear();
+  setTeamLandingPage.mockResolvedValue(undefined);
+  vi.mocked(toast.success).mockClear();
+  vi.mocked(toast.error).mockClear();
   useOrgStore.setState({ setTeamLandingPage });
   resolveTeamLandingPage.mockResolvedValue({ kind: "found", path: `${CONTENT}/README.md` });
 });
 
 describe("StarterPageMenuItems", () => {
-  it("sets a team file as the starter page", async () => {
+  it("sets a team file as the landing page", async () => {
     const onClose = await show(`${CONTENT}/guide/start.md`);
-    fireEvent.click(screen.getByRole("menuitem", { name: "Set as team starter page" }));
+    expect(screen.getByRole("group", { name: "Team landing page" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("menuitem", { name: "Set as team landing page" }));
     expect(onClose).toHaveBeenCalled();
     expect(setTeamLandingPage).toHaveBeenCalledWith("web", "guide/start.md", "acme/ctx");
+    await vi.waitFor(() =>
+      expect(toast.success).toHaveBeenCalledWith("guide/start.md is web's landing page"),
+    );
+  });
+
+  it("says why a change failed", async () => {
+    setTeamLandingPage.mockRejectedValueOnce(new Error("no file"));
+    await show(`${CONTENT}/guide/start.md`);
+    fireEvent.click(screen.getByRole("menuitem", { name: "Set as team landing page" }));
+    await vi.waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith(
+        expect.stringMatching(/^Couldn't change the landing page: /),
+      ),
+    );
   });
 
   it("shows the set page as current, with Clear", async () => {
@@ -68,15 +87,21 @@ describe("StarterPageMenuItems", () => {
       landing_page: "guide/start.md",
     });
     expect(screen.getByTestId("starter-page-current")).toHaveAttribute("aria-disabled", "true");
-    expect(screen.getByTestId("starter-page-current")).toHaveTextContent("Team starter page");
+    expect(screen.getByTestId("starter-page-current")).toHaveTextContent("Team landing page");
+    expect(screen.getByTestId("starter-page-clear")).toHaveTextContent("Clear landing page");
     fireEvent.click(screen.getByTestId("starter-page-clear"));
     expect(setTeamLandingPage).toHaveBeenCalledWith("web", null, "acme/ctx");
+    await vi.waitFor(() =>
+      expect(toast.success).toHaveBeenCalledWith(
+        "Cleared web's landing page. It opens its README, if there is one.",
+      ),
+    );
   });
 
   it("shows the README default as current, without Clear", async () => {
     await show(`${CONTENT}/README.md`);
     expect(screen.getByTestId("starter-page-current")).toHaveTextContent(
-      "Team starter pageOpens by default when web has nothing open.",
+      "Team landing pageOpens by default when web has nothing open.",
     );
     expect(screen.queryByTestId("starter-page-clear")).toBeNull();
   });
@@ -106,7 +131,7 @@ describe("StarterPageMenuItems", () => {
     );
     await act(async () => {});
     const menu = screen.getByRole("menu");
-    const current = screen.getByRole("menuitemcheckbox", { name: /Team starter page/ });
+    const current = screen.getByRole("menuitemcheckbox", { name: /Team landing page/ });
     expect(current).toHaveAttribute("aria-checked", "true");
     screen.getByRole("menuitem", { name: "Copy path" }).focus();
     fireEvent.keyDown(menu, { key: "ArrowDown" });
@@ -116,6 +141,18 @@ describe("StarterPageMenuItems", () => {
     expect(setTeamLandingPage).not.toHaveBeenCalled();
     fireEvent.keyDown(menu, { key: "ArrowDown" });
     expect(document.activeElement).toBe(screen.getByTestId("starter-page-clear"));
+  });
+
+  it("no item or label of the landing page says starter, which means a group's starter", async () => {
+    resolveTeamLandingPage.mockResolvedValue({ kind: "found", path: `${CONTENT}/guide/start.md` });
+    await show(`${CONTENT}/guide/start.md`, {
+      name: "web",
+      source_repos: [],
+      landing_page: "guide/start.md",
+    });
+    const group = screen.getByTestId("starter-page-menu");
+    expect(group.getAttribute("aria-label")).not.toMatch(/starter/i);
+    expect(group.textContent).not.toMatch(/starter/i);
   });
 
   it("offers nothing for a file outside the team's content", async () => {

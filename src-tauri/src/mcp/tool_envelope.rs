@@ -34,6 +34,45 @@ pub(crate) enum ToolEnvelope<T> {
     },
 }
 
+/// The `ok` payload of a tool served under an old name: the new tool's payload (an object),
+/// plus `alias: true` and `use`, the name to call instead. Other arms pass through unchanged.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub(crate) struct Aliased<T> {
+    #[serde(flatten)]
+    pub data: T,
+    pub alias: bool,
+    #[serde(rename = "use")]
+    pub use_instead: &'static str,
+}
+
+impl<T> ToolEnvelope<T> {
+    /// This reply with its `ok` payload mapped by `f`; other arms pass through.
+    pub(crate) fn map_ok<U>(self, f: impl FnOnce(T) -> U) -> ToolEnvelope<U> {
+        match self {
+            Self::Ok(data) => ToolEnvelope::Ok(f(data)),
+            Self::NotSyncedLocally => ToolEnvelope::NotSyncedLocally,
+            Self::UnauthorizedTeam => ToolEnvelope::UnauthorizedTeam,
+            Self::Validation { message } => ToolEnvelope::Validation { message },
+            Self::Conflict {
+                message,
+                current_revision,
+            } => ToolEnvelope::Conflict {
+                message,
+                current_revision,
+            },
+        }
+    }
+
+    /// This reply as the old name `use_instead` replaces gives it.
+    pub(crate) fn aliased(self, use_instead: &'static str) -> ToolEnvelope<Aliased<T>> {
+        self.map_ok(|data| Aliased {
+            data,
+            alias: true,
+            use_instead,
+        })
+    }
+}
+
 /// The resolved target of a tool's optional `org`/`team` args. `Resolved` boxes the (large)
 /// [`ActiveContext`] so the enum stays small.
 pub(crate) enum ContextTarget {
@@ -246,5 +285,30 @@ mod tests {
         let short: Result<ActiveContext, ToolEnvelope<()>> =
             resolved_or_envelope(ContextTarget::UnauthorizedTeam);
         assert!(matches!(short, Err(ToolEnvelope::UnauthorizedTeam)));
+    }
+
+    // An old tool name's reply: the payload unchanged, plus `alias` and the name to use.
+    #[test]
+    fn an_aliased_reply_adds_alias_and_use_to_its_payload_only() {
+        #[derive(Serialize)]
+        struct Page {
+            team: &'static str,
+        }
+        let ok = ToolEnvelope::Ok(Page { team: "web" }).aliased("set_team_landing_page");
+        assert_eq!(
+            serde_json::to_value(&ok).unwrap(),
+            serde_json::json!({
+                "status": "ok",
+                "data": { "team": "web", "alias": true, "use": "set_team_landing_page" },
+            })
+        );
+        let refused = ToolEnvelope::<Page>::Validation {
+            message: "no file".into(),
+        }
+        .aliased("set_team_landing_page");
+        assert_eq!(
+            serde_json::to_value(&refused).unwrap(),
+            serde_json::json!({ "status": "validation", "data": { "message": "no file" } })
+        );
     }
 }

@@ -126,7 +126,7 @@ pub enum RegistryEdit {
         team_name: String,
         parent_team: Option<String>,
     },
-    /// Set (or clear) a team's starter page — `teams.yml` `landing_page:`, the
+    /// Set (or clear) a team's landing page — `teams.yml` `landing_page:`, the
     /// file the viewer opens whenever the team has nothing open. `Some(path)` is
     /// relative to the team's content folder and must name a file there (no
     /// `..`, no hidden file or folder); `None` removes the key, so the app falls
@@ -346,13 +346,13 @@ pub fn pr_copy(edit: &RegistryEdit, ctx: &EditContext<'_>) -> PrCopy {
         } => match landing_page {
             Some(page) => PrCopy {
                 commit_title: format!(
-                    "Set the starter page of team {} to {}",
+                    "Set the landing page of team {} to {}",
                     team_name,
                     page.trim()
                 ),
             },
             None => PrCopy {
-                commit_title: format!("Clear the starter page of team {}", team_name),
+                commit_title: format!("Clear the landing page of team {}", team_name),
             },
         },
         RegistryEdit::SetWorkspaceRoot { workspace_root_dir } => match workspace_root_dir {
@@ -1257,7 +1257,7 @@ fn apply_set_team_landing_page(
     teams_yml_applied_edit(&teams, edit)
 }
 
-/// `page` is a file the team's starter page may be: see
+/// `page` is a file the team's landing page may be: see
 /// [`apply_set_team_landing_page`].
 fn check_landing_page(
     org_root: &Path,
@@ -1266,7 +1266,7 @@ fn check_landing_page(
 ) -> Result<(), RegistryEditError> {
     if !crate::domain::is_content_relative(page) {
         return Err(RegistryEditError::Parse(format!(
-            "starter page {page:?} must be a file path inside the team's content folder: relative, without `..` and not a hidden file or folder"
+            "landing page {page:?} must be a file path inside the team's content folder: relative, without `..` and not a hidden file or folder"
         )));
     }
     // The resolver's own check: exact on-disk spelling (a case-insensitive disk
@@ -2897,7 +2897,7 @@ mod tests {
         assert_eq!(clear.commit_title, "Clear parent team for child");
     }
 
-    // ---------- SetTeamLandingPage: the team's starter page ----------
+    // ---------- SetTeamLandingPage: the team's landing page ----------
 
     fn landing(team: &str, page: Option<&str>) -> RegistryEdit {
         RegistryEdit::SetTeamLandingPage {
@@ -2929,7 +2929,7 @@ mod tests {
         assert_eq!(parsed.teams[1].landing_page, None);
         assert_eq!(
             applied.commit_title,
-            "Set the starter page of team docs to guide/start.md"
+            "Set the landing page of team docs to guide/start.md"
         );
     }
 
@@ -2944,7 +2944,7 @@ mod tests {
         let applied = apply_registry_edit(&landing("docs", None), tmp.path()).unwrap();
         let text = String::from_utf8(applied.files[0].1.clone()).unwrap();
         assert!(!text.contains("landing_page"), "{text}");
-        assert_eq!(applied.commit_title, "Clear the starter page of team docs");
+        assert_eq!(applied.commit_title, "Clear the landing page of team docs");
     }
 
     #[test]
@@ -2964,6 +2964,11 @@ mod tests {
         ] {
             let err = apply_registry_edit(&landing("docs", Some(bad)), tmp.path()).unwrap_err();
             assert!(matches!(err, RegistryEditError::Parse(_)), "{bad:?}: {err}");
+            assert!(
+                err.to_string()
+                    .contains(&format!("landing page {bad:?} must be")),
+                "{bad:?}: {err}"
+            );
         }
     }
 

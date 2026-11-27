@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 //! The team setup MCP tools: create, rename, archive, delete and re-parent a
-//! team, set its starter page, and rename the workspace (the org's display name).
+//! team, set its landing page, and rename the workspace (the org's display name).
 //!
 //! Each tool is one [`RegistryEdit`] committed through the same write path the
 //! UI uses ([`commit_registry_edit`]), so the registry rules (team-name shape,
@@ -21,7 +21,7 @@ use crate::context_repo::RegistryEdit;
 use crate::domain::Principal;
 
 use super::setup_tools::{ActiveTeamSwitched, Reply, SetActiveTeamParams};
-use super::tool_envelope::ToolEnvelope;
+use super::tool_envelope::{Aliased, ToolEnvelope};
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -88,7 +88,7 @@ pub struct SetTeamStarterPageParams {
     /// active team.
     #[serde(default)]
     pub org: Option<String>,
-    /// The team whose starter page to set. Omit with `org` to use the active team.
+    /// The team whose landing page to set. Omit with `org` to use the active team.
     #[serde(default)]
     pub team: Option<String>,
     /// Required. The file to open whenever the team has nothing open: a path
@@ -110,14 +110,55 @@ where
     Option::<String>::deserialize(deserializer).map(Some)
 }
 
-/// What `set_team_starter_page` did: the registry change and the page now set
-/// (relative to the team's content folder; `null` once cleared).
+/// The tool that sets a team's landing page.
+pub(crate) const LANDING_PAGE_TOOL: &str = "set_team_landing_page";
+/// Its old name, still served: the same edit, its reply marked as an alias.
+pub(crate) const STARTER_PAGE_ALIAS: &str = "set_team_starter_page";
+
+/// What setting a team's landing page did: the registry change and the page now
+/// set (relative to the team's content folder; `null` once cleared). The
+/// `set_team_starter_page` alias replies with it, keeping the old `starterPage`
+/// key for existing callers.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StarterPageSet {
     #[serde(flatten)]
     pub change: OrgRegistryChanged,
     pub starter_page: Option<String>,
+}
+
+/// What `set_team_landing_page` replies: the same as [`StarterPageSet`], with
+/// the page under `landingPage`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LandingPageSet {
+    #[serde(flatten)]
+    pub change: OrgRegistryChanged,
+    pub landing_page: Option<String>,
+}
+
+impl From<StarterPageSet> for LandingPageSet {
+    fn from(set: StarterPageSet) -> Self {
+        Self {
+            change: set.change,
+            landing_page: set.starter_page,
+        }
+    }
+}
+
+/// `set_team_landing_page`'s reply: the page under `landingPage`.
+pub(crate) fn landing_page_reply(
+    reply: ToolEnvelope<StarterPageSet>,
+) -> ToolEnvelope<LandingPageSet> {
+    reply.map_ok(LandingPageSet::from)
+}
+
+/// `set_team_starter_page`'s reply: the old `starterPage` key, and on `ok` the
+/// alias marker naming the tool to call instead.
+pub(crate) fn starter_page_alias_reply(
+    reply: ToolEnvelope<StarterPageSet>,
+) -> ToolEnvelope<Aliased<StarterPageSet>> {
+    reply.aliased(LANDING_PAGE_TOOL)
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -378,7 +419,7 @@ pub(crate) async fn set_team_starter_page_for<R: tauri::Runtime>(
     crate::context_repo::caller_scope::readback(readable, result)
 }
 
-/// Set or clear a team's starter page (`teams.yml` `landing_page:`) through the
+/// Set or clear a team's landing page (`teams.yml` `landing_page:`) through the
 /// shared registry write path: a working-tree edit, never committed or pushed.
 /// `active` is the app's active team, used when neither `org` nor `team` is given.
 pub(crate) async fn set_team_starter_page<R: tauri::Runtime>(
@@ -1272,6 +1313,61 @@ mod tests {
         ));
         assert_eq!(team(&load(&org_root), "web").unwrap().landing_page, None);
         assert_eq!(seen.lock().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn the_old_name_makes_the_same_edit_and_says_it_is_an_alias() {
+        let (app, home, org_root, _seen) = fixture();
+        write_content(&org_root, "web", "guide/start.md");
+        let reply = starter(
+            &app,
+            home.path(),
+            None,
+            Some(ORG),
+            Some("web"),
+            Some("guide/start.md"),
+        )
+        .await;
+        let landing = serde_json::to_value(landing_page_reply(reply.clone())).unwrap();
+        assert_eq!(
+            landing["data"],
+            serde_json::json!({ "principal": UID.to_string(), "orgSlug": ORG, "edit": "SetTeamLandingPage", "team": "web", "landingPage": "guide/start.md" })
+        );
+        let alias = serde_json::to_value(starter_page_alias_reply(reply)).unwrap();
+        assert_eq!(
+            alias["data"],
+            serde_json::json!({ "principal": UID.to_string(), "orgSlug": ORG, "edit": "SetTeamLandingPage", "team": "web", "starterPage": "guide/start.md", "alias": true, "use": LANDING_PAGE_TOOL })
+        );
+        assert_eq!(
+            (&landing["status"], &alias["status"]),
+            (&serde_json::json!("ok"), &serde_json::json!("ok"))
+        );
+        assert_eq!(LANDING_PAGE_TOOL, "set_team_landing_page");
+        assert_eq!(STARTER_PAGE_ALIAS, "set_team_starter_page");
+        assert_eq!(
+            team(&load(&org_root), "web")
+                .unwrap()
+                .landing_page
+                .as_deref(),
+            Some("guide/start.md")
+        );
+    }
+
+    #[test]
+    fn only_an_ok_reply_carries_the_alias_marker() {
+        let refused = || ToolEnvelope::<StarterPageSet>::Validation {
+            message: "no such file".into(),
+        };
+        let expected =
+            serde_json::json!({ "status": "validation", "data": { "message": "no such file" } });
+        assert_eq!(
+            serde_json::to_value(landing_page_reply(refused())).unwrap(),
+            expected
+        );
+        assert_eq!(
+            serde_json::to_value(starter_page_alias_reply(refused())).unwrap(),
+            expected
+        );
     }
 
     #[tokio::test]
