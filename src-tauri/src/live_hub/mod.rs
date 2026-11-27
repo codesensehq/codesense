@@ -1055,14 +1055,14 @@ async fn refresh_hosts(app: &tauri::AppHandle) {
                             HOST_READ_TIMEOUT.as_secs()
                         );
                     }
-                    hub.invalidate(REBUILD);
+                    LiveHub::invalidate(&hub, REBUILD);
                     // The stranded thread frees the host for the next read when it returns.
                     let stranded = handle.clone();
                     tauri::async_runtime::spawn(async move {
                         let _ = read.await;
                         let hub = stranded.state::<LiveHub>();
                         hub.model.lock().unwrap().host_read_returned(&key);
-                        hub.invalidate(HOSTS);
+                        LiveHub::invalidate(&hub, HOSTS);
                     });
                     break;
                 };

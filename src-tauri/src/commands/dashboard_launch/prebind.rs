@@ -13,7 +13,7 @@ pub(crate) trait PreBindPort {
     /// block, and it is idempotent: a session already gone, or never opened, is a no-op.
     fn kill(&self, session_id: &str);
     /// Drop the reservation and announce it.
-    fn abort(&self, handle: &str);
+    fn abort_reserved(&self, handle: &str);
 }
 
 /// The app's port: the kill choke off the async workers, then the notifying abort.
@@ -27,7 +27,7 @@ impl PreBindPort for AppPreBindPort {
         });
     }
 
-    fn abort(&self, handle: &str) {
+    fn abort_reserved(&self, handle: &str) {
         use tauri::Manager;
         if let Some(state) = self.0.try_state::<DashboardLaunchState>() {
             super::abort_and_notify(&self.0, &state, handle);
@@ -35,8 +35,9 @@ impl PreBindPort for AppPreBindPort {
     }
 }
 
-/// Armed for a fresh launch from its reservation until [`commit`](Self::commit); a launch
-/// that found its handle already running holds an unarmed one, which does nothing.
+/// Armed for a fresh launch from its reservation until
+/// [`claim_committed`](Self::claim_committed); a launch that found its handle already
+/// running holds an unarmed one, which does nothing.
 pub(crate) struct PreBindReservation<P: PreBindPort> {
     port: P,
     handle: String,
@@ -55,12 +56,12 @@ impl<P: PreBindPort> PreBindReservation<P> {
     }
 
     /// The launch is about to open a tab for `session_id`: a drop from here on kills it.
-    pub(crate) fn opened(&mut self, session_id: &str) {
+    pub(crate) fn opening_tab(&mut self, session_id: &str) {
         self.opened = Some(session_id.to_string());
     }
 
     /// The session is bound: the registry owns it now, and the guard lets go.
-    pub(crate) fn commit(&mut self) {
+    pub(crate) fn claim_committed(&mut self) {
         self.armed = false;
     }
 }
@@ -73,7 +74,7 @@ impl<P: PreBindPort> Drop for PreBindReservation<P> {
         if let Some(session_id) = self.opened.take() {
             self.port.kill(&session_id);
         }
-        self.port.abort(&self.handle);
+        self.port.abort_reserved(&self.handle);
     }
 }
 
@@ -97,7 +98,7 @@ mod tests {
             self.calls.lock().unwrap().push(format!("kill {session_id}"));
         }
 
-        fn abort(&self, handle: &str) {
+        fn abort_reserved(&self, handle: &str) {
             self.calls.lock().unwrap().push(format!("abort {handle}"));
             super::super::abort_and_notify(&self.app, &self.state, handle);
         }
@@ -170,7 +171,7 @@ mod tests {
     fn a_launch_dropped_after_its_tab_opens_kills_it_then_aborts() {
         let mut fixture = Fixture::new();
         let mut guard = fixture.guard(true);
-        guard.opened("launch-session");
+        guard.opening_tab("launch-session");
         drop(guard);
         assert_eq!(fixture.calls(), ["kill launch-session", "abort launch"]);
         assert!(fixture.announced());
@@ -182,12 +183,12 @@ mod tests {
     fn a_committed_launch_is_left_alone() {
         let mut fixture = Fixture::new();
         let mut guard = fixture.guard(true);
-        guard.opened("launch-session");
+        guard.opening_tab("launch-session");
         fixture
             .state
             .bind("launch", "launch-session", None)
             .unwrap();
-        guard.commit();
+        guard.claim_committed();
         drop(guard);
         assert!(fixture.calls().is_empty());
         assert!(fixture.quiet());
@@ -201,7 +202,7 @@ mod tests {
     fn a_launch_that_found_its_handle_running_holds_an_unarmed_guard() {
         let mut fixture = Fixture::new();
         let mut guard = fixture.guard(false);
-        guard.opened("launch-session");
+        guard.opening_tab("launch-session");
         drop(guard);
         assert!(fixture.calls().is_empty());
         assert!(fixture.quiet());

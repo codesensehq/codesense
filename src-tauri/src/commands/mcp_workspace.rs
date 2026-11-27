@@ -2313,7 +2313,7 @@ async fn spawn_and_bind(
         fail_pre_bind!(telemetry, TelemetryOutcome::SpawnFailed, e);
     }
     // The tab opens inside the startup below; a drop from its open on kills it.
-    let (opening, opened_session) = (&mut prebind, session_id.as_str());
+    let (opening, opened_session) = (&mut prebind, &session_id[..]);
     let startup = super::role_startup::start_argv(
         &super::agent_inbox::AppInboxHost { app: app.clone() },
         role_meta.as_ref().and_then(|m| m.team.as_ref()),
@@ -2323,7 +2323,7 @@ async fn spawn_and_bind(
         launch_args,
         initial_prompt,
         |prompt_plan| async move {
-            opening.opened(opened_session);
+            opening.opening_tab(opened_session);
             let spawn = TabSpawn::Cold(Box::new(bound_spawn.into_args(
                 binary,
                 cwd,
@@ -2369,7 +2369,7 @@ async fn spawn_and_bind(
         fail_pre_bind!(telemetry, TelemetryOutcome::SpawnFailed, e);
     }
     // Bound: the registry owns the session now.
-    prebind.commit();
+    prebind.claim_committed();
 
     super::dashboard_launch::emit_session_joined_system_message(app, state, story_id, &session_id);
 
@@ -3500,12 +3500,12 @@ mod tests {
             .split("pub(crate) struct InitialPromptPlan")
             .next()
             .unwrap();
-        let opened_at = spawn.find("opening.opened(opened_session);").unwrap();
+        let opened_at = spawn.find("opening.opening_tab(opened_session);").unwrap();
         let open_at = spawn.find("open_layout_tab(").unwrap();
         let claim_at = spawn.find("commit_local_effect_claim(").unwrap();
-        let commit_at = spawn.find("prebind.commit();").unwrap();
+        let commit_at = spawn.find("prebind.claim_committed();").unwrap();
         assert!(opened_at < open_at && open_at < claim_at && claim_at < commit_at);
-        assert_eq!(spawn.matches("prebind.commit()").count(), 1);
+        assert_eq!(spawn.matches("prebind.claim_committed()").count(), 1);
     }
 
     /// SW-WA-F11 — the launch telemetry pipeline is actually wired through
