@@ -352,8 +352,8 @@ impl Dispatcher {
                 reason: format!("invalid: {verb} topic must be a string"),
             };
         }
-        // So is a records collection: the capability reads a non-string one as notes, while the
-        // bridge would act on it as String(collection). An absent one still means notes.
+        // So is a records collection: the capability reads a non-string one as notes, so ["care"]
+        // would be admitted on notes' grant. An absent one means notes.
         if matches!(verb, "subscribe" | "unsubscribe" | "page")
             && args["topic"] == "records"
             && args.get("collection").is_some_and(|c| !c.is_string())
