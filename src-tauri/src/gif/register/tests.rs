@@ -922,6 +922,50 @@ async fn a_search_that_spans_turning_search_off_is_not_held() {
     assert!(h.service.analytics.held_count() > 0);
 }
 
+/// How many GIFs a GIPHY search holds when `moved`'s key is removed while it is in flight.
+async fn held_after_a_key_removal_mid_giphy_search(moved: Provider) -> usize {
+    let h = Harness::new();
+    *h.wire.search_body.lock().unwrap() = include_str!("../fixtures/search.json").to_string();
+    let request = crate::gif::normalize(Some("cat"), None, None).unwrap();
+    let dir = h.dir.path().to_path_buf();
+    *h.wire.during_search.lock().unwrap() = Some(Box::new(move || {
+        crate::gif::install::forget_install_for(&dir, moved)
+    }));
+    assert!(!h
+        .service
+        .run(&request, None, None)
+        .await
+        .unwrap()
+        .1
+        .is_empty());
+    h.service.analytics.held_count()
+}
+
+#[tokio::test]
+async fn a_giphy_search_is_held_unless_giphys_own_key_changes_mid_search() {
+    assert!(
+        held_after_a_key_removal_mid_giphy_search(Provider::Klipy).await > 0,
+        "KLIPY's key change leaves a GIPHY search held"
+    );
+    assert_eq!(
+        held_after_a_key_removal_mid_giphy_search(Provider::Giphy).await,
+        0,
+        "found under GIPHY's old id: not held"
+    );
+}
+
+#[tokio::test]
+async fn a_klipy_search_after_a_giphy_key_removal_runs_and_is_held() {
+    let h = Harness::klipy();
+    *h.wire.search_body.lock().unwrap() = include_str!("../fixtures/search.json").to_string();
+    crate::gif::install::forget_install_for(h.dir.path(), Provider::Giphy);
+    let request = crate::gif::normalize(Some("cat"), None, None).unwrap();
+    let (provider, found) = h.service.run(&request, None, None).await.unwrap();
+    assert_eq!(provider, Provider::Klipy);
+    assert!(!found.is_empty());
+    assert!(h.service.analytics.held_count() > 0);
+}
+
 #[tokio::test]
 async fn a_new_key_ends_the_wait_after_a_failed_random_id_call() {
     let h = Harness::new();
@@ -1000,6 +1044,31 @@ async fn after_a_failed_keychain_read_serves_wait_before_reading_it_again() {
     let taken = h.registration.take_onloads(SHA);
     h.registration.settle_serve(vec![slot(1)], taken).await;
     assert_eq!(store.gets.load(Ordering::SeqCst), 2);
+    assert!(h.wire.urls().is_empty());
+}
+
+#[tokio::test]
+async fn a_serve_taken_before_a_key_change_marks_without_reading_the_keychain() {
+    let store = Arc::new(DeniedStore::default());
+    let h = Harness::over(store.clone());
+    let armed = Pending {
+        onload: all_pingbacks().onload,
+        sha: Some(SHA.into()),
+        expires: h.now() + ONLOAD_WINDOW_MS,
+        waiting: Some(false),
+    };
+    let epoch = install_epoch(h.dir.path(), Provider::Giphy);
+    h.registration.put_back(vec![(slot(1), armed)], epoch);
+    let taken = h.registration.take_onloads(SHA);
+    crate::gif::install::forget_install_for(h.dir.path(), Provider::Giphy);
+    let settled = h.registration.settle_serve(vec![slot(1)], taken).await;
+    assert_eq!((settled.marks, settled.retry), (vec![slot(1)], Vec::new()));
+    assert_eq!(store.gets.load(Ordering::SeqCst), 0, "no keychain read");
+    assert_eq!(
+        *h.registration.key_retry_at.lock().unwrap(),
+        (0, 0),
+        "no wait set"
+    );
     assert!(h.wire.urls().is_empty());
 }
 

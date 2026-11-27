@@ -306,8 +306,9 @@ pub(crate) struct Registration {
     key_retry_at: Mutex<(u64, i64)>,
     /// Each provider's install epoch what is held here belongs to.
     ///
-    /// Lock order: `epoch` first, then any of `onloads` (and under it the install file),
-    /// `sent`, `random_retry_at`, `key_retry_at` and the analytics' entries. Nothing is taken
+    /// Lock order: `epoch` first, then any of the install file (briefly, to read the epochs),
+    /// `onloads` (and under it the install file), `sent`, `random_retry_at`, `key_retry_at` and
+    /// the analytics' entries. Nothing is taken
     /// while the install file or a wait is held, and `epoch` is never taken under another lock:
     /// [`Self::take_onloads`] holds it across the follow through
     /// [`Self::follow_epoch_held`], and [`Self::put_back`] takes `onloads`, then the install
@@ -929,6 +930,12 @@ impl Registration {
             settled
                 .marks
                 .extend(Vec::drain(&mut due, ..).map(|(slot, _)| slot));
+        }
+        if !Vec::is_empty(&due) && !self.still_in(provider, started) {
+            // Taken under an earlier epoch: marked, with no keychain read and no wait set.
+            log::info!(target: "gif", "gif registration: the install id changed before the {}; not registered", Event::label(Event::Load, provider));
+            let stale = Iterator::map(Vec::drain(&mut due, ..), |(slot, _)| slot);
+            Extend::extend(&mut settled.marks, stale);
         }
         if !Vec::is_empty(&due) {
             // After a failed keychain read, serves wait before reading it again, so a denied
