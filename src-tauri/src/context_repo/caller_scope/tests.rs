@@ -305,6 +305,7 @@ fn recorded_worktree_fills_missing_launch_team_before_remote_or_layout() {
             launch_cwd: cwd.clone(),
             created_at: 1,
             last_used_at: 1,
+            work_item: None,
         },
     )
     .unwrap();

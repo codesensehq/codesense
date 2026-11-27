@@ -820,9 +820,24 @@ pub struct ContextWorktreeRecord {
     pub launch_cwd: PathBuf,
     pub created_at: u64,
     pub last_used_at: u64,
+    /// The work item of the first launch in this worktree, with its lead. Older readers
+    /// keep it through `extras`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub work_item: Option<ContextWorkItem>,
     /// Preserve fields written by newer clients when updating this record.
     #[serde(flatten)]
     pub extras: std::collections::BTreeMap<String, serde_json::Value>,
+}
+
+/// The work item a context worktree belongs to: its id and the lead's session and agent.
+/// A worker's worktree carries its lead's work item.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContextWorkItem {
+    pub id: crate::work_item::WorkItemId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lead_session: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lead_agent: Option<String>,
 }
 
 pub fn write_context_record(
@@ -2771,6 +2786,7 @@ mod context_tests {
             created_at: 1,
             last_used_at: 2,
             extras: Default::default(),
+            work_item: None,
         };
         write_context_record(home, &principal, &row).unwrap();
         assert_eq!(

@@ -105,6 +105,26 @@ fn every_launch_path_records_its_launcher_and_work_item() {
     let all = [&lead, &yours, &outside, &foreman, &bridged, &routine];
     let distinct: std::collections::HashSet<_> = all.iter().collect();
     assert_eq!(distinct.len(), all.len(), "each root launch mints its own");
+
+    // What a context worktree records: a worker's (and its worker's) is its lead's work
+    // item and lead; a root launch leads its own, and a shell has none.
+    launch_agent(&state, "lead#worker#sub", "s-sub", by(Some("s-worker")));
+    let lead_of = |id: &crate::work_item::WorkItemId, session: &str, agent: &str| {
+        Some(crate::install::worktree_index::ContextWorkItem {
+            id: id.clone(),
+            lead_session: Some(session.into()),
+            lead_agent: Some(agent.into()),
+        })
+    };
+    for (handle, expected) in [
+        ("lead", lead_of(&lead, "s-lead", "lead")),
+        ("lead#worker", lead_of(&lead, "s-lead", "lead")),
+        ("lead#worker#sub", lead_of(&lead, "s-lead", "lead")),
+        ("shell#agent", lead_of(&outside, "s-shell-agent", "shell#agent")),
+        ("lead-shell", None),
+    ] {
+        assert_eq!(state.work_item_lead(handle), expected, "{handle}");
+    }
 }
 
 #[test]

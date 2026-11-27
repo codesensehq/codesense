@@ -3344,6 +3344,33 @@ impl DashboardLaunchState {
         self.lock().by_handle.get(handle).and_then(|entry| entry.work_item.clone())
     }
 
+    /// `handle`'s work item and its lead: the session up the launcher chain that minted
+    /// it, by session id (its handle until bound) and agent name. A lead no longer
+    /// registered leaves the lead fields to the last session still known.
+    pub(crate) fn work_item_lead(
+        &self,
+        handle: &str,
+    ) -> Option<crate::install::worktree_index::ContextWorkItem> {
+        let inner = self.lock();
+        let (mut lead_handle, mut lead) = (handle.to_string(), inner.by_handle.get(handle)?);
+        let id = lead.work_item.clone()?;
+        let mut seen = HashSet::from([lead_handle.clone()]);
+        while let Some(launcher) = lead.meta.launched_by.as_deref() {
+            let launcher = normalize_launcher(&inner, launcher);
+            match inner.by_handle.get(&launcher) {
+                Some(up) if up.work_item.as_ref() == Some(&id) && seen.insert(launcher.clone()) => {
+                    (lead_handle, lead) = (launcher, up);
+                }
+                _ => break,
+            }
+        }
+        Some(crate::install::worktree_index::ContextWorkItem {
+            id,
+            lead_session: Some(lead.session_id.clone().unwrap_or_else(|| lead_handle.clone())),
+            lead_agent: Some(lead.meta.display_name.clone().unwrap_or(lead_handle)),
+        })
+    }
+
     /// The tab that launched `handle`'s session, captured when its launch was reserved.
     pub(crate) fn launcher_session(&self, handle: &str) -> Option<String> {
         self.lock().by_handle.get(handle).and_then(|entry| entry.launcher_session.clone())

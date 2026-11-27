@@ -1157,6 +1157,7 @@ fn selected_registered_checkout_hydrates_shared_parent_content_through_real_chil
             launch_cwd: checkout.join("parent/content"),
             created_at: 1,
             last_used_at: 1,
+            work_item: None,
         },
     )
     .unwrap();

@@ -142,6 +142,7 @@ fn mcp_query_request_resolves_recorded_session_before_consuming_the_index() {
             launch_cwd: cwd.clone(),
             created_at: 1,
             last_used_at: 1,
+            work_item: None,
         },
     )
     .unwrap();

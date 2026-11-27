@@ -301,7 +301,14 @@ pub(crate) trait OpenHost: Send + Sync {
     ) -> Result<(), String> {
         Ok(())
     }
-    async fn context_used(&self, _destination: &context::ContextDestination, _name: &str) {}
+    /// Record that `handle`'s launch, named `name`, started in `destination`.
+    async fn context_used(
+        &self,
+        _destination: &context::ContextDestination,
+        _name: &str,
+        _handle: &str,
+    ) {
+    }
     /// Prepare the agent `reference` names for a launch against `team` with `prompt`, in
     /// `mode` when the caller chose one, else the agent's own declared mode
     /// ([`crate::agents::launch::prepare_named`]). `Err` is an agent that cannot be found.
@@ -1048,7 +1055,7 @@ async fn open_agent_as(
         Ok(launched) if launched.fresh => {
             warnings.extend(launched.warnings);
             if let Some(destination) = &destination {
-                host.context_used(destination, &name).await;
+                host.context_used(destination, &name, &handle).await;
             }
             if mode.is_visible() {
                 host.reveal(&handle, mode.is_focused());
@@ -2798,7 +2805,17 @@ impl OpenHost for AppOpenHost {
         .await
     }
 
-    async fn context_used(&self, destination: &context::ContextDestination, name: &str) {
+    async fn context_used(
+        &self,
+        destination: &context::ContextDestination,
+        name: &str,
+        handle: &str,
+    ) {
+        // The launch is bound by now, so its work item and lead are settled.
+        let work_item = self
+            .app
+            .try_state::<super::dashboard_launch::DashboardLaunchState>()
+            .and_then(|state| state.work_item_lead(handle));
         let (home, principal, row, name) = (
             self.codesense_home.clone(),
             self.principal.clone(),
@@ -2806,7 +2823,7 @@ impl OpenHost for AppOpenHost {
             name.to_string(),
         );
         if let Err(error) = super::await_blocking("open_workspace.context_used", move || {
-            context::note_used(&home, &principal, &row, &name)
+            context::note_used(&home, &principal, &row, &name, work_item)
         })
         .await
         {

@@ -214,6 +214,7 @@ fn create_new(
         created_at: now,
         last_used_at: now,
         extras: Default::default(),
+        work_item: None,
     };
     // A failed add made nothing this attempt may remove, so there is nothing to roll back.
     git(
@@ -419,8 +420,13 @@ pub(crate) fn note_used(
     principal: &Principal,
     row: &crate::install::worktree_index::ContextWorktreeRecord,
     name: &str,
+    work_item: Option<crate::install::worktree_index::ContextWorkItem>,
 ) -> Result<(), String> {
     let mut row = row.clone();
+    // The first launch's work item stands: a later launch in the worktree never moves it.
+    if row.work_item.is_none() {
+        row.work_item = work_item;
+    }
     row.last_used_at = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -776,6 +782,7 @@ mod tests {
             created_at: 1,
             last_used_at: 1,
             extras: Default::default(),
+            work_item: None,
         };
         worktree_index::write_context_record(&f.home, &f.principal, &other).unwrap();
         // While this open creates its branch, another attempt makes its worktree at the
@@ -949,7 +956,7 @@ mod tests {
             .warnings
             .iter()
             .any(|w| w.message.contains(&*legacy.to_string_lossy())));
-        note_used(&f.home, &f.principal, &a.record, "Agent").unwrap();
+        note_used(&f.home, &f.principal, &a.record, "Agent", None).unwrap();
         let again = resolve(
             &f.home,
             &f.principal,
@@ -965,6 +972,35 @@ mod tests {
             std::fs::read_to_string(legacy.join("notes.txt")).unwrap(),
             "old work"
         );
+    }
+
+    #[test]
+    fn a_worktree_keeps_the_work_item_of_its_first_launch() {
+        use crate::install::worktree_index::ContextWorkItem;
+        let f = Fixture::new();
+        let open = |f: &Fixture| {
+            resolve(&f.home, &f.principal, &f.scope, &f.content, "Worker", None, false).unwrap()
+        };
+        let item = |id: &str, lead: &str| ContextWorkItem {
+            id: crate::work_item::WorkItemId::parse(id).unwrap(),
+            lead_session: Some(format!("{lead}-session")),
+            lead_agent: Some(lead.to_string()),
+        };
+        let first = open(&f);
+        assert_eq!(first.record.work_item, None);
+        let lead = item("wi_00000000000000a1", "Lead");
+        note_used(&f.home, &f.principal, &first.record, "Worker", Some(lead.clone())).unwrap();
+        let again = open(&f);
+        assert_eq!(again.record.work_item, Some(lead.clone()));
+        note_used(
+            &f.home,
+            &f.principal,
+            &again.record,
+            "Worker",
+            Some(item("wi_00000000000000b2", "Other")),
+        )
+        .unwrap();
+        assert_eq!(open(&f).record.work_item, Some(lead));
     }
 
     #[test]
