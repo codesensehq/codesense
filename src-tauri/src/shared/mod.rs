@@ -16,4 +16,6 @@ pub mod revisioned_defs;
 pub mod secret_scan;
 pub mod slug;
 pub mod sqlite;
+#[cfg(test)]
+pub(crate) mod test_deadline;
 pub mod yaml_io;

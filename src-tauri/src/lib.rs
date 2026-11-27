@@ -171,14 +171,24 @@ fn log_sinks() -> Vec<LogSink> {
 }
 
 fn log_targets() -> Vec<Target> {
+    log_targets_for(!cfg!(debug_assertions))
+}
+
+/// Whether a line at `level` is mirrored into the webview console. Each mirrored
+/// line costs a hop through the main run loop, so release builds send only
+/// warnings and errors; the log file and stdout still get every line.
+fn webview_admits(level: log::Level, release: bool) -> bool {
+    !release || level <= log::Level::Warn
+}
+
+fn log_targets_for(release: bool) -> Vec<Target> {
     log_sinks()
         .into_iter()
-        .map(|sink| {
-            Target::new(match sink {
-                LogSink::LogDir => TargetKind::LogDir { file_name: None },
-                LogSink::Stdout => TargetKind::Dispatch(console_log::stdout_dispatch()),
-                LogSink::Webview => TargetKind::Webview,
-            })
+        .map(|sink| match sink {
+            LogSink::LogDir => Target::new(TargetKind::LogDir { file_name: None }),
+            LogSink::Stdout => Target::new(TargetKind::Dispatch(console_log::stdout_dispatch())),
+            LogSink::Webview => Target::new(TargetKind::Webview)
+                .filter(move |metadata| webview_admits(metadata.level(), release)),
         })
         .collect()
 }
@@ -2170,7 +2180,7 @@ mod connection_startup_order_tests {
 
 #[cfg(test)]
 mod log_target_tests {
-    use super::{log_sinks, log_targets, LogSink};
+    use super::{log_sinks, log_targets, log_targets_for, webview_admits, LogSink};
 
     /// Release builds keep the webview console mirror; the WebDriver harness build
     /// drops it so forwarded console lines cannot loop back into the log.
@@ -2184,6 +2194,42 @@ mod log_target_tests {
         assert!(sinks.contains(&LogSink::LogDir));
         assert!(sinks.contains(&LogSink::Stdout));
         assert_eq!(log_targets().len(), sinks.len());
+    }
+
+    /// Release builds mirror only warnings and errors into the webview console:
+    /// each mirrored line costs a main run loop hop.
+    #[test]
+    fn webview_admits_warn_and_above_only() {
+        use log::Level;
+        for (level, release_admits) in [
+            (Level::Error, true),
+            (Level::Warn, true),
+            (Level::Info, false),
+            (Level::Debug, false),
+            (Level::Trace, false),
+        ] {
+            assert_eq!(webview_admits(level, true), release_admits, "{level}");
+            assert!(webview_admits(level, false), "debug builds mirror {level}");
+        }
+        assert_eq!(log_targets_for(true).len(), log_sinks().len());
+        // `cargo test` builds with debug_assertions, so pin the release wiring in source.
+        let source = include_str!("lib.rs");
+        let start = source
+            .find("\nfn log_targets_for(")
+            .expect("log_targets_for is defined");
+        let body = &source[start..start + source[start..].find("\n}\n").unwrap()];
+        let webview = &body[body.find("LogSink::Webview =>").expect("a webview arm")..];
+        assert!(
+            webview.contains(".filter(")
+                && webview.contains("webview_admits(metadata.level(), release)"),
+            "the webview target must filter through webview_admits:\n{body}"
+        );
+        let wrapper = &source[source.find("\nfn log_targets()").unwrap()..];
+        assert!(
+            wrapper[..wrapper.find("\n}\n").unwrap()]
+                .contains("log_targets_for(!cfg!(debug_assertions))"),
+            "release builds pass release = true"
+        );
     }
 }
 
