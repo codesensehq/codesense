@@ -14,12 +14,16 @@
 //! Rates use two 60 s buckets (current + previous). Quiet idle writes nothing
 //! to the log: the one `invoke_rate` line per completed window is emitted only
 //! if an entry ran at ≥ 1/s or reached 4 concurrent calls, or if an internal
-//! metric (`metric_count`, `metric_add`, `metric_gauge`) was recorded in it, and
-//! only by a call that crosses the window boundary (no timer thread). A window
-//! with a metric lists every top row, quiet or not, then the metrics after `m4`.
+//! metric (`metric_count`, `metric_add`, `metric_gauge`) was recorded in it. The
+//! call that crosses the window boundary only hands the finished window's epoch
+//! to one `invoke-rate-log` thread, which builds and logs the line: no caller
+//! formats or logs, and none blocks (if the thread is two lines behind, that
+//! minute's line is dropped). A window with a metric lists every top row, quiet
+//! or not, then the metrics after `m4`.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::mpsc::SyncSender;
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::time::{Duration, Instant};
 
@@ -35,6 +39,8 @@ const LOG_MIN_PER_SEC: u64 = 1;
 const LOG_MIN_IN_FLIGHT: u32 = 4;
 const LOG_TOP: usize = 15;
 const HEALTH_TOP: usize = 30;
+/// Finished windows queued for the logger thread; a full queue drops the newest.
+const LOG_QUEUE: usize = 2;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Kind {
@@ -233,8 +239,9 @@ impl Registry {
             .clone()
     }
 
-    /// Count one call. `now` is the time since registry start.
-    pub fn count_at(&self, kind: Kind, name: &str, now: Duration) -> Option<String> {
+    /// Count one call. `now` is the time since registry start. Returns the
+    /// finished window's epoch when this call is the first in a new one.
+    pub fn count_at(&self, kind: Kind, name: &str, now: Duration) -> Option<u64> {
         let epoch = now.as_secs() / WINDOW_SECS;
         let e = self.entry(kind, name);
         e.with_bucket(epoch, |b| b.count += 1);
@@ -243,12 +250,12 @@ impl Registry {
 
     /// Record an internal event counter. Names are code-defined and capped to
     /// the same safe character set as invoke names.
-    pub fn metric_count_at(&self, name: &str, now: Duration) -> Option<String> {
+    pub fn metric_count_at(&self, name: &str, now: Duration) -> Option<u64> {
         self.metric_add_at(name, 1, now)
     }
 
     /// Add an amount to an internal event counter.
-    pub fn metric_add_at(&self, name: &str, amount: u64, now: Duration) -> Option<String> {
+    pub fn metric_add_at(&self, name: &str, amount: u64, now: Duration) -> Option<u64> {
         #[cfg(test)]
         {
             let mut lifetime = self.lifetime.lock().unwrap_or_else(|e| e.into_inner());
@@ -259,7 +266,7 @@ impl Registry {
     }
 
     /// Set an internal gauge for the current reporting window.
-    pub fn metric_gauge_at(&self, name: &str, value: u64, now: Duration) -> Option<String> {
+    pub fn metric_gauge_at(&self, name: &str, value: u64, now: Duration) -> Option<u64> {
         self.update_metric(name, now, |m| m.gauge = Some(value));
         self.rollover(now.as_secs() / WINDOW_SECS)
     }
@@ -321,17 +328,19 @@ impl Registry {
             b.count += 1;
             b.max_in_flight = b.max_in_flight.max(now_in);
         });
-        let line = self.rollover(epoch);
+        let finished = self.rollover(epoch);
         Guard {
             entry: e,
             start: Instant::now(),
             epoch,
-            line,
+            finished,
         }
     }
 
-    /// First call to observe a new epoch reports the completed one.
-    fn rollover(&self, epoch: u64) -> Option<String> {
+    /// The first call to observe a new epoch gets the completed one, to hand off.
+    /// Architecture: no formatting here; the buckets keep the finished window
+    /// readable for the next 60 s, so the logger thread reads it from them.
+    fn rollover(&self, epoch: u64) -> Option<u64> {
         let last = self.reported_epoch.load(Ordering::Acquire);
         if epoch <= last
             || self
@@ -341,7 +350,7 @@ impl Registry {
         {
             return None;
         }
-        self.report_line(epoch - 1)
+        Some(epoch - 1)
     }
 
     fn window_rows(&self, epochs: &[u64], covered_secs: f64) -> Vec<Row> {
@@ -382,6 +391,8 @@ impl Registry {
 
     /// The log line for a completed window, or `None` at quiet idle.
     pub fn report_line(&self, epoch: u64) -> Option<String> {
+        #[cfg(test)]
+        REPORT_LINES.with(|n| n.set(n.get() + 1));
         let mut rows = self.window_rows(&[epoch], WINDOW_SECS as f64);
         let metrics = self.metric_rows(epoch);
         let quiet_rows = !rows.iter().any(|r| {
@@ -491,13 +502,13 @@ pub struct Guard {
     entry: Arc<Entry>,
     start: Instant,
     epoch: u64,
-    line: Option<String>,
+    finished: Option<u64>,
 }
 
 impl Guard {
-    /// The `invoke_rate` line produced if this call crossed a window boundary.
-    pub fn take_report(&mut self) -> Option<String> {
-        self.line.take()
+    /// The finished window's epoch, if this call crossed a window boundary.
+    pub fn take_epoch(&mut self) -> Option<u64> {
+        self.finished.take()
     }
 }
 
@@ -523,9 +534,52 @@ fn since_start() -> Duration {
     START.get_or_init(Instant::now).elapsed()
 }
 
-fn emit(line: Option<String>) {
-    if let Some(line) = line {
-        log::info!(target: "invoke_rate", "{line}");
+/// Calls of [`Registry::report_line`] on the current thread, so a test can tell
+/// that a caller never builds the line.
+#[cfg(test)]
+thread_local! {
+    static REPORT_LINES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+fn report_lines_on_this_thread() -> u64 {
+    REPORT_LINES.with(|n| n.get())
+}
+
+/// Queue a finished window for the logger without waiting: false if the queue
+/// is full (that minute's line is dropped) or the logger is gone.
+fn hand_off(epoch: u64, logger: &SyncSender<u64>) -> bool {
+    logger.try_send(epoch).is_ok()
+}
+
+/// The one `invoke-rate-log` thread, started on first use. It blocks on the
+/// queue, builds each finished window's line and logs it, holding no lock
+/// between lines, so it never delays shutdown. `None` if it could not start.
+fn logger() -> Option<&'static SyncSender<u64>> {
+    static LOGGER: OnceLock<Option<SyncSender<u64>>> = OnceLock::new();
+    LOGGER
+        .get_or_init(|| {
+            let (tx, rx) = std::sync::mpsc::sync_channel::<u64>(LOG_QUEUE);
+            std::thread::Builder::new()
+                .name("invoke-rate-log".into())
+                .spawn(move || {
+                    for epoch in rx {
+                        if let Some(line) = global().report_line(epoch) {
+                            log::info!(target: "invoke_rate", "{line}");
+                        }
+                    }
+                })
+                .ok()
+                .map(|_| tx)
+        })
+        .as_ref()
+}
+
+/// Architecture: every caller (IPC invokes, blocking commands, MCP tools and
+/// metrics) only counts; the line is built and logged off its thread.
+fn emit(finished: Option<u64>) {
+    if let (Some(epoch), Some(logger)) = (finished, logger()) {
+        hand_off(epoch, logger);
     }
 }
 
@@ -547,7 +601,7 @@ pub fn counted<R: tauri::Runtime>(
 /// Time a blocking command or MCP tool; hold the guard for the call's duration.
 pub fn begin(kind: Kind, name: &str) -> Guard {
     let mut g = global().begin_at(kind, name, since_start());
-    emit(g.take_report());
+    emit(g.take_epoch());
     g
 }
 
@@ -637,12 +691,15 @@ mod tests {
             r.count_at(Kind::Invoke, "quiet", secs(1));
         }
         assert_eq!(r.report_line(0), None);
-        assert_eq!(r.count_at(Kind::Invoke, "quiet", secs(61)), None);
+        let quiet = r.count_at(Kind::Invoke, "quiet", secs(61));
+        assert_eq!(quiet, Some(0), "the window is handed off even when quiet");
+        assert_eq!(quiet.and_then(|epoch| r.report_line(epoch)), None);
         for _ in 0..60 {
             r.count_at(Kind::Invoke, "hot", secs(70));
         }
         let line = r
             .count_at(Kind::Invoke, "hot", secs(125))
+            .and_then(|epoch| r.report_line(epoch))
             .expect("rollover reports");
         assert!(line.starts_with("window=60s hot 60 1.00/s"), "{line}");
     }
