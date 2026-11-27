@@ -32,6 +32,26 @@ that org's work, whichever org you have open. Only the **All orgs** items
 carry across. To keep a team's worktrees free of your items, turn off **Use my
 private items in ‹Team›** in that same title-bar menu.
 
+## Saved tile arrangements
+
+With the tiles preview on, the arrangements you save (a workspace's tiles,
+a group of them, a starter layout) are kept in Private too, one file each, for
+the org and the profile you saved them in. Another profile on this Mac never
+sees them, and they never sync or push: your Private repo ignores them, so they
+never show as changes either. Each file holds its tiles and the size of every
+split, and a restart opens them exactly as you left them.
+
+- A tile is saved by what it shows (an agent, a team doc, a workspace or a
+  terminal tab), never by a file path on this Mac. A tile whose doc or agent
+  isn't here yet, before a sync or in a sparse worktree, is kept, and opens
+  once it arrives.
+- A saved arrangement that's damaged, or that a newer CodeSense wrote, is
+  listed as **can't be read**. CodeSense leaves that file exactly as it is and
+  never saves over it, so a newer version can still open it.
+- With the tiles preview off, CodeSense saves no arrangement and changes none,
+  and the files you saved stay as they are. Turn the preview back on and they
+  open unchanged.
+
 ## Share it when it's ready
 
 Each item in Private has a **⋯** menu (a **From private** file in a worktree
