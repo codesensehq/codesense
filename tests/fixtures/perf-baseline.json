@@ -1,0 +1,92 @@
+{
+  "compare": {
+    "keys": [
+      "open_other_team_agent_cold",
+      "open_other_team_agent_warm",
+      "tab_open",
+      "cold_start_mock"
+    ],
+    "tolerancePercent": 20,
+    "floor": {
+      "ms": 17,
+      "fps": 3
+    }
+  },
+  "sets": [
+    {
+      "runner": "m1",
+      "engine": "webkit",
+      "runs": 5,
+      "commit": "57580cdbd665",
+      "date": "2026-11-27",
+      "throttle": "none",
+      "keys": {
+        "cold_start_mock": {
+          "unit": "ms",
+          "p50": 1584,
+          "p95": 2029,
+          "samples": [
+            2029,
+            1923,
+            1584,
+            1443,
+            1423
+          ],
+          "endState": "shell"
+        },
+        "open_other_team_agent_cold": {
+          "unit": "ms",
+          "p50": 340,
+          "p95": 361,
+          "samples": [
+            340,
+            333,
+            337,
+            361,
+            352
+          ],
+          "endState": "team-switch"
+        },
+        "open_other_team_agent_warm": {
+          "unit": "ms",
+          "p50": 156,
+          "p95": 166,
+          "samples": [
+            158,
+            150,
+            166,
+            155,
+            156
+          ],
+          "endState": "team-switch"
+        },
+        "team_switch": {
+          "unit": "ms",
+          "p50": 467,
+          "p95": 481,
+          "samples": [
+            481,
+            381,
+            471,
+            467,
+            311
+          ],
+          "endState": "team-view"
+        },
+        "tab_open": {
+          "unit": "ms",
+          "p50": 88,
+          "p95": 90,
+          "samples": [
+            88,
+            90,
+            83,
+            90,
+            83
+          ],
+          "endState": "schedule-row"
+        }
+      }
+    }
+  ]
+}
