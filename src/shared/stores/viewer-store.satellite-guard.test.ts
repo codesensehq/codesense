@@ -166,13 +166,36 @@ describe("guard routes: each ends without K @P1", () => {
     useViewerStore.setState({ navHistory, navIndex });
     useViewerStore.getState().openFile(TEAM, REPO, K);
     useViewerStore.getState().openFilePreview(TEAM, REPO, K);
-    useViewerStore.getState().setActiveTab(TEAM, null, K);
     expect(useViewerStore.getState().navHistory).toEqual(navHistory);
     expect(useViewerStore.getState().navIndex).toEqual(navIndex);
-    useViewerStore.setState({ navHistory: { [TEAM]: [K, A] }, navIndex: { [TEAM]: 1 } });
+  });
+
+  it("navigateBack steps past a satellite-owned entry to the next one main can show", () => {
+    const X = "/repo/x.md";
+    useViewerStore.setState({ navHistory: { [TEAM]: [X, K, A] }, navIndex: { [TEAM]: 2 } });
     useViewerStore.getState().navigateBack(TEAM, REPO);
-    expect(useViewerStore.getState().navHistory).toEqual({ [TEAM]: [K, A] });
-    expect(useViewerStore.getState().navIndex).toEqual({ [TEAM]: 1 });
+    expect(useViewerStore.getState().navIndex[TEAM]).toBe(0);
+    expect(active()).toBe(X);
+    expect(paths()).not.toContain(K);
+    expect(windowFocusOwnerMock).not.toHaveBeenCalled();
+  });
+
+  it("navigateForward steps past a satellite-owned entry to the next one main can show", () => {
+    const X = "/repo/x.md";
+    useViewerStore.setState({ navHistory: { [TEAM]: [A, K, X] }, navIndex: { [TEAM]: 0 } });
+    useViewerStore.getState().navigateForward(TEAM, REPO);
+    expect(useViewerStore.getState().navIndex[TEAM]).toBe(2);
+    expect(active()).toBe(X);
+    expect(paths()).not.toContain(K);
+  });
+
+  it("Back and Forward with only satellite-owned entries left keep the index", () => {
+    useViewerStore.setState({ navHistory: { [TEAM]: [K, A, K] }, navIndex: { [TEAM]: 1 } });
+    useViewerStore.getState().navigateBack(TEAM, REPO);
+    expect(useViewerStore.getState().navIndex[TEAM]).toBe(1);
+    useViewerStore.getState().navigateForward(TEAM, REPO);
+    expect(useViewerStore.getState().navIndex[TEAM]).toBe(1);
+    expect(active()).toBe(A);
   });
 
   it("setActiveTab's add-if-missing branch", () => {
@@ -182,21 +205,29 @@ describe("guard routes: each ends without K @P1", () => {
     expect(windowFocusOwnerMock).toHaveBeenCalledWith(K_KEY);
   });
 
-  it("navigateBack and navigateForward onto K", () => {
-    useViewerStore.setState({
-      navHistory: { [TEAM]: [K, A, K] },
-      navIndex: { [TEAM]: 1 },
-    });
-    useViewerStore.getState().navigateBack(TEAM, REPO);
-    expect(paths()).not.toContain(K);
-    expect(active()).toBe(A);
-    useViewerStore.setState({ navIndex: { [TEAM]: 1 } });
-    useViewerStore.getState().navigateForward(TEAM, REPO);
-    expect(paths()).not.toContain(K);
+  it("navigateBack and navigateForward onto K, through a write the store didn't vet", () => {
+    // Back and Forward skip a satellite-owned entry themselves; the guard still stops a
+    // history target that reaches K some other way.
+    useViewerStore.setState((s) => ({
+      openTabs: { [TEAM]: [...s.openTabs[TEAM], tab(K)] },
+      activeTab: { [TEAM]: K },
+      navIndex: { [TEAM]: 0 },
+    }));
+    expect(paths()).toEqual([A, B]);
     expect(active()).toBe(A);
   });
 
   it("remapTabPath onto K", () => {
+    useViewerStore.getState().remapTabPath(TEAM, B, K);
+    expect(paths()).toEqual([A]);
+    expect(active()).toBe(A);
+  });
+
+  it("remapTabPath of the preview tab onto K restores nothing", () => {
+    useViewerStore.setState({
+      openTabs: { [TEAM]: [tab(A), tab(B, true)] },
+      activeTab: { [TEAM]: A },
+    });
     useViewerStore.getState().remapTabPath(TEAM, B, K);
     expect(paths()).toEqual([A]);
     expect(active()).toBe(A);
