@@ -333,7 +333,7 @@ impl Registration {
             creating: tokio::sync::Mutex::new(()),
             random_retry_at: std::sync::Mutex::new((0, 0)),
             key_retry_at: std::sync::Mutex::new((0, 0)),
-            epoch: std::sync::Mutex::new(Epochs::default()),
+            epoch: std::sync::Mutex::new(Epochs { giphy: 0, klipy: 0 }),
         }
     }
 

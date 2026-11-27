@@ -63,7 +63,7 @@ impl Analytics {
             held: std::sync::Mutex::new(Held {
                 entries: HashMap::new(),
                 order: VecDeque::new(),
-                epochs: Epochs::default(),
+                epochs: Epochs { giphy: 0, klipy: 0 },
             }),
         }
     }
