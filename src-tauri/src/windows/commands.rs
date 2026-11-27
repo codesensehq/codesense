@@ -5,6 +5,7 @@
 use tauri::State;
 
 use super::item_key::ItemKey;
+use super::moves;
 use super::registry::{SetLayoutOutcome, WindowRegistry, WindowSlice};
 
 /// `label`'s slice. A window reads its own; `main` reads any.
@@ -17,14 +18,15 @@ pub fn window_get_slice(
     registry.get_slice(window.label(), &label)
 }
 
-/// The calling window's listeners have mounted and it holds its slice.
+/// The calling window's listeners have mounted and it holds its slice. For a move's
+/// target this starts the hand-off.
 #[tauri::command]
 pub fn window_ready(
     app: tauri::AppHandle,
     window: tauri::Window,
     registry: State<'_, WindowRegistry>,
 ) -> Result<(), String> {
-    registry.ready(&app, window.label())
+    moves::window_ready(&app, &registry, window.label())
 }
 
 /// Sets `label`'s Layout, or focuses the window that already holds it.

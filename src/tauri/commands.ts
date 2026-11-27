@@ -10853,3 +10853,11 @@ export const windowSetLayout = (label: string, layoutRef: string | null) =>
  *  owns it. */
 export const windowFocusOwner = (key: import("@/shared/windows/item-key").ItemKey) =>
   invoke<string | null>("window_focus_owner", { key });
+
+/** Moves `key` from this window to `to`: `"new"`, `"main"` or a window's label. */
+export const windowMoveItem = (key: import("@/shared/windows/item-key").ItemKey, to: string) =>
+  invoke<import("@/shared/windows/window-slice").MoveStart>("window_move_item", { key, to });
+
+/** This window's answer to `window:hand-off`. */
+export const windowHandOffAck = (ack: import("@/shared/windows/window-slice").HandOffAck) =>
+  invoke<import("@/shared/windows/window-slice").AckOutcome>("window_hand_off_ack", { ack });
