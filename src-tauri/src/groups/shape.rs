@@ -89,7 +89,7 @@ pub fn ts_type() -> String {
         .unwrap_or_default();
     let mut out = std::string::String::from(
         "// SPDX-License-Identifier: MIT\n\
-         // Generated from src-tauri/src/groups/shape.rs by its `ts_type` test. Do not edit.\n",
+         // Generated from the Rust `groups::shape` module by its `ts_type` test. Do not edit.\n",
     );
     out.push_str(&declaration("GroupFile", &schema));
     for (name, def) in &defs {
@@ -106,7 +106,7 @@ fn declaration(name: &str, schema: &serde_json::Value) -> String {
     if members.len() == 1 && properties(schema).is_some() {
         let mut out = format!("\nexport interface {name} {{\n");
         for (key, value) in properties(schema).into_iter().flatten() {
-            out.push_str(&format!("  {key}: {};\n", render(value)));
+            out.push_str(&format!("  {key}: {};\n", render(&value)));
         }
         out.push_str("}\n");
         return out;

@@ -56,7 +56,7 @@ pub fn groups_dir(space: &ScratchOrgSpace) -> PathBuf {
 pub fn is_group_path(parts: &[String]) -> bool {
     parts.len() >= 5
         && parts[0] == "orgs"
-        && parts[3] == crate::context_repo::path::CONFIG_DIR
+        && parts[3] == crate::context_repo::CONFIG_DIR
         && parts[4] == GROUPS_DIR
 }
 

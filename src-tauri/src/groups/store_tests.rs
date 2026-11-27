@@ -74,7 +74,7 @@ fn group_statuses(home: &Path) -> Vec<String> {
     let statuses = repo.statuses(Some(&mut opts)).unwrap();
     statuses
         .iter()
-        .filter_map(|s| s.path().map(str::to_string))
+        .filter_map(|s| s.path().map(str::to_string).ok())
         .filter(|p| p.contains("config/groups"))
         .collect()
 }

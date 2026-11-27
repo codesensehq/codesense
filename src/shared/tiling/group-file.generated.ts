@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Generated from src-tauri/src/groups/shape.rs by its `ts_type` test. Do not edit.
+// Generated from the Rust `groups::shape` module by its `ts_type` test. Do not edit.
 
 export interface GroupFile {
   owner: OwnerKind;
