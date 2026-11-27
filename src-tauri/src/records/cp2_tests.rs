@@ -1,12 +1,16 @@
 // SPDX-License-Identifier: MIT
 use super::binding::{execute, Binding};
 use super::*;
+use crate::context_repo::caller_scope::{tests::AppFixture, CallerScope};
 use crate::dashboard_stream::frame::{
-    FrameCallerKind, FrameGrant, FramePolicy, FrameStore, FrameTeam,
+    FrameCallerKind, FrameGrant, FrameMessage, FramePolicy, FrameRecord, FrameStore, FrameTeam,
 };
 use crate::live_hub::projection::TopicRegistry;
 use crate::verbs::{Decision, Dispatcher, Policy, Preset};
 use serde_json::json;
+use std::path::Path;
+use std::sync::Arc;
+use tauri::Manager;
 use tempfile::{tempdir, TempDir};
 fn fixture() -> (TempDir, Binding) {
     let tmp = tempdir().unwrap();
@@ -28,12 +32,28 @@ fn fixture() -> (TempDir, Binding) {
 }
 /// Mints the way the host does: the slot and source scope pick the caller kind,
 /// and the preset decides the grant through `Policy::effective_grant`.
-fn make_frame(
+fn make_frame(binding: Binding, slot: &str, source_scope: &str, preset: Preset) -> FrameRecord {
+    mint_in(
+        &FrameStore::default(),
+        binding,
+        slot,
+        source_scope,
+        preset,
+        "/ctx",
+        None,
+    )
+}
+/// [`make_frame`] into `frames` on `content_root`, holding only `keep` of the preset's
+/// grant when given. A `message` slot mints a message frame, as a child frame is.
+fn mint_in(
+    frames: &FrameStore,
     binding: Binding,
     slot: &str,
     source_scope: &str,
     preset: Preset,
-) -> crate::dashboard_stream::frame::FrameRecord {
+    content_root: &str,
+    keep: Option<&[&str]>,
+) -> FrameRecord {
     let policy = Policy {
         preset,
         ..Policy::default()
@@ -49,32 +69,44 @@ fn make_frame(
         (_, "team" | "message") => "team",
         _ => "private",
     };
-    let mut frame = FrameStore::default().mint_with_grant(
+    let mut grant = policy.effective_grant("test", slot, source_scope, &all, &all);
+    if let Some(keep) = keep {
+        assert!(
+            keep.iter().all(|k| grant.iter().any(|g| g == k)),
+            "{keep:?} is in the {preset:?} grant for {slot}/{source_scope}"
+        );
+        grant.retain(|g| keep.contains(&g.as_str()));
+    }
+    let team = FrameTeam {
+        org: binding.org.clone(),
+        team: binding.team.clone().unwrap(),
+    };
+    let frame = frames.mint_with_grant(
         9321,
         FrameGrant {
             frame_id: String::new(),
             principal: "human".into(),
             dashboard: "test".into(),
             slot: slot.into(),
-            team: Some(FrameTeam {
-                org: binding.org.clone(),
-                team: binding.team.clone().unwrap(),
-            }),
+            team: Some(team.clone()),
             scope: scope.into(),
         },
-        "/ctx".into(),
-        "/ctx/board.html".into(),
-        "/ctx".into(),
+        content_root.into(),
+        format!("{content_root}/board.html"),
+        content_root.into(),
         FramePolicy {
             team_safe: preset == Preset::TeamSafe,
             ..FramePolicy::default()
         },
-        None,
-        policy.effective_grant("test", slot, source_scope, &all, &all),
+        (slot == "message").then(|| FrameMessage {
+            org: team.org,
+            team: team.team,
+            message_id: 1,
+        }),
+        grant,
         kind,
     );
-    frame.records_binding = Some(binding);
-    frame
+    frames.bind_records(&frame.frame_id, binding).unwrap()
 }
 #[test]
 fn cp2_notes_grant_matrix_keeps_private_records_in_private_panes_under_team_safe() {
@@ -580,7 +612,7 @@ fn cp2_ambiguous_collection_names_are_refused_and_mcp_defaults_follow_session() 
 fn cp2_production_projection_callbacks_publish_mcp_outside_and_delayed_commits() {
     use std::sync::mpsc;
     use std::time::Duration;
-    use tauri::{Emitter, Listener, Manager};
+    use tauri::{Emitter, Listener};
     let app = tauri::test::mock_builder()
         .build(tauri::test::mock_context(tauri::test::noop_assets()))
         .unwrap();
@@ -751,4 +783,240 @@ fn cp2_previews_match_the_native_notes_summary() {
     let (preview, _) = projection::summary(&"a".repeat(300));
     assert_eq!(preview.chars().count(), 240);
     assert_eq!(projection::summary(""), (String::new(), vec![]));
+}
+
+/// The crate's mock app on the inheritance fixture, ready for `records_call` and
+/// `records_prepare_view`.
+fn records_app() -> AppFixture {
+    let f = AppFixture::new();
+    f.app.manage(crate::live_hub::LiveHub::default());
+    f.app.manage(projection::Views::default());
+    f
+}
+/// Declares `name` in `root` with its folder and one row.
+fn declare(root: &Path, name: &str, folder: &str, id: &str, title: &str) {
+    for (path, text) in [
+        (
+            root.join(format!("content/schema/{name}.yaml")),
+            format!("collection: {name}\nfolder: {folder}\nid: slug\n"),
+        ),
+        (
+            root.join(format!("{folder}/{id}.md")),
+            format!("# {title}\n"),
+        ),
+    ] {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    }
+}
+/// The fixture's `parent` team page: a team-only `x` that `parent/config/sharing.yml` does
+/// not share with `child`, and a private-only `y`, one row in each.
+fn parent_page(f: &AppFixture) -> Binding {
+    let binding = Binding::from_context(
+        &f.fixture.home,
+        &crate::domain::Principal::from(1u64),
+        "acme/ctx",
+        Some("parent"),
+    )
+    .unwrap();
+    assert_eq!(
+        binding.team_root.as_deref(),
+        Some(f.fixture.root.join("parent").as_path())
+    );
+    declare(
+        &f.fixture.root.join("parent"),
+        "x",
+        "content/x",
+        "team-x-row",
+        "TEAM-X-ROW",
+    );
+    declare(&binding.private_root, "y", "y", "own-y-row", "OWN-Y-ROW");
+    binding
+}
+/// Mints a frame on `team`'s content into the app's store and binds its records the way
+/// mint does: to the scope `for_page` gives the frame at mint.
+fn mint_on(
+    f: &AppFixture,
+    binding: &Binding,
+    slot: &str,
+    team: &str,
+    keep: Option<&[&str]>,
+) -> FrameRecord {
+    let frames = f.app.state::<Arc<FrameStore>>();
+    let source = if slot == "message" { "message" } else { "team" };
+    let content = f.fixture.path(team, "content").display().to_string();
+    let frame = mint_in(
+        &frames,
+        binding.clone(),
+        slot,
+        source,
+        Preset::Open,
+        &content,
+        keep,
+    );
+    let scope =
+        crate::context_repo::caller_scope::for_page(f.app.handle(), None, Some(&frame.frame_id))
+            .unwrap();
+    frames
+        .bind_records(&frame.frame_id, binding.clone().for_caller(scope))
+        .unwrap()
+}
+fn reader(f: &AppFixture, frame: &FrameRecord) -> String {
+    match crate::context_repo::caller_scope::for_page(f.app.handle(), None, Some(&frame.frame_id))
+        .unwrap()
+    {
+        CallerScope::Team(view) => view.reader_team().to_owned(),
+        other => panic!("{other:?} is not a team view"),
+    }
+}
+fn call(
+    f: &AppFixture,
+    frame: &FrameRecord,
+    operation: &str,
+    args: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    tauri::async_runtime::block_on(super::commands::records_call(
+        f.app.handle().clone(),
+        frame.frame_id.clone(),
+        operation.into(),
+        args,
+    ))
+}
+fn prepare_view(f: &AppFixture, frame: &FrameRecord, collection: &str) -> Result<String, String> {
+    tauri::async_runtime::block_on(super::commands::records_prepare_view(
+        f.app.handle().clone(),
+        frame.frame_id.clone(),
+        collection.into(),
+    ))
+}
+
+/// A name declared in both roots under a team page, on a frame holding only
+/// `records:read:own`: admission admits it on the private fallback, and the action, which
+/// resolves under the same scope, sees both roots and refuses the name. Not reachable as framed.
+#[test]
+fn cp2_both_roots_collection_is_refused_for_own_only_frame_under_team_view() {
+    let f = records_app();
+    let binding = parent_page(&f);
+    declare(&binding.private_root, "x", "x", "own-x-row", "OWN-X-ROW");
+    let frame = mint_on(
+        &f,
+        &binding,
+        "right-pane",
+        "parent",
+        Some(&["records:read:own"]),
+    );
+    assert_eq!(frame.grant.slot, "right-pane");
+    assert_eq!(frame.kind, FrameCallerKind::Team);
+    assert!(!frame.policy.team_safe);
+    assert_eq!(frame.effective_grant, vec!["records:read:own"]);
+    assert_eq!(reader(&f, &frame), "parent");
+    let stored = frame.records_binding.as_ref().unwrap();
+    assert!(stored
+        .caller
+        .allows(&binding.private_root.join("content/schema/x.yaml")));
+    assert!(stored
+        .resolve("x")
+        .unwrap_err()
+        .contains("ambiguous collection"));
+    let x = json!({"collection":"x"});
+    assert!(crate::verbs::check_frame_capability(&frame, "records.list", &x).is_ok());
+    let listed = call(&f, &frame, "list", x);
+    let prepared = prepare_view(&f, &frame, "x");
+    for out in [format!("{listed:?}"), format!("{prepared:?}")] {
+        assert!(out.contains("ambiguous collection"), "{out}");
+        assert!(
+            !out.contains("team-x-row") && !out.contains("TEAM-X-ROW"),
+            "{out}"
+        );
+    }
+}
+
+/// A child frame's binding is scoped at mint, before `link_child` points it at its parent,
+/// so admission resolves under the child's view (where the parent's unshared `x` is unknown,
+/// and the name falls back to `records:read:own`) while the action follows the parent's view,
+/// which serves the team `x`. The served store decides the capability, so each is refused.
+#[test]
+fn cp2_child_frame_drift_cannot_serve_team_records_on_own_grant() {
+    let f = records_app();
+    let binding = parent_page(&f);
+    let frames = f.app.state::<Arc<FrameStore>>();
+    let parent = mint_on(&f, &binding, "right-pane", "parent", None);
+    let child = |keep: &[&str]| {
+        let minted = mint_on(&f, &binding, "message", "child", Some(keep));
+        assert_eq!(reader(&f, &minted), "child");
+        let linked = frames
+            .link_child(&minted.frame_id, &parent.frame_id)
+            .unwrap();
+        assert_eq!(
+            linked.parent_frame.as_deref(),
+            Some(parent.frame_id.as_str())
+        );
+        assert_eq!(reader(&f, &linked), "parent");
+        assert!(linked
+            .records_binding
+            .as_ref()
+            .unwrap()
+            .resolve("x")
+            .unwrap_err()
+            .contains("unknown collection"));
+        linked
+    };
+    let x = json!({"collection":"x"});
+    let reads = child(&["records:read:own"]);
+    assert_eq!(
+        crate::verbs::builtin_registry()
+            .get("records.list")
+            .unwrap()
+            .required_capability(&crate::verbs::Caller::from(&reads), &x),
+        "records:read:own"
+    );
+    assert!(crate::verbs::check_frame_capability(&reads, "records.list", &x).is_ok());
+    let id = json!({"collection":"x","id":"team-x-row"});
+    let mut served = Vec::new();
+    for (verb, args) in [
+        ("list", x.clone()),
+        ("read", id.clone()),
+        ("search", json!({"collection":"x","query":"TEAM"})),
+        ("history", id.clone()),
+        (
+            "readAt",
+            json!({"collection":"x","id":"team-x-row","commit":"HEAD"}),
+        ),
+    ] {
+        served.push((verb, format!("{:?}", call(&f, &reads, verb, args))));
+    }
+    served.push(("prepare", format!("{:?}", prepare_view(&f, &reads, "x"))));
+
+    let folder = f.fixture.path("parent", "content/x");
+    let before = std::fs::read_dir(&folder).unwrap().count();
+    let writes = child(&["records:write:own"]);
+    assert!(crate::verbs::check_frame_capability(&writes, "records.create", &x).is_ok());
+    let created = call(
+        &f,
+        &writes,
+        "create",
+        json!({"collection":"x","id":"drift-write","body":"DRIFT"}),
+    );
+    served.push(("create", format!("{created:?}")));
+
+    let not_refused = served
+        .into_iter()
+        .filter(|(verb, out)| {
+            let needed = if *verb == "create" {
+                "records:write:team"
+            } else {
+                "records:read:team"
+            };
+            !out.starts_with("Err(")
+                || !out.contains(needed)
+                || out.contains("ambiguous")
+                || out.contains("team-x-row")
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        not_refused.is_empty(),
+        "served past the frame's grant: {not_refused:#?}"
+    );
+    assert!(!folder.join("drift-write.md").exists());
+    assert_eq!(std::fs::read_dir(&folder).unwrap().count(), before);
 }
