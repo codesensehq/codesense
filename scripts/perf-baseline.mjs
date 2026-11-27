@@ -129,6 +129,7 @@ export function recordedKeys(baseline, measured, runner) {
 
 /** The baseline with `runner`'s set replaced by (or added from) the measured file. */
 export function upsertSet(baseline, measured, runner) {
+  checkBaseline(baseline);
   checkMeasured(measured);
   const { previous, kept, carried } = recordedKeys(baseline, measured, runner);
   const keys = Object.fromEntries(carried.map((key) => [key, previous.keys[key]]));
@@ -257,7 +258,6 @@ export function run(argv, io = { log: console.log, error: console.error, env: pr
     const opts = parseArgs(argv);
     const measured = readJson(opts.current, "current");
     const baseline = readJson(opts.baseline, "baseline");
-    checkBaseline(baseline);
     if (opts.mode === "compare") {
       const result = compare(baseline, measured, opts);
       for (const line of result.lines) io.log(line);
@@ -279,9 +279,10 @@ export function run(argv, io = { log: console.log, error: console.error, env: pr
         io.log(`carried ${key}: not measured, kept from the commit ${previous.commit} set`);
       }
     }
+    const set = next.sets.find((each) => each.runner === opts.runner);
     for (const key of kept) {
-      const { unit, values } = measuredKey(measured, key);
-      const { ratio, range } = spread(values);
+      const { unit, samples } = set.keys[key];
+      const { ratio, range } = spread(samples);
       const ok = ratio <= SPREAD_LIMIT || (unit === "ms" && range <= floorMs);
       io.log(
         `spread ${key} ${Math.round(ratio * 100)}% (${round1(range)} ${unit}): ${ok ? "can be compared" : "too noisy to compare"}`,

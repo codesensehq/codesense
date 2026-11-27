@@ -440,6 +440,23 @@ test("record refuses a measured file with an input error and leaves the baseline
   assert.equal(fs.readFileSync(base, "utf8"), startText);
 });
 
+test("record refuses a baseline without its compare block, from the CLI and from upsertSet", (t) => {
+  const { write } = tmp(t);
+  const startText = JSON.stringify({ sets: [] });
+  const base = write("base.json", startText);
+  const cur = write("cur.json", current({ open_cold: ms([300, 300, 300]) }));
+  const c = capture();
+  assert.equal(
+    run(["record", "--current", cur, "--runner", "macos-15", "--baseline", base], c.io),
+    2,
+  );
+  assert.equal(fs.readFileSync(base, "utf8"), startText);
+  assert.throws(
+    () => upsertSet({ sets: [] }, current({ open_cold: ms([300, 300, 300]) }), "macos-15"),
+    (err) => err.exitCode === 2 && /compare/.test(err.message),
+  );
+});
+
 // --- the committed file (task 1.2, case 12) --------------------------------------------------
 
 const M1_KEYS = [
