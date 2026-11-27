@@ -77,6 +77,8 @@ jobs:
         run: cargo fetch --locked
       - name: Lint source
         run: pnpm lint
+      - name: Check unused code
+        run: pnpm check:unused
       - name: Check types
         run: pnpm typecheck
       - name: Check SPDX headers

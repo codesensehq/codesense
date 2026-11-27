@@ -134,6 +134,16 @@ pnpm test:rust         # Rust tests
 
 `pnpm exec prettier --write <file>` fixes the formatting of a file you changed.
 
+### Unused code
+
+`pnpm check:unused` runs [knip](https://knip.dev) for files, exports and types
+that nothing uses and compares them with `knip-baseline.json`. It fails on a
+finding that is not in the baseline, so new dead code needs a fix, and on a
+baseline entry knip no longer reports, so the baseline can only shrink. After
+you delete dead code, run `node scripts/check-unused.mjs --write` to drop its
+entries. `--write` never adds an entry; adding one is a hand edit that the pull
+request shows for review.
+
 ### Before the long local checks
 
 - Run `pnpm install` first, and do one check run at a time without starting
