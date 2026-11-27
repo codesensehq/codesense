@@ -3489,6 +3489,36 @@ mod call_time_read {
         assert!(model.host_read_timed_out("local"));
     }
 
+    /// `refresh_hosts` reads each host through the timeout, in order: it starts a read only
+    /// for a host that is not stranded, frees the slot and rebuilds on elapsed, leaves the
+    /// stranded read to clear its host when it returns, and re-arms the warning on success.
+    #[test]
+    fn refresh_hosts_reads_each_host_through_the_timeout() {
+        let source = include_str!("mod.rs");
+        let body = source
+            .split_once("async fn refresh_hosts(")
+            .expect("refresh_hosts")
+            .1;
+        let body = body.split_once("\n}\n").expect("the end of refresh_hosts").0;
+        let mut at = 0;
+        for step in [
+            "model.begin_host_read(&key)",
+            "read_with_timeout(read.as_mut(), HOST_READ_TIMEOUT).await",
+            ".host_read_timed_out(&key)",
+            "LiveHub::invalidate(&hub, REBUILD);",
+            "let _ = read.await;",
+            ".host_read_returned(&key);",
+            "LiveHub::invalidate(&hub, HOSTS);",
+            "break;",
+            "model.stall_warned.remove(&key);",
+        ] {
+            at += body[at..]
+                .find(step)
+                .unwrap_or_else(|| panic!("refresh_hosts lost `{step}` in order"));
+        }
+        assert!(!body.contains("model.begin_refresh(&key)"), "{body}");
+    }
+
     #[test]
     fn a_closed_tab_reads_exited_while_its_host_read_is_in_flight() {
         use crate::commands::pty_backend::Liveness;

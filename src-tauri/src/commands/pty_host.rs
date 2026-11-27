@@ -904,20 +904,12 @@ pub(crate) fn settle_terminal_cleanup<R: tauri::Runtime>(
 ) -> Result<(), String> {
     for event in &cleanup.outcomes {
         if let Some((audit, released)) = settle_owned_app_event(app, &cleanup.owner, event, true)? {
-            // drain any stamped kill reason for this session so the
-            // Kill audit line carries it. `None` for every non-sweep kill.
-            let reason = if matches!(audit, agent_audit::AuditEvent::Kill) {
-                app.try_state::<DashboardLaunchState>()
-                    .and_then(|state| state.take_kill_reason(&cleanup.owner.session))
-            } else {
-                None
-            };
-            agent_audit::append_with_reason(
+            // The kill line carries any kill reason stamped for this session.
+            super::dashboard_launch::audit_release(
+                app.try_state::<DashboardLaunchState>().as_deref(),
                 audit,
-                &released.handle,
-                Some(&cleanup.owner.session),
-                released.kind,
-                reason,
+                &released,
+                &cleanup.owner.session,
             );
         }
     }
@@ -1821,18 +1813,11 @@ impl LocalEffectDelivery {
                 if let Ok(Some((audit, released))) =
                     settle_owned_app_event(&app, &claim, &event, false)
                 {
-                    let reason = if matches!(audit, agent_audit::AuditEvent::Kill) {
-                        app.try_state::<DashboardLaunchState>()
-                            .and_then(|state| state.take_kill_reason(&claim.session))
-                    } else {
-                        None
-                    };
-                    agent_audit::append_with_reason(
+                    super::dashboard_launch::audit_release(
+                        app.try_state::<DashboardLaunchState>().as_deref(),
                         audit,
-                        &released.handle,
-                        Some(&claim.session),
-                        released.kind,
-                        reason,
+                        &released,
+                        &claim.session,
                     );
                 }
             }
@@ -6054,7 +6039,6 @@ mod tests {
 
     #[test]
     fn an_owned_release_announces_itself_once_and_a_miss_announces_nothing() {
-        use std::time::Duration;
         let _home_env = crate::routines::test_support::TempHome::new();
         let fixture =
             EffectFixture::with_session(format!("owned-release-{}", rand::random::<u64>()));
@@ -6070,13 +6054,7 @@ mod tests {
                 Some(claim.clone()),
             )
             .unwrap();
-        let (send, changed) = std::sync::mpsc::channel();
-        fixture.app.listen(
-            super::super::dashboard_launch::SESSION_STATE_CHANGED,
-            move |_| {
-                let _ = send.send(());
-            },
-        );
+        let announcements = super::super::dashboard_launch::tests::Announcements::on(&fixture.app);
         let event = TerminalDomainEvent::SessionRemoved {
             session: PtySessionId::new(&fixture.session),
             reason: TeardownReason::Kill,
@@ -6086,15 +6064,14 @@ mod tests {
             .unwrap()
             .expect("the owned entry is released");
         assert_eq!(released.handle, "owned-release");
-        assert!(changed.recv_timeout(Duration::from_secs(3)).is_ok());
-        assert!(changed.recv_timeout(Duration::from_millis(50)).is_err());
+        assert!(announcements.once());
         // Nothing left to release: no announcement.
         assert!(
             settle_owned_app_event(fixture.app.handle(), &claim, &event, false)
                 .unwrap()
                 .is_none()
         );
-        assert!(changed.recv_timeout(Duration::from_millis(50)).is_err());
+        assert!(announcements.quiet());
     }
 
     #[test]

@@ -250,8 +250,8 @@ impl Model {
     }
     /// A host read outlived [`HOST_READ_TIMEOUT`]: free its slot and drop any rerun
     /// queued behind it (a wedged host is not retried in this wake), keep its old tabs,
-    /// and mark it stranded until its blocking thread returns. True the first time in a
-    /// row, when the caller warns.
+    /// and mark it stranded until its blocking thread returns. True when the caller should
+    /// warn: the host's first timeout since its last successful read.
     fn host_read_timed_out(&mut self, key: &str) -> bool {
         self.reading.remove(key);
         self.refresh_again.remove(key);
