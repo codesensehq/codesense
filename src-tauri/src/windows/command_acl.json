@@ -1,0 +1,34 @@
+[
+  {
+    "name": "save_app_state",
+    "reason": "Writes app-state.json, full writes included, from main's copy; a satellite writes its allowed keys with patch_app_state_keys."
+  },
+  {
+    "name": "set_active_team_for_wave",
+    "reason": "Sets the one global active team that MCP resolves against; main owns it."
+  },
+  {
+    "name": "remove_watch",
+    "reason": "Detaches a repo watch that main registered."
+  },
+  {
+    "name": "push_viewer_state",
+    "reason": "Replaces MCP's view of the viewer with the caller's tabs; that view is main's."
+  },
+  {
+    "name": "start_watching",
+    "reason": "Starts a team watch under the global watcher lifecycle sequence; main keeps the teams it watches."
+  },
+  {
+    "name": "stop_watching",
+    "reason": "Stops a team watch under the global watcher lifecycle sequence; main keeps the teams it watches."
+  },
+  {
+    "name": "reconfigure_warm_pool",
+    "reason": "Drains and refills the one global terminal warm pool."
+  },
+  {
+    "name": "set_terminal_shell_override",
+    "reason": "Changes the shell of the one global warm pool and drains it."
+  }
+]
