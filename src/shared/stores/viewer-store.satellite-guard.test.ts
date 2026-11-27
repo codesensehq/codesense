@@ -14,6 +14,7 @@ import {
   resetOwnerMapForTests,
   satelliteOwnedTabs,
 } from "@/shared/windows/owner-map";
+import type { WindowSlice } from "@/shared/windows/window-slice";
 import { AGENTS_VIRTUAL_PATH } from "@/features/agents/agents-virtual-tab";
 import { retiredRoutinesTabs } from "@/features/routines/routines-virtual-tab";
 
@@ -63,6 +64,18 @@ const tab = (path: string, preview = false) => ({
 
 function own(team = TEAM, path = K): void {
   applyOwnerMap({ [canonicalItemKey(itemKeyForTab(team, { path }))]: "sat-1" });
+}
+
+function mainSlice(owners: Record<string, string>): WindowSlice {
+  return {
+    label: "main",
+    kind: "main",
+    version: 2,
+    layoutRef: null,
+    items: [],
+    pending: false,
+    owners,
+  };
 }
 
 const paths = (team = TEAM) => (useViewerStore.getState().openTabs[team] ?? []).map((t) => t.path);
@@ -349,6 +362,47 @@ describe("guard cost @P1", () => {
     stop();
     expect(paths()).toEqual([A]);
     expect(renders).toBe(0);
+  });
+});
+
+describe("hydrate pull @P1", () => {
+  it("starts with the prefs read and is awaited before the saved state applies", async () => {
+    let resolvePrefs!: (v: string) => void;
+    let resolveSlice!: (v: WindowSlice) => void;
+    loadAppStateMock.mockReturnValue(new Promise<string>((r) => (resolvePrefs = r)));
+    windowGetSliceMock.mockReturnValue(new Promise<WindowSlice>((r) => (resolveSlice = r)));
+    useViewerStore.setState({ openTabs: {}, activeTab: {} });
+
+    const loading = useViewerStore.getState().loadPersistedState();
+    await vi.waitFor(() => expect(loadAppStateMock).toHaveBeenCalled());
+    // Both reads are in flight together: no serial IPC.
+    expect(windowGetSliceMock).toHaveBeenCalledWith("main");
+
+    resolvePrefs(
+      JSON.stringify({
+        viewer: {
+          schemaVersion: 9,
+          openTabs: { [TEAM]: [tab(A), tab(K)] },
+          activeTab: { [TEAM]: K },
+        },
+      }),
+    );
+    await new Promise((r) => setTimeout(r, 0));
+    expect(paths()).toEqual([]);
+
+    resolveSlice(mainSlice({ [canonicalItemKey(K_KEY)]: "sat-1" }));
+    await loading;
+    expect(paths()).toEqual([A]);
+    expect(active()).toBe(A);
+    expect(windowFocusOwnerMock).not.toHaveBeenCalled();
+  });
+
+  it("a failed pull leaves main owning everything", async () => {
+    loadAppStateMock.mockResolvedValue(
+      JSON.stringify({ viewer: { schemaVersion: 9, openTabs: { [TEAM]: [tab(K)] } } }),
+    );
+    await useViewerStore.getState().loadPersistedState();
+    expect(paths()).toEqual([K]);
   });
 });
 

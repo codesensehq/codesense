@@ -159,7 +159,12 @@ import type { RepoState } from "./config-store";
 import { useConfigStore } from "./config-store";
 import { useOrgStore } from "./org-store";
 import { itemKeyForTab, type ItemKey } from "@/shared/windows/item-key";
-import { onOwnerMapChange, ownerMapSize, satelliteOwnedTabs } from "@/shared/windows/owner-map";
+import {
+  onOwnerMapChange,
+  ownerMapSize,
+  pullMainSlice,
+  satelliteOwnedTabs,
+} from "@/shared/windows/owner-map";
 import {
   DEFAULT_TERMINAL_SPLIT_RATIO,
   applyCliChromePatch,
@@ -12391,8 +12396,13 @@ const viewerStore: StateCreator<ViewerState> = (set, get) => ({
     // The saved orders replace the live ones: nothing computed or queued over them survives.
     tileOrderCache.clear();
     provisionalMoves.clear();
+    // The hydrate pull: `main`'s satellite-owned map, fetched alongside the prefs and
+    // current before anything below applies, so a tab that moved to another window
+    // before `main` saved is dropped by the guard. It never rejects.
+    const mainSlicePull = pullMainSlice();
     try {
       const data = JSON.parse(JSON.stringify(await readPrefsState()));
+      await mainSlicePull;
       const prefsOwner = usePrefsStore.getState().principal;
       persistedViewer = structuredClone(data.viewer ?? {});
       if (data.viewer) {
