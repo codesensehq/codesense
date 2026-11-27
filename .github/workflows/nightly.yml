@@ -1,0 +1,252 @@
+# SPDX-License-Identifier: MIT
+name: Nightly
+
+# The slow lanes no pull request waits on, each its own job on macos-15: the @nightly tile specs,
+# the pane harness on WebKit, the perf baseline and the tile load tests (tests/e2e-mock/README.md).
+# Dispatch with record to measure and upload a new macos-15 perf set instead of
+# comparing against it.
+on:
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+    inputs:
+      record:
+        description: Record the perf lane's macos-15 set and upload it, instead of comparing
+        type: boolean
+        default: false
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}-${{ inputs.record }}
+  cancel-in-progress: true
+
+jobs:
+  tiles-nightly:
+    name: Nightly tile specs
+    runs-on: macos-15
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up pnpm
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: ${{ github.event_name != 'merge_group' && 'pnpm' || '' }}
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Install WebKit
+        run: pnpm exec playwright install webkit
+      - name: Run the @nightly tile specs
+        env:
+          PLAYWRIGHT_JSON_OUTPUT_NAME: tiles-nightly-report.json
+        run: >-
+          pnpm exec playwright test -c playwright.mock.config.ts --project=tiles-webkit
+          --grep @nightly --pass-with-no-tests --reporter=list,json
+      - name: Note an empty lane
+        if: ${{ !cancelled() }}
+        run: |
+          node -e '
+            const { stats } = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+            if (!(stats.expected + stats.unexpected + stats.flaky + stats.skipped))
+              console.log("tiles-nightly: no @nightly tile specs yet");
+          ' tiles-nightly-report.json | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Upload failure traces
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: tiles-nightly-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            tiles-nightly-report.json
+            test-results
+          retention-days: 14
+          if-no-files-found: ignore
+
+  pane-harness:
+    name: Pane harness (WebKit)
+    runs-on: macos-15
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up pnpm
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: ${{ github.event_name != 'merge_group' && 'pnpm' || '' }}
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Install WebKit
+        run: pnpm exec playwright install webkit
+      - name: Run the pane harness
+        run: pnpm run test:pane-harness -- --project=webkit
+      - name: Upload failure traces
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: pane-harness-${{ github.run_id }}-${{ github.run_attempt }}
+          path: test-results
+          retention-days: 14
+          if-no-files-found: ignore
+
+  perf:
+    name: Perf baseline
+    # The harness measures a production build of the mock (no dev server), then the perf tool
+    # compares the numbers against the macos-15 set, never the M1 one, or records a new set.
+    # Until the harness, the tool or the set exist, the lane says why in the summary and passes.
+    runs-on: macos-15
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    env:
+      RECORD: ${{ inputs.record }}
+      CURRENT: test-results/perf-baseline-current.json
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up pnpm
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: ${{ github.event_name != 'merge_group' && 'pnpm' || '' }}
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Plan the perf lane
+        id: plan
+        run: node scripts/nightly.mjs perf-plan --record "$RECORD"
+      - name: Install WebKit
+        if: steps.plan.outputs.mode != 'skip'
+        run: pnpm exec playwright install webkit
+      - name: Build the mock
+        if: steps.plan.outputs.mode != 'skip'
+        run: pnpm exec vite build --mode mock
+      - name: Measure
+        if: steps.plan.outputs.mode != 'skip'
+        env:
+          BASE_URL: http://localhost:5320
+          MEASURE_PERF_BASELINE: "1"
+          MEASURE_RUNS: "5"
+          PERF_BASELINE_OUT: ${{ github.workspace }}/test-results/perf-baseline-current.json
+        run: |
+          pnpm exec vite preview --mode mock --port 5320 --strictPort &
+          preview=$!
+          trap 'kill "$preview"' EXIT
+          for _ in $(seq 60); do
+            curl -sf "$BASE_URL" > /dev/null && break
+            sleep 1
+          done
+          pnpm exec playwright test -c playwright.mock.config.ts --project=webkit --workers=1 \
+            tests/e2e-mock/perf-baseline.spec.ts
+      - name: Compare against the macos-15 set
+        if: steps.plan.outputs.mode == 'compare'
+        run: node scripts/perf-baseline.mjs compare --current "$CURRENT" --runner macos-15
+      - name: Record the macos-15 set
+        if: steps.plan.outputs.mode == 'record'
+        run: node scripts/perf-baseline.mjs record --current "$CURRENT" --runner macos-15
+      - name: Upload the recorded set
+        if: steps.plan.outputs.mode == 'record'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: perf-baseline-${{ github.run_id }}-${{ github.run_attempt }}
+          path: tests/fixtures/perf-baseline.json
+          retention-days: 30
+          if-no-files-found: error
+      - name: Upload the measurements
+        if: ${{ !cancelled() && steps.plan.outputs.mode != 'skip' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: perf-results-${{ github.run_id }}-${{ github.run_attempt }}
+          path: test-results
+          retention-days: 14
+          if-no-files-found: ignore
+
+  load:
+    name: Tile load tests
+    # Only the epic's load tests, by their tiles_load_ name prefix after a module path: the repo's
+    # other ignored tests (quarantined flakes, env-gated probes, perf harnesses) never run here.
+    # The prep is rust-macos-build's (rust.yml), with a dependency cache of its own.
+    runs-on: macos-15
+    timeout-minutes: 150
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash
+    env:
+      CARGO_INCREMENTAL: "0"
+      RUST_BACKTRACE: "1"
+      CARGO_TERM_COLOR: always
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Configure Git identity
+        run: |
+          git config --global user.name "CodeSense CI"
+          git config --global user.email "security@codesense.ai"
+      - name: Set up pnpm
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: ${{ github.event_name != 'merge_group' && 'pnpm' || '' }}
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Set up Rust
+        # Matches ci.yml; rustup's proxies read the channel in rust-toolchain.toml.
+        run: rustup toolchain install stable --profile minimal
+      - name: Restore scanner archives
+        # Archives named by their sha256; install-scanners verifies each against the lock before use.
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/scanner-archives
+          key: scanner-archives-nextest-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('release/scanners.lock') }}
+      - name: Install pinned nextest
+        run: |
+          bash scripts/install-scanners.sh "$RUNNER_TEMP/rust-ci-tools" --cache "$RUNNER_TEMP/scanner-archives" --tool cargo-nextest
+          echo "$RUNNER_TEMP/rust-ci-tools" >> "$GITHUB_PATH"
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: nightly-load
+          save-if: ${{ github.event_name == 'schedule' && github.ref == 'refs/heads/main' }}
+          cache-on-failure: true
+      - name: Fetch git-ai
+        run: bash scripts/fetch-git-ai.sh
+      - name: Build session-server sidecar
+        # This also builds the bridge sidecar. Native host only.
+        run: bash scripts/build-session-server.sh
+      - name: Generate docs data
+        # The app's build script writes these untracked files into directories it watches; written
+        # before the first cargo command, they are current when the build script runs.
+        run: |
+          scripts=$(sed -n 's/^ *run_docs_generator("\.\.\/\(scripts\/[^"]*\.mjs\)");$/\1/p' src-tauri/build.rs)
+          [[ -n "$scripts" ]] || { echo "::error::no docs generators found in src-tauri/build.rs"; exit 1; }
+          for script in $scripts; do node "$script"; done
+      - name: Run the tile load tests
+        run: |
+          cargo nextest run --locked --run-ignored only --no-tests=warn \
+            -E 'test(/(^|::)tiles_load_/)' 2>&1 | tee "$RUNNER_TEMP/load.log"
+          if grep -Eq 'no tests to run|Starting 0 tests' "$RUNNER_TEMP/load.log"; then
+            echo "load: no load tests yet" | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+

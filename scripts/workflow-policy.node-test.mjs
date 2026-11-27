@@ -1678,32 +1678,45 @@ test("Rust jobs preserve package coverage for nextest and doctests and always up
 });
 
 // The build script's generators that write into directories it watches run before cargo; the
-// step finds them in build.rs, so a new one is picked up and none is missed.
-test("rust.yml generates every docs file build.rs writes before the first cargo command", (t) => {
-  const workflow = parse(fs.readFileSync(path.join(directory, "rust.yml"), "utf8"));
-  const step = workflow.jobs["rust-macos-build"].steps.find((s) => s.name === "Generate docs data");
-  const root = path.join(directory, "..", "..");
-  const buildRs = fs.readFileSync(path.join(root, "src-tauri/build.rs"), "utf8");
-  const calls = [
-    ...buildRs.matchAll(/^\s*run_docs_generator\("\.\.\/(scripts\/[^"]+\.mjs)"\);$/gm),
-  ].map((m) => m[1]);
-  assert.ok(calls.length > 0);
-  // Every single-script call in build.rs has that exact shape (the _with_args calls write
-  // archives dated to their inputs, so they need no head start).
-  assert.equal(buildRs.match(/^\s*run_docs_generator\(/gm).length, calls.length);
-  // Run the step with node replaced by a recorder, so it lists what it would run.
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "docs-data-step-"));
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  fs.writeFileSync(path.join(dir, "node"), '#!/bin/sh\necho "$1" >> "$RAN"\n', { mode: 0o755 });
-  const ran = path.join(dir, "ran");
-  const result = spawnSync("bash", ["-e", "-c", step.run], {
-    cwd: root,
-    encoding: "utf8",
-    env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, RAN: ran },
+// step finds them in build.rs, so a new one is picked up and none is missed. nightly.yml's load
+// lane copies rust-macos-build's prep, this step with it.
+for (const [file, job] of [
+  ["rust.yml", "rust-macos-build"],
+  ["nightly.yml", "load"],
+])
+  test(`${file} generates every docs file build.rs writes before the first cargo command`, (t) => {
+    const workflow = parse(fs.readFileSync(path.join(directory, file), "utf8"));
+    const steps = workflow.jobs[job].steps;
+    const index = steps.findIndex((s) => s.name === "Generate docs data");
+    const step = steps[index];
+    assert.ok(step, `${job} has no Generate docs data step`);
+    const firstCargo = steps.findIndex((s) => /\bcargo /.test(s.run ?? ""));
+    assert.ok(
+      firstCargo < 0 || index < firstCargo,
+      "the docs step runs before the first cargo command",
+    );
+    const root = path.join(directory, "..", "..");
+    const buildRs = fs.readFileSync(path.join(root, "src-tauri/build.rs"), "utf8");
+    const calls = [
+      ...buildRs.matchAll(/^\s*run_docs_generator\("\.\.\/(scripts\/[^"]+\.mjs)"\);$/gm),
+    ].map((m) => m[1]);
+    assert.ok(calls.length > 0);
+    // Every single-script call in build.rs has that exact shape (the _with_args calls write
+    // archives dated to their inputs, so they need no head start).
+    assert.equal(buildRs.match(/^\s*run_docs_generator\(/gm).length, calls.length);
+    // Run the step with node replaced by a recorder, so it lists what it would run.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "docs-data-step-"));
+    t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+    fs.writeFileSync(path.join(dir, "node"), '#!/bin/sh\necho "$1" >> "$RAN"\n', { mode: 0o755 });
+    const ran = path.join(dir, "ran");
+    const result = spawnSync("bash", ["-e", "-c", step.run], {
+      cwd: root,
+      encoding: "utf8",
+      env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, RAN: ran },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(fs.readFileSync(ran, "utf8").trim().split("\n"), calls);
   });
-  assert.equal(result.status, 0, result.stderr);
-  assert.deepEqual(fs.readFileSync(ran, "utf8").trim().split("\n"), calls);
-});
 
 // The nightly deletes its older macOS build caches: only that job may write actions, and only on
 // the nightly on main in the base repository.
