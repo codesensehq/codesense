@@ -74,7 +74,7 @@ export default defineConfig({
       reportsDirectory: "./coverage",
       include: [
         "src/shared/stores/**",
-        "src/shared/tiling/**",
+        "src/shared/tiling/**/*.{ts,tsx}",
         "src/tauri/**",
         "src/shared/lib/**",
         "src/lib/**",
