@@ -6082,7 +6082,7 @@ mod tests {
             reason: TeardownReason::Kill,
         };
         // The legacy presentation gate never runs here: the release alone announces.
-        let released = settle_owned_app_event(fixture.app.handle(), &claim, &event, false)
+        let (_, released) = settle_owned_app_event(fixture.app.handle(), &claim, &event, false)
             .unwrap()
             .expect("the owned entry is released");
         assert_eq!(released.handle, "owned-release");
