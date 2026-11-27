@@ -8,14 +8,20 @@ const api = vi.hoisted(() => ({
   prepare: vi.fn(),
   save: vi.fn(async (_raw: string, _patch?: boolean) => {}),
   mirror: vi.fn(async (_state: unknown) => {}),
+  load: vi.fn(),
 }));
-vi.mock("@/tauri/commands", async (original) => ({
-  ...(await original<typeof import("@/tauri/commands")>()),
-  configurationPrepare: api.prepare,
-  saveAppState: api.save,
-  pushViewerState: api.mirror,
-  detectTools: vi.fn(async () => ({ editors: [], terminals: [] })),
-}));
+vi.mock("@/tauri/commands", async (original) => {
+  const actual = await original<typeof import("@/tauri/commands")>();
+  api.load.mockImplementation(actual.loadAppState);
+  return {
+    ...actual,
+    configurationPrepare: api.prepare,
+    saveAppState: api.save,
+    loadAppState: api.load,
+    pushViewerState: api.mirror,
+    detectTools: vi.fn(async () => ({ editors: [], terminals: [] })),
+  };
+});
 const boot = vi.hoisted(() => ({ hub: undefined as unknown, principal: null as string | null }));
 vi.mock("@/shared/lib/get-current-user", async (original) => {
   const actual = await original<typeof import("@/shared/lib/get-current-user")>();
@@ -57,6 +63,7 @@ import { serializeAppStateWrite } from "@/shared/lib/app-state-write";
 import { flushShortcutsForProfileSwitch } from "@/shared/stores/shortcuts-store";
 import { flushViewerForProfileSwitch } from "@/shared/stores/viewer-store";
 import { GeneralSection } from "@/features/settings/components/general-section";
+import { readDashboardPrefs } from "./dashboard-prefs";
 
 type RecordedEvent = {
   event: string;
@@ -221,8 +228,16 @@ it("does no hidden consumer recompute and catches up from its revision on reveal
     "true",
   );
   expect(screen.getByRole("combobox", { name: "Dashboard action policy" })).toHaveValue("open");
-  await act(async () => connection.visible(true));
-  expect(usePrefsStore.getState().parked).toBe(false);
+  // Between the reveal and its catch-up snapshot the store is still parked: prefs() reads the file.
+  connection.visible(true);
+  expect(usePrefsStore.getState().parked).toBe(true);
+  const fromFile = { "doc:/a.html": { data: { density: "full" }, at: Date.now() } };
+  api.load.mockResolvedValueOnce(JSON.stringify({ dashboardPrefs: fromFile }));
+  api.load.mockClear();
+  expect(await readDashboardPrefs("doc:/a.html")).toEqual({ density: "full" });
+  expect(api.load).toHaveBeenCalledTimes(1);
+  await act(async () => {});
+  await waitFor(() => expect(usePrefsStore.getState().parked).toBe(false));
   await waitFor(() =>
     expect(screen.getByRole("combobox", { name: "Dashboard action policy" })).toHaveValue(
       "team-safe",

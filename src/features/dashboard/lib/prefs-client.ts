@@ -24,7 +24,8 @@ export function connectPrefs(principal: string, hub: LiveHub = liveHub) {
   let disposed = false;
   let shown = true;
   const frames: ReturnType<LiveHub["attach"]>[] = [];
-  usePrefsStore.setState({ principal, owned: {}, ownedReady: false, parked: !shown });
+  // A new connection starts shown; `visible` parks it.
+  usePrefsStore.setState({ principal, owned: {}, ownedReady: false, parked: false });
   const live: Promise<unknown>[] = [];
   const warn = (scope: string) => (error: unknown) =>
     console.warn(`prefs live channel failed (${scope})`, error);
@@ -47,6 +48,8 @@ export function connectPrefs(principal: string, hub: LiveHub = liveHub) {
       const apply = (snapshot: HubSnapshot) => {
         if (!shown) return;
         commit(snapshot);
+        // The first owned snapshot after a reveal has caught up: readers may use the store again.
+        if (scope === "principal") usePrefsStore.setState({ parked: false });
       };
       commit(view);
       const frame = hub.attach(
@@ -80,8 +83,9 @@ export function connectPrefs(principal: string, hub: LiveHub = liveHub) {
     live: delivered,
     visible(value: boolean) {
       shown = value;
-      // Readers of the store go to the file while it is parked (dashboard-prefs `liveEntries`).
-      if (!disposed) usePrefsStore.setState({ parked: !value });
+      // Readers of the store go to the file while it is parked (dashboard-prefs `liveEntries`),
+      // from the hide until the reveal's catch-up snapshot lands in `apply`.
+      if (!disposed && !value) usePrefsStore.setState({ parked: true });
       for (const frame of frames) frame.visible(value);
     },
     dispose() {
