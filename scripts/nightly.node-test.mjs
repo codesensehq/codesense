@@ -13,37 +13,38 @@ const script = fileURLToPath(new URL("./nightly.mjs", import.meta.url));
 
 // --- The perf lane's plan: compare against the runner's own set, never the M1 one.
 
-const harness = "const MODE = process.env.PERF_BASELINE;";
+const files = { harness: true, tool: true };
 const m1 = { runner: "m1", engine: "webkit", rows: { switch: { p50: 80, p95: 120 } } };
 const ci = { runner: "macos-15", engine: "webkit", rows: { switch: { p50: 140, p95: 210 } } };
 
 test("a baseline with only M1 rows skips with the summary line", () => {
-  assert.deepEqual(perfPlan({ baseline: { sets: [m1] }, harness }), {
+  assert.deepEqual(perfPlan({ baseline: { sets: [m1] }, ...files }), {
     mode: "skip",
     reason: "no runner: macos-15 set in tests/fixtures/perf-baseline.json",
   });
 });
 
 test("the macos-15 set is selected beside the M1 one, as a list or keyed", () => {
-  assert.deepEqual(perfPlan({ baseline: { sets: [m1, ci] }, harness }), { mode: "compare" });
-  assert.deepEqual(perfPlan({ baseline: { sets: { m1, ci } }, harness }), { mode: "compare" });
+  assert.deepEqual(perfPlan({ baseline: { sets: [m1, ci] }, ...files }), { mode: "compare" });
+  assert.deepEqual(perfPlan({ baseline: { sets: { m1, ci } }, ...files }), { mode: "compare" });
 });
 
-test("no harness or no baseline file skips; record mode needs only the harness", () => {
-  assert.deepEqual(perfPlan({ baseline: { sets: [ci] }, harness: null }), {
+test("no harness, tool or baseline file skips; record mode needs only the harness and tool", () => {
+  assert.deepEqual(perfPlan({ baseline: { sets: [ci] }, harness: false, tool: true }), {
     mode: "skip",
     reason: "no tests/e2e-mock/perf-baseline.spec.ts yet",
   });
-  assert.deepEqual(perfPlan({ baseline: { sets: [ci] }, harness: "test('x', () => {});" }), {
+  assert.deepEqual(perfPlan({ baseline: { sets: [ci] }, harness: true, tool: false }), {
     mode: "skip",
-    reason: "the harness reads no PERF_BASELINE mode yet",
+    reason: "no scripts/perf-baseline.mjs yet",
   });
-  assert.deepEqual(perfPlan({ baseline: null, harness }), {
+  assert.deepEqual(perfPlan({ baseline: null, ...files }), {
     mode: "skip",
     reason: "no tests/fixtures/perf-baseline.json yet",
   });
-  assert.deepEqual(perfPlan({ baseline: null, harness, record: true }), { mode: "record" });
-  assert.equal(perfPlan({ baseline: null, harness: null, record: true }).mode, "skip");
+  assert.deepEqual(perfPlan({ baseline: null, ...files, record: true }), { mode: "record" });
+  assert.equal(perfPlan({ baseline: null, harness: false, tool: true, record: true }).mode, "skip");
+  assert.equal(perfPlan({ baseline: null, harness: true, tool: false, record: true }).mode, "skip");
 });
 
 test("the perf-plan CLI writes the mode output and the skip line to the summary", (t) => {
@@ -51,8 +52,10 @@ test("the perf-plan CLI writes the mode output and the skip line to the summary"
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const baseline = path.join(dir, "perf-baseline.json");
   const spec = path.join(dir, "perf-baseline.spec.ts");
+  const tool = path.join(dir, "perf-baseline.mjs");
   fs.writeFileSync(baseline, JSON.stringify({ sets: [m1] }));
-  fs.writeFileSync(spec, harness);
+  fs.writeFileSync(spec, "");
+  fs.writeFileSync(tool, "");
   const env = {
     ...process.env,
     GITHUB_OUTPUT: path.join(dir, "output"),
@@ -61,7 +64,7 @@ test("the perf-plan CLI writes the mode output and the skip line to the summary"
   const plan = (...args) =>
     spawnSync(
       process.execPath,
-      [script, "perf-plan", "--baseline", baseline, "--harness", spec, ...args],
+      [script, "perf-plan", "--baseline", baseline, "--harness", spec, "--tool", tool, ...args],
       {
         encoding: "utf8",
         env,
@@ -78,6 +81,13 @@ test("the perf-plan CLI writes the mode output and the skip line to the summary"
   // The dispatch input arrives as text: anything but "true" is a plain run.
   assert.equal(plan("--record", "false").status, 0);
   assert.match(fs.readFileSync(env.GITHUB_OUTPUT, "utf8"), /mode=skip\n$/);
+  // Until the tool lands, the lane skips and says why.
+  fs.rmSync(tool);
+  assert.equal(plan().status, 0);
+  assert.match(
+    fs.readFileSync(env.GITHUB_STEP_SUMMARY, "utf8"),
+    /perf lane skipped: no scripts\/perf-baseline\.mjs yet\n$/,
+  );
 });
 
 // --- The one nightly issue.

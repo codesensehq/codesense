@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: MIT
 // Helpers for nightly.yml.
-//   node scripts/nightly.mjs perf-plan [--baseline <json>] [--harness <spec>] [--record true]
+//   node scripts/nightly.mjs perf-plan [--baseline <json>] [--harness <spec>] [--tool <script>]
+//       [--record true]
 //     Picks the perf lane's mode: record, compare or skip. Writes mode=<mode> to $GITHUB_OUTPUT and,
 //     on a skip, "perf lane skipped: <reason>" to the job summary.
 //   NEEDS='<needs as JSON>' node scripts/nightly.mjs issue --run-url <url> [--date YYYY-MM-DD]
 //     Opens or updates the one nightly issue with gh (GH_TOKEN and GH_REPO set) when a lane failed.
-// The perf harness's contract: it runs when PERF_BASELINE is record or compare, and compares only
-// against the set whose runner is macos-15, never the M1 set measured by hand.
+// The perf lane's contract: the harness measures with MEASURE_PERF_BASELINE=1 into
+// PERF_BASELINE_OUT, then the tool compares that (or records it) against the set whose runner is
+// macos-15, never the M1 set measured by hand. Its exit codes: 0 pass, 1 regression, 2 bad input.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -14,15 +16,16 @@ import { fileURLToPath } from "node:url";
 export const RUNNER = "macos-15";
 export const BASELINE = "tests/fixtures/perf-baseline.json";
 export const HARNESS = "tests/e2e-mock/perf-baseline.spec.ts";
+export const TOOL = "scripts/perf-baseline.mjs";
 export const LABEL = "nightly";
 // One issue for every failed night, found by this exact body marker among labelled issues.
 export const MARKER = "<!-- nightly-run -->";
 
-export function perfPlan({ baseline, harness, record = false }) {
+// `harness` and `tool` say whether those files exist; `baseline` is the parsed file or null.
+export function perfPlan({ baseline, harness, tool, record = false }) {
   const skip = (reason) => ({ mode: "skip", reason });
-  if (harness === null) return skip(`no ${HARNESS} yet`);
-  if (!harness.includes("PERF_BASELINE"))
-    return skip("the harness reads no PERF_BASELINE mode yet");
+  if (!harness) return skip(`no ${HARNESS} yet`);
+  if (!tool) return skip(`no ${TOOL} yet`);
   if (record) return { mode: "record" };
   if (baseline === null) return skip(`no ${BASELINE} yet`);
   const sets = Object.values(baseline?.sets ?? {});
@@ -103,11 +106,11 @@ function main(argv) {
     return i >= 0 ? rest[i + 1] : undefined;
   };
   if (command === "perf-plan") {
-    const read = (file) => (fs.existsSync(file) ? fs.readFileSync(file, "utf8") : null);
-    const baseline = read(option("--baseline") ?? BASELINE);
+    const baseline = option("--baseline") ?? BASELINE;
     const plan = perfPlan({
-      baseline: baseline === null ? null : JSON.parse(baseline),
-      harness: read(option("--harness") ?? HARNESS),
+      baseline: fs.existsSync(baseline) ? JSON.parse(fs.readFileSync(baseline, "utf8")) : null,
+      harness: fs.existsSync(option("--harness") ?? HARNESS),
+      tool: fs.existsSync(option("--tool") ?? TOOL),
       record: option("--record") === "true",
     });
     const output = `mode=${plan.mode}\n`;
@@ -137,7 +140,7 @@ function main(argv) {
     return;
   }
   throw new Error(
-    "usage: node scripts/nightly.mjs perf-plan [--baseline <json>] [--harness <spec>] [--record true] | issue --run-url <url> [--date YYYY-MM-DD]",
+    "usage: node scripts/nightly.mjs perf-plan [--baseline <json>] [--harness <spec>] [--tool <script>] [--record true] | issue --run-url <url> [--date YYYY-MM-DD]",
   );
 }
 
