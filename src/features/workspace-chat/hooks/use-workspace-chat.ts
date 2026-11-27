@@ -5,6 +5,7 @@ import { listen } from "@tauri-apps/api/event";
 
 import {
   workspaceChatRead,
+  type WorkspaceChatMediaPayload,
   type WorkspaceChatMessage,
   type WorkspaceChatUpdatedPayload,
 } from "@/tauri/commands";
@@ -22,6 +23,9 @@ import { logger } from "@/shared/lib/logger";
  * - **Nudge**: on every `codesense:workspace-chat-updated` event whose payload
  *   workspace matches, re-read with `since = state.headId` — paging the delta
  *   only. The engine returns oldest-first regardless of `since`.
+ * - **Media**: on `codesense:workspace-chat-media` for this workspace, re-read that one
+ *   message and replace it in place (an image fetched, failed or loaded on a tap); no new
+ *   post, and `headId` stays.
  * - **Workspace swap**: the hook keeps the active `workspaceId` inside its
  *   state blob. A read whose target workspace no longer matches the state's
  *   active workspace is discarded on arrival, so a late response from the
@@ -45,6 +49,7 @@ export interface WorkspaceChatHandle {
 
 const DEFAULT_LIMIT = 50;
 const EVENT_NAME = "codesense:workspace-chat-updated";
+const MEDIA_EVENT_NAME = "codesense:workspace-chat-media";
 
 /** Append `incoming` to `prev`, deduping by `messageId`. The engine returns
  *  oldest-first and ids are monotonic + dense per workspace, so dedup is cheap
@@ -59,6 +64,17 @@ export function mergeMessages(
   const additions = incoming.filter((m) => !seen.has(m.messageId));
   if (additions.length === 0) return prev;
   return [...prev, ...additions].sort((a, b) => a.messageId - b.messageId);
+}
+
+/** `messages` with each patched message in place of its read copy. A patch is the copy a media
+ *  event re-read; `mergeMessages` keeps a first-seen copy, so a read that raced the event
+ *  would otherwise keep the stale state. */
+export function applyPatches(
+  messages: WorkspaceChatMessage[],
+  patches: ReadonlyMap<number, WorkspaceChatMessage>,
+): WorkspaceChatMessage[] {
+  if (patches.size === 0 || !messages.some((m) => patches.has(m.messageId))) return messages;
+  return messages.map((m) => patches.get(m.messageId) ?? m);
 }
 
 interface ChatState {
@@ -95,10 +111,15 @@ export function useWorkspaceChat(
   const generation = useRef(0);
   useLayoutEffect(() => {
     generation.current += 1;
+    patches.current = new Map();
     return () => {
       generation.current += 1;
     };
   }, [workspaceId]);
+  // Media patches by message id, for the active workspace. A patch stays until a read returns
+  // its message in the same media state (the read has caught up), so an older copy from any
+  // later full or incremental read can't undo it.
+  const patches = useRef(new Map<number, WorkspaceChatMessage>());
   const stateRef = useRef(state);
   useLayoutEffect(() => {
     stateRef.current = state;
@@ -107,18 +128,30 @@ export function useWorkspaceChat(
     setState(initialState(workspaceId));
   }
 
+  // Drop each patch a read has caught up with: it returned the message in the patch's state.
+  const settlePatches = useCallback((read: readonly WorkspaceChatMessage[]) => {
+    for (const m of read) {
+      const patch = patches.current.get(m.messageId);
+      if (patch && patch.mediaState === m.mediaState) patches.current.delete(m.messageId);
+    }
+  }, []);
+
   const readFromScratch = useCallback(
     async (ws: string) => {
       const requestGeneration = generation.current;
       try {
         const result = await workspaceChatRead(ws, null, limit);
         if (requestGeneration !== generation.current) return;
+        settlePatches(result.messages);
         setState((s) =>
           s.workspaceId === ws
             ? {
                 ...s,
                 humanReadId: result.humanReadId,
-                messages: s.messages ? mergeMessages(result.messages, s.messages) : result.messages,
+                messages: applyPatches(
+                  s.messages ? mergeMessages(result.messages, s.messages) : result.messages,
+                  patches.current,
+                ),
                 headId: Math.max(s.headId, result.headId),
                 archived: result.archived,
                 loading: false,
@@ -132,46 +165,72 @@ export function useWorkspaceChat(
         setState((s) => (s.workspaceId === ws ? { ...s, loading: false, error: message } : s));
       }
     },
-    [limit],
+    [limit, settlePatches],
   );
 
-  const readIncremental = useCallback(async (ws: string, since: number) => {
+  const readIncremental = useCallback(
+    async (ws: string, since: number) => {
+      const requestGeneration = generation.current;
+      try {
+        let result = await workspaceChatRead(ws, since, null);
+        let incoming = result.messages;
+        let cursor = incoming.at(-1)?.messageId ?? since;
+        while (cursor < result.headId && result.messages.length > 0) {
+          result = await workspaceChatRead(ws, cursor, null);
+          incoming = mergeMessages(incoming, result.messages);
+          cursor = result.messages.at(-1)?.messageId ?? cursor;
+        }
+        if (requestGeneration !== generation.current) return;
+        settlePatches(incoming);
+        setState((s) => {
+          if (s.workspaceId !== ws) return s;
+          const prevMessages = s.messages ?? [];
+          const nextMessages =
+            incoming.length > 0
+              ? applyPatches(mergeMessages(prevMessages, incoming), patches.current)
+              : prevMessages;
+          const nextHead = result.headId > s.headId ? result.headId : s.headId;
+          if (
+            nextMessages === prevMessages &&
+            nextHead === s.headId &&
+            result.archived === s.archived
+          ) {
+            return s;
+          }
+          return {
+            ...s,
+            messages: nextMessages,
+            headId: nextHead,
+            archived: result.archived,
+          };
+        });
+      } catch (err) {
+        if (requestGeneration !== generation.current) return;
+        const message = err instanceof Error ? err.message : String(err);
+        logger.info("workspace-chat", `incremental read failed (${ws}): ${message}`);
+        setState((s) => (s.workspaceId === ws ? { ...s, error: message } : s));
+      }
+    },
+    [settlePatches],
+  );
+
+  // Re-read message `messageId`, whose image changed, and put it in place of its copy.
+  const readMedia = useCallback(async (ws: string, messageId: number) => {
     const requestGeneration = generation.current;
     try {
-      let result = await workspaceChatRead(ws, since, null);
-      let incoming = result.messages;
-      let cursor = incoming.at(-1)?.messageId ?? since;
-      while (cursor < result.headId && result.messages.length > 0) {
-        result = await workspaceChatRead(ws, cursor, null);
-        incoming = mergeMessages(incoming, result.messages);
-        cursor = result.messages.at(-1)?.messageId ?? cursor;
-      }
+      const result = await workspaceChatRead(ws, messageId - 1, 1);
       if (requestGeneration !== generation.current) return;
-      setState((s) => {
-        if (s.workspaceId !== ws) return s;
-        const prevMessages = s.messages ?? [];
-        const nextMessages =
-          incoming.length > 0 ? mergeMessages(prevMessages, incoming) : prevMessages;
-        const nextHead = result.headId > s.headId ? result.headId : s.headId;
-        if (
-          nextMessages === prevMessages &&
-          nextHead === s.headId &&
-          result.archived === s.archived
-        ) {
-          return s;
-        }
-        return {
-          ...s,
-          messages: nextMessages,
-          headId: nextHead,
-          archived: result.archived,
-        };
-      });
+      const message = result.messages.find((m) => m.messageId === messageId);
+      if (!message) return;
+      patches.current.set(messageId, message);
+      setState((s) =>
+        s.workspaceId === ws && s.messages
+          ? { ...s, messages: applyPatches(s.messages, patches.current) }
+          : s,
+      );
     } catch (err) {
-      if (requestGeneration !== generation.current) return;
       const message = err instanceof Error ? err.message : String(err);
-      logger.info("workspace-chat", `incremental read failed (${ws}): ${message}`);
-      setState((s) => (s.workspaceId === ws ? { ...s, error: message } : s));
+      logger.info("workspace-chat", `media re-read failed (${ws} #${messageId}): ${message}`);
     }
   }, []);
 
@@ -202,6 +261,19 @@ export function useWorkspaceChat(
       void unlisten.then((u) => u()).catch(() => {});
     };
   }, [workspaceId, readIncremental]);
+
+  // Subscribe to the chat-media event: a message's image changed state on this Mac.
+  useEffect(() => {
+    if (!workspaceId) return;
+    const unlisten = listen<WorkspaceChatMediaPayload>(MEDIA_EVENT_NAME, (event) => {
+      const payload = event.payload;
+      if (!payload || payload.workspaceId !== workspaceId) return;
+      void readMedia(workspaceId, payload.messageId);
+    });
+    return () => {
+      void unlisten.then((u) => u()).catch(() => {});
+    };
+  }, [workspaceId, readMedia]);
 
   return {
     humanReadId: state.humanReadId,
