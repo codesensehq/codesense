@@ -11,9 +11,9 @@
  *   the window is blurred or hidden.
  * - An `undo` line wins: it preempts whatever shows (that line waits again with its time left),
  *   and a newer `undo` line replaces an older one.
- * - Offers wait behind "+N waiting": at most 3 (the oldest drops), each for at most 60 s, and its
- *   own 6 s start when it first shows. Announcements, `info` and `progress` lines queue in the
- *   order posted. The next line to show is the earliest posted.
+ * - Offers wait behind "+N waiting": at most 3 (the oldest drops). Every waiting line, offer or
+ *   not, waits at most 60 s, and its own 6 s start when it first shows. Announcements, `info` and
+ *   `progress` lines queue in the order posted. The next line to show is the earliest posted.
  * - A post whose `key` is waiting or showing replaces that line; a `progress` line updated by key
  *   changes in place and its 6 s count from the update.
  * - A line closes once its action runs; a second run is a no-op.
@@ -177,14 +177,15 @@ function show(line: Line) {
 const byId = (a: Line, b: Line) => a.id - b.id;
 
 function enqueue(line: Line) {
+  line.expiresAt = Date.now() + STATUS_LINE_OFFER_WAIT_MS;
   if (line.kind === "offer") {
-    line.expiresAt = Date.now() + STATUS_LINE_OFFER_WAIT_MS;
     offers = [...offers, line].sort(byId);
     if (offers.length > STATUS_LINE_MAX_WAITING) offers = offers.slice(-STATUS_LINE_MAX_WAITING);
     scheduleExpiry();
   } else {
     queue = [...queue, line].sort(byId);
   }
+  scheduleExpiry();
 }
 
 /** Show the earliest posted waiting line, if any. */
@@ -200,13 +201,16 @@ function showNext() {
 function scheduleExpiry() {
   if (expiryTimer !== null) clearTimeout(expiryTimer);
   expiryTimer = null;
-  if (offers.length === 0) return;
-  const soonest = Math.min(...offers.map((o) => o.expiresAt ?? Infinity));
+  const waitingLines = [...offers, ...queue];
+  if (waitingLines.length === 0) return;
+  const soonest = Math.min(...waitingLines.map((o) => o.expiresAt ?? Infinity));
   expiryTimer = setTimeout(
     () => {
       expiryTimer = null;
       const now = Date.now();
-      offers = offers.filter((o) => (o.expiresAt ?? Infinity) > now);
+      const live = (o: Line) => (o.expiresAt ?? Infinity) > now;
+      offers = offers.filter(live);
+      queue = queue.filter(live);
       scheduleExpiry();
       notify();
     },
@@ -261,7 +265,8 @@ export function postStatusLine(post: StatusLinePost): number {
   };
 
   if (key !== undefined) {
-    const isProgress = (l: Line) => l.kind === "progress" && post.kind === "progress";
+    const progressUpdate = post.kind === "progress";
+    const isProgress = (l: Line) => l.kind === "progress" && progressUpdate;
     if (current?.key === key && isProgress(current)) {
       stopTimer();
       Object.assign(current, { text, action, remaining: STATUS_LINE_MS });

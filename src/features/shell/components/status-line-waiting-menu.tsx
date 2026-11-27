@@ -70,6 +70,7 @@ export function StatusLineWaitingMenu({ waiting }: { waiting: readonly StatusLin
       </DropdownMenuTrigger>
       <DropdownMenuContent
         ref={content}
+        data-status-line-menu=""
         align="end"
         aria-label="Waiting in the status line"
         className="min-w-64"

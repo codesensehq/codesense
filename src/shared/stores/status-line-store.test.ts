@@ -164,6 +164,22 @@ describe("queue and lifecycle", () => {
     expect(shown()).toBeNull();
   });
 
+  it("a queued announcement, info and progress line expires at 60 s like an offer", () => {
+    postStatusLine({ text: "Long", kind: "announcement" });
+    pauseStatusLine("focus");
+    postStatusLine({ text: "Stale announcement", kind: "announcement" });
+    postStatusLine({ text: "Stale info", kind: "info" });
+    postStatusLine({ key: "p", text: "Stale progress", kind: "progress" });
+    vi.advanceTimersByTime(STATUS_LINE_OFFER_WAIT_MS - 1);
+    postStatusLine({ text: "Fresh info", kind: "info" });
+    vi.advanceTimersByTime(1);
+    resumeStatusLine("focus");
+    vi.advanceTimersByTime(STATUS_LINE_MS);
+    expect(shown()).toBe("Fresh info");
+    vi.advanceTimersByTime(STATUS_LINE_MS);
+    expect(shown()).toBeNull();
+  });
+
   it("a line closes once its action runs, and a second run is a no-op", () => {
     const action = show();
     postStatusLine({ text: "Offer", kind: "offer", action });

@@ -69,3 +69,15 @@ test(
     expect((await axe(page).analyze()).violations).toEqual([]);
   },
 );
+
+test("a long line is capped against the title bar and truncates", async ({ page }) => {
+  await page.goto("/");
+  const bar = page.getByTestId("title-bar");
+  await expect(bar).toBeVisible();
+  await post(page, { text: "x".repeat(400), kind: "info" });
+  const line = page.getByRole("group", { name: "Status line" });
+  await expect(line).toBeVisible();
+  const [lineBox, barBox] = await Promise.all([line.boundingBox(), bar.boundingBox()]);
+  expect(lineBox!.width).toBeLessThanOrEqual(barBox!.width * 0.4 + 1);
+  expect(lineBox!.width).toBeLessThanOrEqual(512);
+});

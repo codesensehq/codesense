@@ -125,6 +125,51 @@ describe("the line", () => {
     expect(screen.getByRole("button", { name: "Before" })).toHaveFocus();
   });
 
+  it("returns focus to Before after the waiting menu is opened and closed", async () => {
+    render(
+      <>
+        <button type="button">Before</button>
+        <StatusLine />
+      </>,
+    );
+    post({ text: "Offer 1", kind: "offer", action: { label: "Show", run: vi.fn() } });
+    post({ text: "Offer 2", kind: "offer", action: { label: "Show", run: vi.fn() } });
+    screen.getByRole("button", { name: "Before" }).focus();
+    await user.tab();
+    await user.tab();
+    const trigger = screen.getByRole("button", { name: "+1 waiting ▾" });
+    expect(trigger).toHaveFocus();
+    await user.keyboard("{Enter}");
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(trigger).toHaveFocus();
+    await user.keyboard("{Escape}");
+    expect(line()).toHaveTextContent("Offer 2");
+    expect(screen.getByRole("button", { name: "Before" })).toHaveFocus();
+  });
+
+  it("returns focus to Before when the line closes after the last waiting offer ran", async () => {
+    render(
+      <>
+        <button type="button">Before</button>
+        <StatusLine />
+      </>,
+    );
+    post({ text: "Offer 1", kind: "offer", action: { label: "Show", run: vi.fn() } });
+    post({ text: "Offer 2", kind: "offer", action: { label: "Show", run: vi.fn() } });
+    screen.getByRole("button", { name: "Before" }).focus();
+    await user.tab();
+    await user.tab();
+    await user.keyboard("{Enter}");
+    await user.click(screen.getByRole("menuitem", { name: "Offer 2 Show" }));
+    expect(screen.queryByRole("button", { name: /waiting/ })).toBeNull();
+    expect(screen.getByRole("button", { name: "Show" })).toHaveFocus();
+    await user.keyboard("{Escape}");
+    expect(line()).toBeNull();
+    expect(screen.getByRole("button", { name: "Before" })).toHaveFocus();
+  });
+
   it("returns focus to body when nothing had it before", async () => {
     render(<StatusLine />);
     post({ text: "Offer", kind: "offer", action: { label: "Show", run: vi.fn() } });
