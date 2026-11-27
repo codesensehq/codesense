@@ -189,6 +189,29 @@ describe("guard routes: each ends without K @P1", () => {
     expect(paths()).not.toContain(K);
   });
 
+  it("a K that is unsaved in main opens, enters the history and is reached by Back as usual", () => {
+    // The guard keeps a dirty K, so the writers treat it as a tab main can show.
+    useViewerStore.setState({
+      editingDirtyPaths: { [TEAM]: [K] },
+      navHistory: { [TEAM]: [A] },
+      navIndex: { [TEAM]: 0 },
+    });
+    useViewerStore.getState().openFilePreview(TEAM, REPO, K);
+    expect(useViewerStore.getState().openTabs[TEAM]).toContainEqual(
+      expect.objectContaining({ path: K, preview: true }),
+    );
+    expect(active()).toBe(K);
+    useViewerStore.getState().openFile(TEAM, REPO, B);
+    useViewerStore.getState().openFile(TEAM, REPO, K);
+    expect(useViewerStore.getState().navHistory[TEAM]).toEqual([A, K, B, K]);
+    expect(useViewerStore.getState().navIndex[TEAM]).toBe(3);
+    useViewerStore.getState().navigateBack(TEAM, REPO);
+    useViewerStore.getState().navigateBack(TEAM, REPO);
+    expect(useViewerStore.getState().navIndex[TEAM]).toBe(1);
+    expect(active()).toBe(K);
+    expect(windowFocusOwnerMock).not.toHaveBeenCalled();
+  });
+
   it("Back and Forward with only satellite-owned entries left keep the index", () => {
     useViewerStore.setState({ navHistory: { [TEAM]: [K, A, K] }, navIndex: { [TEAM]: 1 } });
     useViewerStore.getState().navigateBack(TEAM, REPO);
@@ -203,18 +226,6 @@ describe("guard routes: each ends without K @P1", () => {
     expect(paths()).toEqual([A, B]);
     expect(active()).toBe(A);
     expect(windowFocusOwnerMock).toHaveBeenCalledWith(K_KEY);
-  });
-
-  it("navigateBack and navigateForward onto K, through a write the store didn't vet", () => {
-    // Back and Forward skip a satellite-owned entry themselves; the guard still stops a
-    // history target that reaches K some other way.
-    useViewerStore.setState((s) => ({
-      openTabs: { [TEAM]: [...s.openTabs[TEAM], tab(K)] },
-      activeTab: { [TEAM]: K },
-      navIndex: { [TEAM]: 0 },
-    }));
-    expect(paths()).toEqual([A, B]);
-    expect(active()).toBe(A);
   });
 
   it("remapTabPath onto K", () => {
