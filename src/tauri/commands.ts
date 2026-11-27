@@ -3966,21 +3966,35 @@ export const reconcileEpicWorktrees = (params: EpicWorktreeParams, inUsePaths: s
     inUsePaths,
   });
 
+/** A story branch drift: the story's recorded branch (`from`, `null` when it
+ *  records none) and the branch its worktree is on (`to`). */
+export interface BranchReconcile {
+  from: string | null;
+  to: string;
+}
+
+/** What linking a worktree to its story reports: whether its setup has
+ *  completed, and the branch drift (`null` when the story's branch matches the
+ *  worktree's, or the worktree's HEAD is unreadable). */
+export interface EstablishLinkResult {
+  setupComplete: boolean;
+  reconciled: BranchReconcile | null;
+}
+
 /** SW-TS-4 — the browse→worktree bridge. Once a worktree exists on disk,
  *  persist the worktree→story link and trigger the SW-TS-1 team-aware sync
- *  (team derived from the story's location — no team picker). Non-blocking:
- *  the backend writes the record (sub-ms) and enqueues-and-returns the
- *  derive, so the caller must NOT await this on the user's landing path —
- *  fire-and-forget with `.catch()`. Idempotent (safe to re-invoke on an
- *  existing worktree). `sourceRepo` is the `owner/repo` slug; `storyId`
- *  and `storySourcePath` identify the story being worked. */
+ *  (team derived from the story's location — no team picker). Idempotent
+ *  (safe to re-invoke on an existing worktree). It never writes the story doc,
+ *  which lives in the canonical context clone: it reports the worktree's
+ *  branch against the story's recorded one instead. `sourceRepo` is the
+ *  `owner/repo` slug; `storyId` and `storySourcePath` identify the story. */
 export const establishWorktreeStoryLink = (
   codeRepoPath: string,
   storySourcePath: string,
   storyId: string,
   sourceRepo: string,
 ) =>
-  invoke<boolean>("establish_worktree_story_link", {
+  invoke<EstablishLinkResult>("establish_worktree_story_link", {
     codeRepoPath,
     storySourcePath,
     storyId,

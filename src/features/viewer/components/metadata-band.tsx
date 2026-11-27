@@ -400,20 +400,26 @@ export function MetadataBand({
   const blockOk = model?.blockParseOk ?? true;
 
   // SW-WB-1 (AC-9): the branch-mismatch signal is a PURE frontmatter compare —
-  // intended (`branch_name`) vs observed (`dev_branch`, auto-stamped every
-  // establish). No git call on render. It only fires once a worktree exists
-  // (dev_branch present) and the intent diverged.
+  // intended (`branch_name`) vs observed (`dev_branch`) on a legacy doc. No git
+  // call on render. It only fires once a worktree exists (dev_branch present)
+  // and the intent diverged.
   //
   // SW-OR-1b: the intended/observed split is retired in favor of a single
-  // canonical `branch`. Once that field is present (new stories always; a legacy
-  // story after any open/reconcile stamps it), there is no two-field mismatch to
-  // show — so suppress the chip. This both matches the unified model AND lets the
-  // legacy reconcile clear the chip: reconcile stamps `branch` via establish.
+  // canonical `branch`. Once that field is present there is no two-field
+  // mismatch to show, so the chip is suppressed. Nothing in the app writes
+  // `branch` into the doc (it lives in the canonical context clone), so a
+  // successful Reconcile hides the chip for this file instead; a reload shows
+  // it again, where another Reconcile is a no-op that hides it.
   const canonicalBranch = model ? fieldScalarValue(model.fields, "branch") : null;
   const intendedBranch = model ? fieldScalarValue(model.fields, "branch_name") : null;
   const observedBranch = model ? fieldScalarValue(model.fields, "dev_branch") : null;
+  const [reconciledFile, setReconciledFile] = useState<string | null>(null);
   const branchMismatch =
-    !canonicalBranch && !!intendedBranch && !!observedBranch && intendedBranch !== observedBranch;
+    reconciledFile !== filePath &&
+    !canonicalBranch &&
+    !!intendedBranch &&
+    !!observedBranch &&
+    intendedBranch !== observedBranch;
   const [reconciling, setReconciling] = useState(false);
 
   // SW-WB-1 (AC-5): one-click reconcile the worktree onto the intended branch.
@@ -435,8 +441,8 @@ export function MetadataBand({
         } else if (res.mode === "recreate") {
           toast.success(`Worktree rebuilt on ${intendedBranch}`);
         }
-        // Re-read so the re-stamped canonical `branch` (SW-OR-1b) clears the
-        // mismatch chip.
+        // The doc's branch fields are unchanged; hide the chip for this file.
+        setReconciledFile(filePath);
         editingRef.current = false;
         void load();
       } catch (e) {

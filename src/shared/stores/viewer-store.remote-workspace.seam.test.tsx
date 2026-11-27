@@ -57,7 +57,7 @@ vi.mock("@/tauri/commands", async (importOriginal) => ({
   probeWorktreeConfig: vi.fn().mockResolvedValue({ status: { kind: "missing" }, config: null }),
   checkBranchExists: vi.fn().mockResolvedValue(true),
   storyDefaultStartPoint: vi.fn(),
-  establishWorktreeStoryLink: vi.fn().mockResolvedValue(true),
+  establishWorktreeStoryLink: vi.fn().mockResolvedValue({ setupComplete: true, reconciled: null }),
   dashboardRegisterSession: vi.fn().mockResolvedValue(undefined),
   checkPathExists: vi.fn().mockResolvedValue(false),
   listMachines: vi.fn().mockResolvedValue([]),
