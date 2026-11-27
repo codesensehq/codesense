@@ -254,6 +254,14 @@ describe("MessageMedia loading shimmer", () => {
     );
     expect(ungated).not.toMatch(/\.ibx-media\.loading\s*\{[^}]*animation/);
   });
+
+  it("pulses the figure's background only, so its copy keeps full contrast", () => {
+    const css = readFileSync(resolve(__dirname, "../inbox.css"), "utf-8");
+    const shim = css.slice(css.indexOf("@keyframes ibx-shim"));
+    const frames = shim.slice(0, shim.indexOf("\n  }\n") + 1);
+    expect(frames).toMatch(/background-color:/);
+    expect(frames).not.toMatch(/opacity|filter|[^-]color:/);
+  });
 });
 
 describe("MessageMedia size rule", () => {
