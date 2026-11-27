@@ -916,7 +916,8 @@ fn cp2_both_roots_collection_is_refused_for_own_only_frame_under_team_view() {
         .allows(&binding.private_root.join("content/schema/x.yaml")));
     assert!(stored
         .resolve("x")
-        .unwrap_err()
+        .err()
+        .unwrap()
         .contains("ambiguous collection"));
     let x = json!({"collection":"x"});
     assert!(crate::verbs::check_frame_capability(&frame, "records.list", &x).is_ok());
@@ -957,7 +958,8 @@ fn cp2_child_frame_drift_cannot_serve_team_records_on_own_grant() {
             .as_ref()
             .unwrap()
             .resolve("x")
-            .unwrap_err()
+            .err()
+            .unwrap()
             .contains("unknown collection"));
         linked
     };
