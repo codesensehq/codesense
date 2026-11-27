@@ -232,6 +232,13 @@ pub(crate) struct Pending {
     pub waiting: bool,
 }
 
+/// The pending onloads a serve took, with GIPHY's install epoch in force when it took them.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Taken {
+    pub epoch: u64,
+    pub entries: Vec<(Slot, Pending)>,
+}
+
 /// What [`Registration::admit`] let through: the held search entry of a send or a pick, or
 /// none for a serve's view pings.
 struct Admitted {
@@ -333,7 +340,12 @@ impl Registration {
     /// pending onloads and the waits a failed random id call or keychain read set. The other
     /// provider's stay. Returns the epochs now followed.
     fn follow_epoch(&self) -> Epochs {
-        let mut seen = lock(&self.epoch);
+        self.follow_epoch_held(&mut lock(&self.epoch))
+    }
+
+    /// [`Self::follow_epoch`] for a caller already holding `self.epoch` (`seen`), as the lock
+    /// isn't reentrant.
+    fn follow_epoch_held(&self, seen: &mut Epochs) -> Epochs {
         let now = install_epochs(self.service.data_dir());
         for provider in [Provider::Giphy, Provider::Klipy] {
             if seen.of(provider) == now.of(provider) {
@@ -549,8 +561,16 @@ impl Registration {
     /// for this key are spent (dropped, logged). One that counts against the search cap (a
     /// KLIPY share) takes a search token on a test key and is dropped when none is left. A
     /// GIPHY 429 is logged only; a KLIPY 429 sets the search backoff, as its cap counts every
-    /// call.
-    async fn send_ping(&self, provider: Provider, keyed: &Keyed, kind: Event, ping: Ping<'_>) {
+    /// call. Nothing is sent once `provider`'s install epoch moved on from `epoch`, the one the
+    /// work began in: that is checked after the waits, just before the ping.
+    async fn send_ping(
+        &self,
+        provider: Provider,
+        keyed: &Keyed,
+        kind: Event,
+        ping: Ping<'_>,
+        epoch: u64,
+    ) {
         let key = super::bucket_key(provider, &keyed.fp);
         let now = (self.clock)();
         let (name, event) = (
@@ -565,6 +585,10 @@ impl Registration {
             && !self.take_search_token(&key, keyed.production, now).await
         {
             log::warn!(target: "gif", "gif registration: {name} {event} dropped; no {name} search left this hour");
+            return;
+        }
+        if !self.still_in(provider, epoch) {
+            log::info!(target: "gif", "gif registration: the install id changed before the {event}; not registered");
             return;
         }
         if !self.spend_ping(&key, now) {
@@ -664,11 +688,17 @@ impl Registration {
         change(pending);
     }
 
-    /// Put taken pending onloads back, for a later serve.
+    /// Put taken pending onloads back, for a later serve, unless GIPHY's install epoch moved on
+    /// from `epoch`, the one they were taken under: then they belong to the old install id and
+    /// are dropped. The epoch is checked under the hold of `onloads` that a follow of a new one
+    /// needs to clear them, so none is put back after that clear.
     /// An entry made for the slot meanwhile (its send armed it while the serve settled) is
     /// merged with, never overwritten: what it learned wins, and the put-back fills the gaps.
-    fn put_back(&self, pending: Vec<(Slot, Pending)>) {
+    fn put_back(&self, pending: Vec<(Slot, Pending)>, epoch: u64) {
         let mut onloads = lock(&self.onloads);
+        if !self.still_in(ONLOAD_PROVIDER, epoch) {
+            return;
+        }
         for (slot, p) in pending {
             let merged = match onloads.remove(&slot) {
                 Some(newer) => Pending {
@@ -758,7 +788,8 @@ impl Registration {
                 install_id: &id,
                 at_ms: now,
             };
-            self.send_ping(provider, &keyed, Event::Sent, ping).await;
+            self.send_ping(provider, &keyed, Event::Sent, ping, epoch)
+                .await;
         }
     }
 
@@ -797,7 +828,8 @@ impl Registration {
                 install_id: &install,
                 at_ms: now,
             };
-            self.send_ping(provider, &keyed, Event::Click, ping).await;
+            self.send_ping(provider, &keyed, Event::Click, ping, epoch)
+                .await;
         }
     }
 
@@ -816,34 +848,37 @@ impl Registration {
         }
     }
 
-    /// Take every pending onload of `sha`, so only this serve settles them.
-    pub(crate) fn take_onloads(&self, sha: &str) -> Vec<(Slot, Pending)> {
-        self.follow_epoch();
+    /// Take every pending onload of `sha`, so only this serve settles them, with the epoch they
+    /// were taken under. The epoch is held across the follow and the take, so it names the
+    /// state the entries came from.
+    pub(crate) fn take_onloads(&self, sha: &str) -> Taken {
+        let mut seen = lock(&self.epoch);
+        let epoch = self.follow_epoch_held(&mut seen).of(ONLOAD_PROVIDER);
         let mut onloads = lock(&self.onloads);
         let slots: Vec<Slot> = onloads
             .iter()
             .filter(|(_, p)| p.sha.as_deref() == Some(sha))
             .map(|(slot, _)| slot.clone())
             .collect();
-        slots
+        let entries = slots
             .into_iter()
             .filter_map(|slot| onloads.remove(&slot).map(|p| (slot, p)))
-            .collect()
+            .collect();
+        Taken { epoch, entries }
     }
 
     /// Settle a serve. `claimed` are the attachments whose view ping the sha index gave this
-    /// serve, `taken` the pending onloads it took. A claimed one with an armed onload within its
+    /// serve, `taken` the pending onloads it took and their epoch. A claimed one with an armed onload within its
     /// hour is pinged and marked. It is marked without a ping when its onload expired, was never
     /// armed (an unbound send, or one sent before a restart), or GIF search is Off. It stays
     /// pending, claim given back, while its send is still being registered or when the key or
     /// the install id can't be had just now. A taken one the index didn't claim goes back.
-    pub(crate) async fn settle_serve(
-        &self,
-        claimed: Vec<Slot>,
-        mut taken: Vec<(Slot, Pending)>,
-    ) -> Settled {
-        // The epoch the taken entries belong to, read before any work.
-        let started = lock(&self.epoch).of(ONLOAD_PROVIDER);
+    pub(crate) async fn settle_serve(&self, claimed: Vec<Slot>, taken: Taken) -> Settled {
+        // The epoch the taken entries belong to: the one in force when they were taken.
+        let Taken {
+            epoch: started,
+            entries: mut taken,
+        } = taken;
         let now = (self.clock)();
         let mut settled = Settled {
             marks: Vec::new(),
@@ -903,21 +938,19 @@ impl Registration {
                 Ok(keyed) => {
                     let (key, fp) = (&keyed.key, &keyed.fp);
                     if let Some(id) = self.install_id(provider, key, fp, started).await {
-                        let current = self.still_in(provider, started);
+                        // Each ping checks the epoch again, so none goes out once it moved.
                         for (slot, p) in Vec::drain(&mut due, ..) {
-                            match &p.onload {
-                                Some(onload) if current => {
-                                    let ping = Ping {
-                                        key,
-                                        gif_id: "",
-                                        pingback: Some(onload),
-                                        query: None,
-                                        install_id: &id,
-                                        at_ms: now,
-                                    };
-                                    self.send_ping(provider, &keyed, Event::Load, ping).await
-                                }
-                                _ => {}
+                            if let Some(onload) = &p.onload {
+                                let ping = Ping {
+                                    key,
+                                    gif_id: "",
+                                    pingback: Some(onload),
+                                    query: None,
+                                    install_id: &id,
+                                    at_ms: now,
+                                };
+                                self.send_ping(provider, &keyed, Event::Load, ping, started)
+                                    .await
                             }
                             settled.marks.push(slot);
                         }
@@ -930,7 +963,7 @@ impl Registration {
                 back.push((slot, p));
             }
         }
-        self.put_back(back);
+        self.put_back(back, started);
         settled
     }
 }
@@ -1029,7 +1062,7 @@ pub(crate) fn serve_hook(
         };
         let taken = registration.take_onloads(sha);
         let claimed = crate::media::index::ShaIndex::claim_onloads(&state.index, sha);
-        if Vec::is_empty(&claimed) && Vec::is_empty(&taken) {
+        if Vec::is_empty(&claimed) && Vec::is_empty(&taken.entries) {
             return;
         }
         let (host, sha) = (host(), sha.to_string());

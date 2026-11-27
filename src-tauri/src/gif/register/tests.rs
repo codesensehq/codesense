@@ -385,7 +385,7 @@ async fn each_skip_sends_nothing() {
     // An unbound send arms no onload, even once its fetch finishes: its serve marks it.
     h.registration.note_fetched(&slot(3), Some(SHA), true);
     let taken = h.registration.take_onloads(SHA);
-    assert!(taken.iter().all(|(_, p)| p.onload.is_none()));
+    assert!(taken.entries.iter().all(|(_, p)| p.onload.is_none()));
     let settled = h.registration.settle_serve(vec![slot(3)], taken).await;
     assert_eq!(settled.marks, vec![slot(3)]);
     assert!(h.wire.urls().is_empty());
@@ -408,7 +408,7 @@ async fn off_or_no_key_makes_no_call_and_turning_off_or_removing_the_key_deletes
     assert!(!h.install_file().exists(), "Off deletes the install id");
     h.send(2, "g1", URL).await;
     let taken = h.registration.take_onloads(SHA);
-    assert!(taken.is_empty(), "Off lets go of pending onloads");
+    assert!(taken.entries.is_empty(), "Off lets go of pending onloads");
     let marks = h
         .registration
         .settle_serve(vec![slot(1)], taken)
@@ -537,7 +537,7 @@ async fn onload_fires_once_within_the_hour_from_the_send_not_the_search() {
     h.registration.note_fetched(&slot(1), Some(SHA), true);
     h.advance(30 * MINUTE);
     let taken = h.registration.take_onloads(SHA);
-    assert_eq!(taken.len(), 1);
+    assert_eq!(taken.entries.len(), 1);
     let marks = h
         .registration
         .settle_serve(vec![slot(1)], taken)
@@ -549,8 +549,10 @@ async fn onload_fires_once_within_the_hour_from_the_send_not_the_search() {
     assert_eq!(pair(seen, "random_id").as_deref(), Some("rid-123"));
     assert!(!seen.as_str().contains("api_key"));
     // A second serve, at another chunk offset, takes nothing.
-    assert!(h.registration.take_onloads(SHA).is_empty());
-    h.registration.settle_serve(Vec::new(), Vec::new()).await;
+    assert!(h.registration.take_onloads(SHA).entries.is_empty());
+    h.registration
+        .settle_serve(Vec::new(), Taken::default())
+        .await;
     assert_eq!(h.wire.actions(), vec!["SENT", "SEEN"]);
 }
 
@@ -574,7 +576,7 @@ async fn a_serve_of_a_shared_sha_fires_and_marks_both_attachments() {
         h.registration.note_fetched(&slot(message), Some(SHA), true);
     }
     let taken = h.registration.take_onloads(SHA);
-    assert_eq!(taken.len(), 2);
+    assert_eq!(taken.entries.len(), 2);
     let marks = h
         .registration
         .settle_serve(vec![slot(1), slot(2)], taken)
@@ -593,7 +595,7 @@ async fn concurrent_serves_take_a_pending_onload_once() {
     let takers: Vec<_> = (0..8)
         .map(|_| {
             let h = h.clone();
-            std::thread::spawn(move || h.registration.take_onloads(SHA).len())
+            std::thread::spawn(move || h.registration.take_onloads(SHA).entries.len())
         })
         .collect();
     let taken: usize = takers.into_iter().map(|t| t.join().unwrap()).sum();
@@ -623,7 +625,7 @@ async fn after_a_restart_the_first_view_marks_without_firing() {
     // Nothing pending in this run: the send was before the restart.
     let marks = h
         .registration
-        .settle_serve(vec![slot(1)], Vec::new())
+        .settle_serve(vec![slot(1)], Taken::default())
         .await
         .marks;
     assert_eq!(marks, vec![slot(1)]);
@@ -636,7 +638,7 @@ async fn a_tag_dropped_by_a_redirect_loses_its_onload() {
     h.found_all("g1");
     h.send(1, "g1", URL).await;
     h.registration.note_fetched(&slot(1), Some(SHA), false);
-    assert!(h.registration.take_onloads(SHA).is_empty());
+    assert!(h.registration.take_onloads(SHA).entries.is_empty());
 }
 
 #[test]
@@ -671,7 +673,7 @@ async fn a_failing_random_id_call_is_retried_at_most_every_fifteen_minutes() {
     }
     // A serve with onloads due asks for no id either, and its onloads stay pending.
     let taken = h.registration.take_onloads(SHA);
-    assert_eq!(taken.len(), 5);
+    assert_eq!(taken.entries.len(), 5);
     let settled = h
         .registration
         .settle_serve((0..5).map(slot).collect(), taken)
@@ -684,7 +686,7 @@ async fn a_failing_random_id_call_is_retried_at_most_every_fifteen_minutes() {
     h.advance(RANDOM_ID_RETRY_MS);
     *h.wire.random.lock().unwrap() = Ok(reply(200, r#"{"data":{"random_id":"rid-1"}}"#));
     let taken = h.registration.take_onloads(SHA);
-    assert_eq!(taken.len(), 5);
+    assert_eq!(taken.entries.len(), 5);
     let settled = h
         .registration
         .settle_serve((0..5).map(slot).collect(), taken)
@@ -731,7 +733,7 @@ async fn turning_search_off_and_on_or_replacing_the_key_forgets_what_the_old_id_
     let calls = h.wire.urls().len();
     // The search entry, the pending onload and the sent record are gone: the GIF needs a new
     // search before it registers again, so no ping repeats the old payload with a new id.
-    assert!(h.registration.take_onloads(SHA).is_empty());
+    assert!(h.registration.take_onloads(SHA).entries.is_empty());
     h.send(1, "g1", URL).await;
     assert_eq!(h.wire.urls().len(), calls);
     assert_eq!(h.service.analytics.held_count(), 0);
@@ -820,7 +822,7 @@ async fn a_failed_fetch_keeps_the_onload_for_a_retry() {
     h.registration.note_fetched(&slot(1), None, true);
     h.registration.note_fetched(&slot(1), Some(SHA), true);
     let taken = h.registration.take_onloads(SHA);
-    assert!(taken[0].1.onload.is_some());
+    assert!(taken.entries[0].1.onload.is_some());
     h.registration.settle_serve(vec![slot(1)], taken).await;
     assert_eq!(h.wire.actions(), vec!["SENT", "SEEN"]);
 }
@@ -834,7 +836,7 @@ async fn a_taken_onload_the_index_did_not_claim_goes_back() {
     let taken = h.registration.take_onloads(SHA);
     let settled = h.registration.settle_serve(Vec::new(), taken).await;
     assert_eq!(settled, Settled::default());
-    assert_eq!(h.registration.take_onloads(SHA).len(), 1);
+    assert_eq!(h.registration.take_onloads(SHA).entries.len(), 1);
 }
 
 #[test]
@@ -889,8 +891,8 @@ async fn an_entry_armed_while_a_serve_settles_is_merged_back_not_lost() {
     let settled = h.registration.settle_serve(vec![slot(1)], taken).await;
     assert_eq!(settled.retry, vec![slot(1)]);
     let taken = h.registration.take_onloads(SHA);
-    assert_eq!(taken.len(), 1);
-    assert!(taken[0].1.onload.is_some() && !taken[0].1.waiting);
+    assert_eq!(taken.entries.len(), 1);
+    assert!(taken.entries[0].1.onload.is_some() && !taken.entries[0].1.waiting);
     let settled = h.registration.settle_serve(vec![slot(1)], taken).await;
     assert_eq!(settled.marks, vec![slot(1)]);
     assert_eq!(h.wire.actions(), vec!["SENT", "SEEN"]);
@@ -985,10 +987,11 @@ async fn after_a_failed_keychain_read_serves_wait_before_reading_it_again() {
         expires: h.now() + ONLOAD_WINDOW_MS,
         waiting: false,
     };
-    h.registration.put_back(vec![(slot(1), armed())]);
+    let epoch = install_epoch(h.dir.path(), Provider::Giphy);
+    h.registration.put_back(vec![(slot(1), armed())], epoch);
     for _ in 0..3 {
         let taken = h.registration.take_onloads(SHA);
-        assert_eq!(taken.len(), 1, "the onload stays pending");
+        assert_eq!(taken.entries.len(), 1, "the onload stays pending");
         let settled = h.registration.settle_serve(vec![slot(1)], taken).await;
         assert_eq!(settled.retry, vec![slot(1)]);
     }
@@ -1437,6 +1440,7 @@ async fn settle_a_stale_list(newer: bool) -> Vec<Option<String>> {
     h.registration.settle_serve(Vec::new(), taken).await;
     h.registration
         .take_onloads(SHA)
+        .entries
         .into_iter()
         .map(|(_, p)| p.onload)
         .collect()
@@ -1566,7 +1570,7 @@ async fn giphy_serve_after_a_klipy_key_removal() -> (usize, Vec<String>, usize) 
     crate::gif::install::forget_install_for(h.dir.path(), Provider::Klipy);
     h.send(1, "g1", URL).await;
     let taken = h.registration.take_onloads(SHA);
-    let count = taken.len();
+    let count = taken.entries.len();
     h.registration.settle_serve(vec![slot(1)], taken).await;
     (count, h.wire.actions(), h.service.analytics.held_count())
 }
@@ -1591,7 +1595,10 @@ async fn one_providers_key_change_leaves_the_other_providers_state() {
     store.locked.store(false, Ordering::SeqCst);
     crate::gif::install::forget_install_for(h.dir.path(), Provider::Giphy);
     *h.wire.random.lock().unwrap() = Ok(reply(200, r#"{"data":{"random_id":"rid-2"}}"#));
-    assert!(h.registration.take_onloads(SHA).is_empty(), "onloads go");
+    assert!(
+        h.registration.take_onloads(SHA).entries.is_empty(),
+        "onloads go"
+    );
     assert_eq!(
         (
             h.service.analytics.held_count(),
