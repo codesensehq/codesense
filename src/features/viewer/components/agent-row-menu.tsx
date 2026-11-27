@@ -9,7 +9,9 @@ import type { RoleHolding } from "@/features/viewer/hooks/use-role-holdings";
 import type { TeamAgentIdentity } from "@/features/viewer/hooks/use-team-agent-identities";
 import type { AgentIdentityChoice, AgentIdentityPatch } from "@/shared/lib/agent-identity-choice";
 import type { AvatarPacks } from "@/shared/hooks/use-avatar-packs";
+import { hasInterrupt, interruptAgent } from "@/shared/lib/interrupt-agent";
 import type { AgentSessionRow } from "@/tauri/commands";
+import { runtimeOf } from "@/features/viewer/hooks/use-tab-timer-agent";
 import { Identity } from "./agent-row-identity-context";
 import {
   CONTEXT_MENU_KIT,
@@ -79,6 +81,7 @@ export function RowMenu({
   const agentKey = agentKeyOfRevision(row.agentRevision);
   const definition = useAllAgentRowsStore((s) => s.rows?.find((agent) => agent.key === agentKey));
   const inboxEligible = useAgentChatEligible(row);
+  const runtime = definition?.runtime ?? runtimeOf(agentKey, row.detected?.cli);
   return (
     <>
       <ContextMenuLabel>Session</ContextMenuLabel>
@@ -91,6 +94,9 @@ export function RowMenu({
       <ContextMenuItem onSelect={() => onReveal(row)}>
         {headless ? "Open run output" : hasTab ? "Go to terminal" : "Show"}
       </ContextMenuItem>
+      {hasInterrupt(row, runtime) && (
+        <ContextMenuItem onSelect={() => interruptAgent(row, runtime)}>Interrupt</ContextMenuItem>
+      )}
       {row.launchedBy && onSelectHandle && (
         <ContextMenuItem onSelect={() => onSelectHandle(row.launchedBy!, rowTeam)}>
           Go to {viaName}

@@ -23,7 +23,7 @@ export interface TabTimerAgent {
 const STARTER_PREFIX = "builtin/";
 
 /** The runtime a starter key or an agent CLI names; Claude unless it names another CLI. */
-function runtimeOf(agentKey: string | null, cli: string | null | undefined): AgentRuntime {
+export function runtimeOf(agentKey: string | null, cli: string | null | undefined): AgentRuntime {
   const named = agentKey?.startsWith(STARTER_PREFIX) ? agentKey.slice(STARTER_PREFIX.length) : cli;
   return AGENT_RUNTIMES.find((runtime) => named?.startsWith(runtime)) ?? "claude";
 }
