@@ -264,6 +264,50 @@ describe("MessageMedia loading shimmer", () => {
   });
 });
 
+describe("chip target size", () => {
+  /** Each top-level rule's declarations, keyed by every selector in its list. */
+  function rules(css: string): Map<string, Record<string, string>> {
+    const out = new Map<string, Record<string, string>>();
+    const flat = css.replace(/\/\*[\s\S]*?\*\//g, "");
+    for (const [, selectors, body] of flat.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+      const decls = Object.fromEntries(
+        body!
+          .split(";")
+          .map((d) => d.split(":").map((x) => x.trim()))
+          .filter(([k, v]) => k && v)
+          .map(([k, ...v]) => [k!, v.join(":")]),
+      );
+      for (const sel of selectors!.split(",")) {
+        const key = sel.trim();
+        out.set(key, { ...out.get(key), ...decls });
+      }
+    }
+    return out;
+  }
+
+  it("inbox.css gives interactive chips a 24px hit area", () => {
+    const css = rules(readFileSync(resolve(__dirname, "../inbox.css"), "utf-8"));
+    const chip = css.get(".ibx-chip")!;
+    // The drawn chip stays as it is.
+    expect(chip.height).toBe("22px");
+    const border = parseFloat(chip.border!);
+    // A Load or Retry button, and the blocked card's source link, which fills its chip.
+    for (const [target, box] of [
+      ["button.ibx-chip", "button.ibx-chip"],
+      [".ibx-chip a", ".ibx-chip:has(a)"],
+    ] as const) {
+      expect(css.get(box)?.position, box).toBe("relative");
+      const after = css.get(`${target}::after`);
+      expect(after, target).toBeDefined();
+      expect(after!.content).toBe('""');
+      expect(after!.position).toBe("absolute");
+      // An absolute box is laid out from its container's padding edge, inside the border.
+      const [top, , bottom = top] = after!.inset!.split(/\s+/).map(parseFloat) as number[];
+      expect(22 - 2 * border - top! - bottom!, target).toBeGreaterThanOrEqual(24);
+    }
+  });
+});
+
 describe("MessageMedia size rule", () => {
   it("caps the figure's height when given one, and keeps the inbox box otherwise", async () => {
     const { rerender } = render(

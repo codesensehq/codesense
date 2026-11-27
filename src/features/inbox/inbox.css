@@ -813,6 +813,19 @@
 .ibx-chip:hover {
   color: var(--ibx-fg);
 }
+/* An interactive chip's target is 24px tall (WCAG 2.5.8) while it still draws at 22px: a box
+   1px past its top and bottom edges. The inset counts from inside the 1px border. A link inside
+   a chip (the blocked card's source) gets its whole chip as its target. */
+button.ibx-chip,
+.ibx-chip:has(a) {
+  position: relative;
+}
+button.ibx-chip::after,
+.ibx-chip a::after {
+  content: "";
+  position: absolute;
+  inset: -2px 0;
+}
 .ibx-body {
   flex: 1;
   min-height: 0;
