@@ -6,6 +6,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import type { ChatIdentity } from "@/features/workspace-chat/components/workspace-chat-body";
 import { WorkspaceChatMessageRow } from "@/features/workspace-chat/components/workspace-chat-message-row";
 import { useWorkspaceChat } from "@/features/workspace-chat/hooks/use-workspace-chat";
+import { colourForHandle } from "@/features/workspace-chat/lib/role-colour";
 import "@/features/workspace-chat/workspace-chat.css";
 import { CHAT_MEDIA_WS, chatMediaFixtures } from "./chat-media-fixtures";
 
@@ -18,9 +19,9 @@ import { CHAT_MEDIA_WS, chatMediaFixtures } from "./chat-media-fixtures";
  */
 
 const IDENTITIES: Record<string, ChatIdentity> = {
-  builder: { name: "Builder", color: "#4f8cff", initials: "B" },
-  reviewer: { name: "Reviewer", color: "#c76cf0", initials: "R" },
-  remote: { name: "Scout", color: "#2fb37a", initials: "S", machine: "studio" },
+  builder: { name: "Builder", color: colourForHandle("builder"), initials: "B" },
+  reviewer: { name: "Reviewer", color: colourForHandle("reviewer"), initials: "R" },
+  remote: { name: "Scout", color: colourForHandle("remote"), initials: "S", machine: "studio" },
 };
 
 const STATES = new Map(chatMediaFixtures().map((f) => [f.message.messageId, f.state]));
@@ -52,7 +53,7 @@ export function ChatMediaHarness() {
                     isLead
                     isHuman={false}
                     avatarGlyph={identity?.initials ?? "?"}
-                    roleColour={identity?.color ?? "#888"}
+                    roleColour={identity?.color ?? colourForHandle(message.from)}
                   />
                 </div>
               );
