@@ -20,6 +20,10 @@ pub(crate) const OPEN_SETTLE_LIMIT: Duration = Duration::from_secs(30);
 pub(crate) struct OpenLatch(Arc<(Mutex<bool>, Condvar)>);
 
 impl OpenLatch {
+    pub(crate) fn new() -> Self {
+        Self(Arc::new((Mutex::new(false), Condvar::new())))
+    }
+
     fn finish(&self) {
         let (done, changed) = &*self.0;
         *done.lock().unwrap_or_else(|e| e.into_inner()) = true;
@@ -119,7 +123,7 @@ impl<P: PreBindPort> PreBindReservation<P> {
     /// The launch is about to open a tab for `session_id`: a drop from here on kills it,
     /// once the open the returned value is held by has finished.
     pub(crate) fn opening_tab(&mut self, session_id: &str) -> OpenFinished {
-        let open = OpenLatch::default();
+        let open = OpenLatch::new();
         self.opened = Some((session_id.to_string(), open.clone()));
         OpenFinished(open)
     }
