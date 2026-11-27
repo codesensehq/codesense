@@ -135,10 +135,10 @@ describe("kit.chat stylesheet", () => {
     return out;
   }
 
-  it("keeps every selector inside the chat's own root, so a page's .log and .msg are not touched", () => {
+  it("keeps every selector inside the chat's own root or the GIF picker's, so a page's .log and .msg are not touched", () => {
     const all = selectors(css);
     expect(all.length).toBeGreaterThan(80);
-    for (const selector of all) expect(selector, selector).toMatch(/^\.cs-chat\b/);
+    for (const selector of all) expect(selector, selector).toMatch(/^\.cs-(chat|gif)\b/);
   });
 
   it("styles every class the chat's modules emit, and the page variant", () => {
@@ -166,7 +166,7 @@ describe("kit.chat stylesheet", () => {
     for (const name of ["lead", "you", "other"]) emitted.add(name);
     // cs-avatar is the kit stylesheet's own; the rest are the chat's.
     emitted.delete("cs-avatar");
-    // The root is styled as .cs-chat itself (it carries both classes).
+    // The root is styled as .cs-chat itself (it carries both classes); the GIF picker's roots are .cs-gif.gp and .cs-gif.gs.
     emitted.delete("chatcol");
     emitted.delete("page");
     expect(emitted.size).toBeGreaterThan(25);
@@ -269,6 +269,8 @@ describe("kit.chat", () => {
     expect(Object.keys(kitOf().chat).sort()).toEqual([
       "core",
       "createSendState",
+      "gifPicker",
+      "gifStage",
       "mount",
       "pinToBottom",
       "targetOf",

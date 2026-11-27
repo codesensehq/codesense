@@ -1738,6 +1738,26 @@
       .ib-box textarea::placeholder {
         color: var(--cs-muted-fg);
       }
+      /* The GIF button: first in the hint row, under the text it adds to. Its popover (kit.chat,
+         styled by /kit/v1/chat.css) sits above the To row at the composer's width. */
+      #composer {
+        --cs-gif-inset: var(--cs-space-3);
+      }
+      .ib-gif svg.i {
+        width: 20px;
+        height: 20px;
+        stroke-width: 1.5;
+      }
+      .ib-gif svg.i text {
+        fill: currentColor;
+        stroke: none;
+        font: 800 8px var(--cs-font-sans);
+        letter-spacing: 0.01em;
+      }
+      .ib-btn.ib-gif[aria-expanded="true"] {
+        background: var(--cs-hover);
+        color: var(--cs-fg);
+      }
       .ib-box .row {
         display: flex;
         align-items: center;
@@ -2436,6 +2456,8 @@
         }
       }
     </style>
+    <!-- kit.chat.gifPicker and gifStage: the GIF button's popover and the staged GIF. -->
+    <script src="/kit/v1/chat.js"></script>
   </head>
   <body>
     <svg width="0" height="0" style="position: absolute" aria-hidden="true">
@@ -2697,7 +2719,22 @@
                 rows="3"
               ></textarea>
               <div class="row">
-                <span>Enter to send · Shift+Enter for a new line</span><span class="sp"></span
+                <button
+                  type="button"
+                  class="ib-btn icon ib-gif"
+                  id="gif"
+                  aria-label="Add a GIF"
+                  title="Add a GIF"
+                  aria-haspopup="dialog"
+                  aria-expanded="false"
+                  hidden
+                >
+                  <svg class="i" viewBox="0 0 24 24">
+                    <rect x="2" y="5" width="20" height="14" rx="2.5" />
+                    <text x="12" y="15" text-anchor="middle">GIF</text>
+                  </svg></button
+                ><span id="composer-hint">Enter to send · Shift+Enter for a new line</span
+                ><span class="sp"></span
                 ><button type="submit" class="ib-btn primary" id="send" disabled>
                   Send <kbd data-keys="CmdOrCtrl+Enter"></kbd>
                 </button>
@@ -2827,6 +2864,9 @@
         let selected = null,
           active = null,
           recipient = "",
+          // The GIF popover (null without the kit chat bundle) and the staged GIF's handle.
+          gifPicker = null,
+          gifStaged = null,
           drafts = {},
           hiddenSent = [],
           sentArchivedThrough = {};
@@ -3675,6 +3715,9 @@
             (on("giphy.com") ? "giphy" : on("klipy.com") ? "klipy" : null);
           return provider === "giphy" || provider === "klipy" ? provider : null;
         }
+        // Each provider's attribution line, as src/shared/lib/gif-providers.ts writes it (a parity
+        // test keeps the two equal).
+        const GIF_POWERED_BY = { giphy: "Powered By GIPHY", klipy: "Powered by KLIPY" };
         function mediaImage(a, m, lightbox = false) {
           const wrap = h("figure", "ib-media loading");
           const w = a.width || 480,
@@ -3773,9 +3816,10 @@
             renderMarkdown(caption, m.text);
             bd.append(caption);
           }
-          // GIPHY's terms ask for a conspicuous "Powered by GIPHY", in every state.
+          // GIPHY's terms ask for a conspicuous "Powered By GIPHY", in every state.
           const attribution = () => {
-            if (mediaAttribution(a) === "giphy") bd.append(h("div", "ib-media-attr", "Powered by GIPHY"));
+            if (mediaAttribution(a) === "giphy")
+              bd.append(h("div", "ib-media-attr", GIF_POWERED_BY.giphy));
             return bd;
           };
           if (a.state === "cached" && /^[a-f0-9]{64}$/.test(a.sha256 || "")) {
@@ -3878,9 +3922,13 @@
           const foot = h("div", "ib-lb-foot");
           foot.append(h("figcaption", "", a.alt));
           const details = h("div", "row2");
-          const provider = { giphy: " · Powered by GIPHY", klipy: " · via KLIPY" }[mediaAttribution(a)];
+          const provider = GIF_POWERED_BY[mediaAttribution(a)];
           details.append(
-            h("span", "", mediaKind(a) + " · " + a.width + " × " + a.height + (provider || "")),
+            h(
+              "span",
+              "",
+              mediaKind(a) + " · " + a.width + " × " + a.height + (provider ? " · " + provider : ""),
+            ),
             h("span", "sp"),
           );
           const source = mediaSource(a, "Open source page · " + a.sourceHost + " ↗");
@@ -5718,7 +5766,18 @@
             document.createTextNode(sending ? "Sending…" : s.queue ? "Queue " : "Send "),
             keys,
           );
-          $("send").disabled = sending || !prefsReady || !!s.disabled || !$("draft").value.trim();
+          // A #role queue takes no attachments: no GIF button, and a staged GIF leaves.
+          if (isRole(recipient) && gifStaged) {
+            unstageGif();
+            showToast("GIFs can't go to a role queue");
+          }
+          if (isRole(recipient) && gifPicker?.isOpen()) gifPicker.close();
+          $("gif").hidden = !gifPicker || isRole(recipient);
+          $("send").disabled =
+            sending ||
+            !prefsReady ||
+            !!s.disabled ||
+            (gifStaged ? !gifStaged.valid() : !$("draft").value.trim());
           $("fallback").replaceChildren();
           $("fallback").hidden = !s.disabled || !s.role;
           if (s.disabled && s.role)
@@ -5738,6 +5797,8 @@
           replyMessageKey = null;
           navigation++;
           rememberDraft();
+          if (key !== selected) unstageGif();
+          gifPicker?.close();
           clearTimeout(tintTimer);
           clearTimeout(clearTintTimer);
           targetId = options.messageId ?? null;
@@ -7042,7 +7103,9 @@
             text = $("draft").value,
             to = recipient,
             parent = parentMessage(),
-            team = writeTeam(composeTeam);
+            team = writeTeam(composeTeam),
+            stage = gifStaged,
+            media = stage?.media();
           sending = true;
           $("composer-error").hidden = true;
           drawComposer();
@@ -7051,16 +7114,18 @@
             const result = await cs.act(
               isReply ? "replyAsHuman" : "sendAsHuman",
               isReply
-                ? { ...team, messageId: parent.messageId, text }
+                ? { ...team, messageId: parent.messageId, text, ...(media ? { media } : {}) }
                 : {
                     ...team,
                     to: to === human || isRole(to) ? to : "@" + to,
                     text,
                     ...(parent ? { inReplyTo: parent.messageId } : {}),
+                    ...(media ? { media } : {}),
                   },
             );
             if (result.status !== "sent")
               throw new Error(result.message || "Message was not accepted");
+            if (stage && gifStaged === stage) unstageGif();
             if (drafts[key]?.text === text) delete drafts[key];
             if (draftKey() === key && $("draft").value === text) {
               $("draft").value = "";
@@ -7083,6 +7148,64 @@
         $("draft").oninput = () => {
           rememberDraft();
           drawComposer();
+        };
+        // GIFs: kit.chat.gifPicker searches the provider Settings names, after the person allows it
+        // (ui:gif), and kit.chat.gifStage holds one pick above the text until it is sent. Without the
+        // kit chat bundle the button stays hidden.
+        async function gifUiState() {
+          try {
+            return (await cs.subscribe?.("ui:gif"))?.snapshot?.[0];
+          } finally {
+            cs.unsubscribe?.("ui:gif")?.catch?.(() => {});
+          }
+        }
+        // Enter in the alt field moves to the message and never sends, so the hint row says so
+        // while it has focus.
+        const COMPOSER_HINT = "Enter to send · Shift+Enter for a new line",
+          ALT_HINT = "Enter to go to your message";
+        const hintAlt = (on) => ($("composer-hint").textContent = on ? ALT_HINT : COMPOSER_HINT);
+        function stageGif(pick) {
+          unstageGif();
+          gifStaged = cs.kit?.chat?.gifStage?.($("draft").closest(".ib-box"), {
+            pick,
+            onRemove: () => {
+              gifStaged = null;
+              hintAlt(false);
+              drawComposer();
+              $("draft").focus({ preventScroll: true });
+            },
+            onChange: drawComposer,
+            onEnter: () => $("draft").focus({ preventScroll: true }),
+          });
+          const alt = gifStaged?.root.querySelector(".gs-in");
+          alt?.addEventListener("focus", () => hintAlt(true));
+          alt?.addEventListener("blur", () => hintAlt(false));
+          drawComposer();
+          gifStaged?.focusAlt();
+        }
+        // A field removed while it has focus fires no blur in every engine, so the hint is reset here.
+        function unstageGif() {
+          gifStaged?.clear();
+          gifStaged = null;
+          hintAlt(false);
+        }
+        gifPicker = cs.kit?.chat?.gifPicker
+          ? cs.kit.chat.gifPicker($("composer"), {
+              act: (verb, args) => cs.act(verb, args),
+              uiState: gifUiState,
+              anchor: $("gif"),
+              openSettings: () =>
+                cs
+                  .act("openGifSettings")
+                  .catch((e) => composerError("Settings didn't open: " + e.message)),
+              onStage: stageGif,
+              // A pick moves to its alt text; every other close goes back to the message.
+              onClose: (reason) => reason === "pick" || $("draft").focus({ preventScroll: true }),
+            })
+          : null;
+        $("gif").onclick = () => {
+          closeMenus(false);
+          gifPicker?.toggle();
         };
         $("recipient").onclick = () => {
           const open = $("picker").hidden;
@@ -7289,7 +7412,7 @@
           if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
           if (
             e.target.closest?.(
-              "input, textarea, select, [contenteditable]:not([contenteditable='false']), .ib-menu",
+              "input, textarea, select, [contenteditable]:not([contenteditable='false']), .ib-menu, .cs-gif",
             ) ||
             lightboxOwns(e.target) ||
             document.querySelector(".ib-menu:not([hidden])")

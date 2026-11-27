@@ -11,3 +11,18 @@ export interface RovingThread {
   release(): void;
 }
 export function rovingThread(log: HTMLElement): RovingThread;
+export interface RovingGrid {
+  /** The active cell, if any. */
+  active(): HTMLElement | null;
+  /** Make cell `index` active (clamped to the cells there are). */
+  moveTo(index: number): void;
+  /** Forget the active cell, as when the cells are replaced. */
+  reset(): void;
+  /** Stop listening to the list. */
+  release(): void;
+}
+/** A grid of `[role=option]` cells as one Tab stop, with aria-activedescendant on the list. */
+export function rovingGrid(
+  list: HTMLElement,
+  options?: { cols?: number; onMove?: (cell: HTMLElement) => void; onPick?: (cell: HTMLElement) => void },
+): RovingGrid;

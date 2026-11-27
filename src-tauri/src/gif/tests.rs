@@ -3225,3 +3225,50 @@ async fn search_page_result_names_provider() {
     assert!(!candidates.is_empty());
     assert!(candidates.iter().all(|c| c["provider"] == "klipy"));
 }
+
+#[test]
+fn gif_provider_reads_the_settings_alone_with_no_key_read_network_call_or_token() {
+    let h = harness();
+    let dir = h.dir.path();
+    let on = crate::media::Config::default();
+    let calls = h.store.calls.load(Ordering::SeqCst);
+    let read = |config: &crate::media::Config| page::provider_page(dir, config);
+    assert_eq!(
+        read(&on),
+        serde_json::json!({"status": "ok", "provider": "giphy"})
+    );
+    std::fs::write(dir.join(settings::FILE), r#"{"provider":"klipy"}"#).unwrap();
+    assert_eq!(
+        read(&on),
+        serde_json::json!({"status": "ok", "provider": "klipy"})
+    );
+    // No gif.json reads as its default: On, with KLIPY.
+    std::fs::remove_file(dir.join(settings::FILE)).unwrap();
+    assert_eq!(read(&on)["provider"], "klipy");
+    std::fs::write(
+        dir.join(settings::FILE),
+        r#"{"enabled":false,"provider":"giphy"}"#,
+    )
+    .unwrap();
+    let off = read(&on);
+    assert_eq!(off["status"], "error");
+    assert_eq!(off["error"], "noProvider");
+    assert_eq!(off["message"], GifError::NoProvider.message(None));
+    // The team's remote media Off comes first, whatever the settings say.
+    let media_off = crate::media::Config {
+        remote: crate::media::Remote::Off,
+        ..Default::default()
+    };
+    pin_giphy(dir);
+    assert_eq!(read(&media_off)["error"], "mediaOff");
+    for result in [read(&on), read(&media_off)] {
+        assert!(!result.to_string().contains(KEY), "{result}");
+    }
+    assert_eq!(
+        h.store.calls.load(Ordering::SeqCst),
+        calls,
+        "no keychain call"
+    );
+    assert_eq!(h.transport.requests(), 0, "no network call");
+    assert!(!dir.join(bucket::FILE).exists(), "no bucket token");
+}

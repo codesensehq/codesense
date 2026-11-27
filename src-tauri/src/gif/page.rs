@@ -2,7 +2,8 @@
 //! `gifSearch`, the Inbox pane's GIF search: the `gif_search` tool's candidates, each with its
 //! still as a `data:` URI the pane can show under its `img-src 'self' data:` CSP. The stills are
 //! fetched for the person's own search, so only the team's remote media Off stops them.
-//! `gifPicked` registers the person's pick with the provider.
+//! `gifPicked` registers the person's pick with the provider, and `gifProvider` names the
+//! provider a search would use, so the picker asks consent for that one.
 use super::{search, Candidate, GifError, GifService, Provider, SearchArgs};
 use crate::media::{preview, Config, Remote};
 use serde::Serialize;
@@ -52,6 +53,21 @@ pub(crate) async fn search_page(
     })
 }
 
+/// The `gifProvider` result from `dir`'s `gif.json` and the team `config` alone, with no keychain
+/// read, network call or bucket token: `{status:"ok", provider}`, or `mediaOff` when the team's
+/// remote media is off and `noProvider` when GIF search is off. A missing key is the search's to
+/// report, since only a keychain read can tell. Blocking: it reads one small file.
+pub(crate) fn provider_page(dir: &std::path::Path, config: &Config) -> serde_json::Value {
+    if config.remote == Remote::Off {
+        return GifError::MediaOff.tool_result();
+    }
+    let settings = super::settings::load(dir);
+    if !settings.enabled {
+        return GifError::NoProvider.tool_result();
+    }
+    serde_json::json!({"status": "ok", "provider": settings.provider})
+}
+
 /// The app's still client, made on first use.
 fn stills() -> Result<std::sync::Arc<preview::Http>, String> {
     static STILLS: std::sync::OnceLock<std::sync::Arc<preview::Http>> = std::sync::OnceLock::new();
@@ -62,8 +78,24 @@ fn stills() -> Result<std::sync::Arc<preview::Http>, String> {
     Ok(STILLS.get_or_init(|| http).clone())
 }
 
+/// `gifProvider` from the Inbox pane: the provider `gifSearch` would search for `team` now. The
+/// dispatcher admits it from the pane only.
+#[tauri::command]
+pub async fn gif_provider_page(
+    app: tauri::AppHandle,
+    team: crate::commands::agent_inbox::InboxTeam,
+) -> Result<serde_json::Value, String> {
+    let team = crate::commands::dashboard_launch::LaunchTeam::from(team);
+    let config = crate::media::config(&app, &team).await?;
+    let dir = super::settings::data_dir(&app)?;
+    tokio::task::spawn_blocking(move || provider_page(&dir, &config))
+        .await
+        .map_err(|e| e.to_string())
+}
+
 /// `gifSearch` from the Inbox pane: exactly one of `query` and `ids`, as `gif_search` takes
-/// them, at the Settings rating ceiling. The dispatcher admits it from the pane only.
+/// them, at the Settings rating ceiling. With `provider`, a search is refused before the key
+/// read when that isn't the active provider. The dispatcher admits it from the pane only.
 #[tauri::command]
 pub async fn gif_search_page(
     app: tauri::AppHandle,
@@ -71,6 +103,7 @@ pub async fn gif_search_page(
     query: Option<String>,
     ids: Option<Vec<String>>,
     limit: Option<i64>,
+    provider: Option<String>,
 ) -> Result<serde_json::Value, String> {
     let team = crate::commands::dashboard_launch::LaunchTeam::from(team);
     let config = crate::media::config(&app, &team).await?;
@@ -86,6 +119,7 @@ pub async fn gif_search_page(
         query: query.as_deref(),
         ids: ids.as_deref(),
         limit,
+        provider: provider.as_deref(),
         ..Default::default()
     };
     Ok(search_page(&service, &config, args, stills.as_ref(), preview::DEADLINE).await)

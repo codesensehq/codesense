@@ -10363,13 +10363,25 @@ export type GifSearchPageResult =
       message: string;
       retryAfter?: number;
     };
-/** The Inbox pane's GIF search: exactly one of `query` and `ids`, as `gif_search` takes them. */
+/** The Inbox pane's GIF search: exactly one of `query` and `ids`, as `gif_search` takes them.
+ *  With `provider`, it is refused as `badQuery` before the key read unless that provider is
+ *  still the active one. */
 export const gifSearchPage = (
   team: InboxTeam,
   query: string | null,
   ids: string[] | null,
   limit: number | null,
-) => invoke<GifSearchPageResult>("gif_search_page", { team, query, ids, limit });
+  provider: GifProvider | null = null,
+) => invoke<GifSearchPageResult>("gif_search_page", { team, query, ids, limit, provider });
+
+export type GifProviderPageResult =
+  | { status: "ok"; provider: GifProvider }
+  | { status: "error"; error: "noProvider" | "mediaOff"; message: string };
+/** The provider the Inbox pane's GIF search would use for `team`, read from the settings with no
+ *  keychain read or network call: `noProvider` while GIF search is off, `mediaOff` while the
+ *  team's remote media is off. */
+export const gifProviderPage = (team: InboxTeam) =>
+  invoke<GifProviderPageResult>("gif_provider_page", { team });
 
 export type GifPickedResult =
   | { status: "ok" }

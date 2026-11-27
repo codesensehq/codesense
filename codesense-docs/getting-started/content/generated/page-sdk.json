@@ -20,8 +20,8 @@
     "localMachinePhrase"
   ],
   "counts": {
-    "bridgeMethods": 125,
-    "actionVerbs": 67,
+    "bridgeMethods": 127,
+    "actionVerbs": 69,
     "readVerbs": 58,
     "surfaceMembers": 59
   },
@@ -2100,9 +2100,80 @@
       "feature": null
     },
     {
+      "name": "gifProvider",
+      "owner": "VerbMethods",
+      "signature": "gifProvider(args?: {\n      org?: string;\n      team?: string;\n      [key: string]: unknown;\n    }): Promise<{\n      provider: \"giphy\" | \"klipy\";\n      status: \"ok\";\n      [key: string]: unknown;\n    } | {\n      error: \"noProvider\" | \"mediaOff\";\n      message: string;\n      status: \"error\";\n      [key: string]: unknown;\n    }>;",
+      "description": "read · inbox:write",
+      "sourceRef": "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts",
+      "class": "read",
+      "grant": "inbox:write",
+      "mcpTwin": null,
+      "presentationOnlyReason": "The Inbox pane GIF picker's provider, read from Settings with no search",
+      "argsSchema": {
+        "additionalProperties": true,
+        "properties": {
+          "org": {
+            "type": "string"
+          },
+          "team": {
+            "type": "string"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "resultSchema": {
+        "oneOf": [
+          {
+            "properties": {
+              "provider": {
+                "enum": [
+                  "giphy",
+                  "klipy"
+                ]
+              },
+              "status": {
+                "const": "ok"
+              }
+            },
+            "required": [
+              "status",
+              "provider"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "error": {
+                "enum": [
+                  "noProvider",
+                  "mediaOff"
+                ]
+              },
+              "message": {
+                "type": "string"
+              },
+              "status": {
+                "const": "error"
+              }
+            },
+            "required": [
+              "status",
+              "error",
+              "message"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "action": true,
+      "confirmable": false,
+      "feature": null
+    },
+    {
       "name": "gifSearch",
       "owner": "VerbMethods",
-      "signature": "gifSearch(args?: {\n      ids?: string[];\n      limit?: number;\n      org?: string;\n      query?: string;\n      team?: string;\n      [key: string]: unknown;\n    }): Promise<{\n      candidates: Array<{\n        autoLoads: boolean;\n        height: number;\n        id: string;\n        previewData?: string;\n        previewUrl: string;\n        provider: \"giphy\" | \"klipy\";\n        title: string;\n        url: string;\n        width: number;\n        [key: string]: unknown;\n      }>;\n      provider: \"giphy\" | \"klipy\";\n      status: \"ok\";\n      [key: string]: unknown;\n    } | {\n      error: \"noProvider\" | \"keychainUnavailable\" | \"invalidKey\" | \"rateLimited\" | \"providerUnavailable\" | \"badQuery\" | \"mediaOff\";\n      message: string;\n      retryAfter?: number;\n      status: \"error\";\n      [key: string]: unknown;\n    }>;",
+      "signature": "gifSearch(args?: {\n      ids?: string[];\n      limit?: number;\n      org?: string;\n      provider?: \"giphy\" | \"klipy\";\n      query?: string;\n      team?: string;\n      [key: string]: unknown;\n    }): Promise<{\n      candidates: Array<{\n        autoLoads: boolean;\n        height: number;\n        id: string;\n        previewData?: string;\n        previewUrl: string;\n        provider: \"giphy\" | \"klipy\";\n        title: string;\n        url: string;\n        width: number;\n        [key: string]: unknown;\n      }>;\n      provider: \"giphy\" | \"klipy\";\n      status: \"ok\";\n      [key: string]: unknown;\n    } | {\n      error: \"noProvider\" | \"keychainUnavailable\" | \"invalidKey\" | \"rateLimited\" | \"providerUnavailable\" | \"badQuery\" | \"mediaOff\";\n      message: string;\n      retryAfter?: number;\n      status: \"error\";\n      [key: string]: unknown;\n    }>;",
       "description": "read · inbox:write",
       "sourceRef": "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts",
       "class": "read",
@@ -2128,6 +2199,12 @@
           },
           "org": {
             "type": "string"
+          },
+          "provider": {
+            "enum": [
+              "giphy",
+              "klipy"
+            ]
           },
           "query": {
             "maxLength": 100,
@@ -4636,6 +4713,36 @@
       },
       "resultSchema": {
         "description": "JSON result of the existing host handler; see get_live_data_contract for its fields."
+      },
+      "action": true,
+      "confirmable": false,
+      "feature": null
+    },
+    {
+      "name": "openGifSettings",
+      "owner": "VerbMethods",
+      "signature": "openGifSettings(args?: Record<string, unknown>): Promise<{\n      opened: true;\n      [key: string]: unknown;\n    }>;",
+      "description": "read · inbox:write",
+      "sourceRef": "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts",
+      "class": "read",
+      "grant": "inbox:write",
+      "mcpTwin": null,
+      "presentationOnlyReason": "Opens Settings at GIF search from the Inbox pane GIF picker",
+      "argsSchema": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      },
+      "resultSchema": {
+        "properties": {
+          "opened": {
+            "const": true
+          }
+        },
+        "required": [
+          "opened"
+        ],
+        "type": "object"
       },
       "action": true,
       "confirmable": false,
@@ -11254,6 +11361,75 @@
       "module": "inbox"
     },
     {
+      "name": "gifProvider",
+      "class": "read",
+      "argsSchema": {
+        "additionalProperties": true,
+        "properties": {
+          "org": {
+            "type": "string"
+          },
+          "team": {
+            "type": "string"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "resultSchema": {
+        "oneOf": [
+          {
+            "properties": {
+              "provider": {
+                "enum": [
+                  "giphy",
+                  "klipy"
+                ]
+              },
+              "status": {
+                "const": "ok"
+              }
+            },
+            "required": [
+              "status",
+              "provider"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "error": {
+                "enum": [
+                  "noProvider",
+                  "mediaOff"
+                ]
+              },
+              "message": {
+                "type": "string"
+              },
+              "status": {
+                "const": "error"
+              }
+            },
+            "required": [
+              "status",
+              "error",
+              "message"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "grant": "inbox:write",
+      "inboxTarget": true,
+      "confirmable": false,
+      "mcpTwin": null,
+      "presentationOnlyReason": "The Inbox pane GIF picker's provider, read from Settings with no search",
+      "audited": true,
+      "action": true,
+      "module": "inbox"
+    },
+    {
       "name": "gifSearch",
       "class": "read",
       "argsSchema": {
@@ -11275,6 +11451,12 @@
           },
           "org": {
             "type": "string"
+          },
+          "provider": {
+            "enum": [
+              "giphy",
+              "klipy"
+            ]
           },
           "query": {
             "maxLength": 100,
@@ -13752,6 +13934,34 @@
       "audited": true,
       "action": true,
       "module": "processes"
+    },
+    {
+      "name": "openGifSettings",
+      "class": "read",
+      "argsSchema": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      },
+      "resultSchema": {
+        "properties": {
+          "opened": {
+            "const": true
+          }
+        },
+        "required": [
+          "opened"
+        ],
+        "type": "object"
+      },
+      "grant": "inbox:write",
+      "inboxTarget": false,
+      "confirmable": false,
+      "mcpTwin": null,
+      "presentationOnlyReason": "Opens Settings at GIF search from the Inbox pane GIF picker",
+      "audited": true,
+      "action": true,
+      "module": "inbox"
     },
     {
       "name": "openLauncher",
@@ -22249,9 +22459,62 @@
       "mcpTwin": null
     },
     {
+      "verb": "gifProvider",
+      "tier": "read",
+      "args": "{\"additionalProperties\":true,\"properties\":{\"org\":{\"type\":\"string\"},\"team\":{\"type\":\"string\"}},\"required\":[],\"type\":\"object\"}",
+      "description": "read · inbox:write",
+      "denyExample": "denied: grant",
+      "result": {
+        "oneOf": [
+          {
+            "properties": {
+              "provider": {
+                "enum": [
+                  "giphy",
+                  "klipy"
+                ]
+              },
+              "status": {
+                "const": "ok"
+              }
+            },
+            "required": [
+              "status",
+              "provider"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "error": {
+                "enum": [
+                  "noProvider",
+                  "mediaOff"
+                ]
+              },
+              "message": {
+                "type": "string"
+              },
+              "status": {
+                "const": "error"
+              }
+            },
+            "required": [
+              "status",
+              "error",
+              "message"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "grant": "inbox:write",
+      "mcpTwin": null
+    },
+    {
       "verb": "gifSearch",
       "tier": "read",
-      "args": "{\"additionalProperties\":true,\"properties\":{\"ids\":{\"items\":{\"pattern\":\"^[A-Za-z0-9_-]{1,128}$\",\"type\":\"string\"},\"maxItems\":10,\"minItems\":1,\"type\":\"array\"},\"limit\":{\"maximum\":10,\"minimum\":1,\"type\":\"integer\"},\"org\":{\"type\":\"string\"},\"query\":{\"maxLength\":100,\"minLength\":1,\"type\":\"string\"},\"team\":{\"type\":\"string\"}},\"required\":[],\"type\":\"object\"}",
+      "args": "{\"additionalProperties\":true,\"properties\":{\"ids\":{\"items\":{\"pattern\":\"^[A-Za-z0-9_-]{1,128}$\",\"type\":\"string\"},\"maxItems\":10,\"minItems\":1,\"type\":\"array\"},\"limit\":{\"maximum\":10,\"minimum\":1,\"type\":\"integer\"},\"org\":{\"type\":\"string\"},\"provider\":{\"enum\":[\"giphy\",\"klipy\"]},\"query\":{\"maxLength\":100,\"minLength\":1,\"type\":\"string\"},\"team\":{\"type\":\"string\"}},\"required\":[],\"type\":\"object\"}",
       "description": "read · inbox:write",
       "denyExample": "denied: grant",
       "result": {
@@ -23789,6 +24052,26 @@
         "description": "JSON result of the existing host handler; see get_live_data_contract for its fields."
       },
       "grant": "context:read",
+      "mcpTwin": null
+    },
+    {
+      "verb": "openGifSettings",
+      "tier": "read",
+      "args": "{\"additionalProperties\":false,\"properties\":{},\"type\":\"object\"}",
+      "description": "read · inbox:write",
+      "denyExample": "denied: grant",
+      "result": {
+        "properties": {
+          "opened": {
+            "const": true
+          }
+        },
+        "required": [
+          "opened"
+        ],
+        "type": "object"
+      },
+      "grant": "inbox:write",
       "mcpTwin": null
     },
     {
@@ -25562,7 +25845,7 @@
     },
     {
       "tier": "read",
-      "verbs": "commands.run, files.list, files.read, getWorkspaceStatus, gifSearch, readWorkspace, routineResult, routineStatus",
+      "verbs": "commands.run, files.list, files.read, getWorkspaceStatus, gifProvider, gifSearch, openGifSettings, readWorkspace, routineResult, routineStatus",
       "note": "read class; Rust checks the effective grant on every call."
     },
     {
@@ -25582,9 +25865,9 @@
     }
   ],
   "sources": {
-    "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts": "1354cc633b5b076c553ba6e3690d5dfbed16533515fcacdd69068e30a7c18fc3",
-    "src-tauri/src/verbs/registry.generated.json": "a127a419054e6b27a27e2a2ccb735295fd8418c9ef5c2c115f8684238df0edcf",
-    "src-tauri/src/verbs/registry.rs": "499877204d4ca8d40953b934024355ba150e534386e60f086e090159649ee6b0",
+    "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts": "5cbffc0c64cef7a82aaa81ea690843d5af9417eaf0329516f8a77006066dc441",
+    "src-tauri/src/verbs/registry.generated.json": "21a4f01b15c216e0fb749e4b95dc8e7ad0f7fc09ddca3fe3f0fb3a29d5ad5e60",
+    "src-tauri/src/verbs/registry.rs": "d601a2313ffe616d7a909537685ff0d770106172173d01efeb8124886a97469f",
     "src-tauri/src/records/binding.rs": "8952cdcd9bfee677a0ecc60a382d876ecac5fdddcacbcb1508bb01ad9f501fa7",
     "src-tauri/src/records/schema.rs": "36ed3b3ae3547e1e622f007c2480d3fad19c463e3b3636242fb94edcb4286a29",
     "src-tauri/src/http/routes/viewer.rs": "cb3b267840ff535fcdf4bf56677a6885cd05d5abae2f838e99fc02ce25779657",

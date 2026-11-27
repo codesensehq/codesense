@@ -1103,6 +1103,7 @@ pub(crate) mod tests {
                 "context",
                 "prefs",
                 "setPrefs",
+                "setUiState",
                 "inbox",
                 "inboxRollup",
                 "roles",
@@ -1122,7 +1123,9 @@ pub(crate) mod tests {
                 "sendAsHuman",
                 "replyAsHuman",
                 "gifSearch",
+                "gifProvider",
                 "gifPicked",
+                "openGifSettings",
                 "commands.run",
             ] {
                 let spec = crate::verbs::builtin_registry().get(verb).unwrap();

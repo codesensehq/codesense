@@ -7,6 +7,11 @@ import { resolveScenario } from "../scenario";
 import {
   agentTeamActivitySnapshots,
   agentTeamInboxHandlers,
+  MOCK_GIF_ERRORS,
+  MOCK_GIF_KEY,
+  mockGifWorld,
+  type MockGifWorld,
+  type MockInboxRow,
   agentTeamsOrgHandlers,
   agentTeamSessions,
   HEADLESS_HANDLE,
@@ -24,8 +29,8 @@ type Row = {
   attachments?: unknown[];
 };
 
-function handlers() {
-  return agentTeamInboxHandlers(() => {}) as unknown as Record<
+function handlers(options: Parameters<typeof agentTeamInboxHandlers>[1] = {}) {
+  return agentTeamInboxHandlers(() => {}, options) as unknown as Record<
     string,
     (args: Record<string, unknown>) => unknown
   >;
@@ -107,6 +112,38 @@ describe("agent team inbox mock: parity with the real human send and status", ()
     });
   });
 
+  it("sends a reply to the message's Reply-To, and refuses the person's GIF to a role queue", () => {
+    const base = { fromName: "Triage", toName: "human", text: "q", createdAtMs: 0, unread: false };
+    const extraRows: MockInboxRow[] = [
+      { ...base, messageId: 901, from: "BUG-151#triage", to: "human", inReplyTo: null },
+      { ...base, messageId: 902, from: "BUG-151#triage", to: "human", inReplyTo: null },
+      { ...base, messageId: 903, from: "BUG-151#triage", to: "human", inReplyTo: null },
+    ];
+    extraRows[0]!.replyTo = "role:reviewer";
+    extraRows[1]!.replyTo = "role:human";
+    const h = handlers({ extraRows });
+    const media = { url: "https://media.giphy.com/media/mockgif1/giphy.gif", alt: "A cat" };
+    expect(h.reply_as_human!({ messageId: 901, text: "here", media })).toEqual({
+      status: "invalid",
+      message: "Not sent: media can't go to a role queue.",
+    });
+    const text = h.reply_as_human!({ messageId: 901, text: "here" }) as { messageId: number };
+    expect(text).toMatchObject({ status: "sent" });
+    expect(rollup(h).find((m) => m.id === text.messageId)).toMatchObject({
+      to: null,
+      toRole: "reviewer",
+    });
+    // `role:human` still means the person, and a GIF there is fine.
+    expect(h.reply_as_human!({ messageId: 902, text: "", media })).toMatchObject({
+      status: "sent",
+    });
+    const plain = h.reply_as_human!({ messageId: 903, text: "", media }) as { messageId: number };
+    expect(rollup(h).find((m) => m.id === plain.messageId)).toMatchObject({
+      to: "BUG-151#triage",
+      attachments: [expect.objectContaining({ alt: "A cat" })],
+    });
+  });
+
   it("answers the Inbox pane's GIF search and pick", () => {
     const h = handlers();
     const found = h.gif_search_page!({ query: "cat" }) as {
@@ -121,7 +158,76 @@ describe("agent team inbox mock: parity with the real human send and status", ()
     expect(h.gif_picked!({ provider: "giphy", id: found.candidates[0]!.id })).toEqual({
       status: "ok",
     });
-    expect(h.gif_picked!({ provider: "giphy", id: "nope" })).toMatchObject({ status: "error" });
+    // An id no search returned is a quiet no-op, as on the host; only a malformed one is refused.
+    expect(h.gif_picked!({ provider: "giphy", id: "nope" })).toEqual({ status: "ok" });
+    expect(h.gif_picked!({ provider: "giphy", id: "no pe" })).toMatchObject({ error: "badQuery" });
+    expect(h.gif_picked!({ provider: "tenor", id: "mockgif1" })).toMatchObject({
+      error: "badQuery",
+    });
+  });
+
+  it("answers every GIF error code the host returns, with retryAfter only when rate limited", () => {
+    const gif = mockGifWorld();
+    const h = handlers({ gif });
+    for (const code of MOCK_GIF_ERRORS) {
+      gif.error = code;
+      const result = h.gif_search_page!({ query: "cat" }) as Record<string, unknown>;
+      expect(result).toMatchObject({ status: "error", error: code, message: expect.any(String) });
+      expect("retryAfter" in result).toBe(code === "rateLimited");
+    }
+    gif.error = "rateLimited";
+    gif.retryAfter = 30;
+    expect(h.gif_search_page!({ query: "cat" })).toMatchObject({
+      retryAfter: 30,
+      message: "GIPHY search is paused. Try again in 30 seconds.",
+    });
+  });
+
+  it("reads the GIF provider from the settings alone, and refuses a search for another one", () => {
+    const gif = mockGifWorld("?gifProvider=klipy");
+    const h = handlers({ gif });
+    expect(h.gif_provider_page!({})).toEqual({ status: "ok", provider: "klipy" });
+    const found = h.gif_search_page!({ query: "cat", provider: "klipy" }) as {
+      provider: string;
+      candidates: { provider: string; url: string }[];
+    };
+    expect(found.provider).toBe("klipy");
+    expect(found.candidates.every((c) => c.provider === "klipy")).toBe(true);
+    expect(new URL(found.candidates[0]!.url).host).toMatch(/\.klipy\.com$/);
+    // Settings switched the provider while the picker held the old one.
+    expect(h.gif_search_page!({ query: "cat", provider: "giphy" })).toMatchObject({
+      status: "error",
+      error: "badQuery",
+    });
+    // A key error is the search's to find: the provider read never reads the key.
+    gif.error = "invalidKey";
+    expect(h.gif_provider_page!({})).toEqual({ status: "ok", provider: "klipy" });
+    gif.error = "mediaOff";
+    expect(h.gif_provider_page!({})).toMatchObject({ status: "error", error: "mediaOff" });
+    gif.error = null;
+    gif.enabled = false;
+    expect(h.gif_provider_page!({})).toMatchObject({ status: "error", error: "noProvider" });
+    expect(h.gif_search_page!({ query: "cat" })).toMatchObject({ error: "noProvider" });
+  });
+
+  it("never puts the saved key in a GIF verb result", () => {
+    const worlds: MockGifWorld[] = [];
+    for (const provider of ["giphy", "klipy"] as const)
+      for (const enabled of [true, false])
+        for (const error of [null, ...MOCK_GIF_ERRORS])
+          worlds.push({ ...mockGifWorld(), provider, enabled, error, key: MOCK_GIF_KEY });
+    for (const gif of worlds) {
+      const h = handlers({ gif });
+      const results = [
+        h.gif_provider_page!({}),
+        h.gif_search_page!({ query: "cat" }),
+        h.gif_search_page!({ query: "cat", provider: gif.provider }),
+        h.gif_search_page!({ ids: ["mockgif1"] }),
+        h.gif_search_page!({}),
+        h.gif_picked!({ provider: gif.provider, id: "mockgif1" }),
+      ];
+      for (const result of results) expect(JSON.stringify(result)).not.toContain(MOCK_GIF_KEY);
+    }
   });
 
   it("reads #role:<id> and role:<id> as the role <id>, as the real send does", () => {

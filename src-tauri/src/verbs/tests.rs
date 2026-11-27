@@ -1297,6 +1297,132 @@ fn gif_search_is_an_inbox_pane_only_inbox_write_with_no_prompt() {
 }
 
 #[test]
+fn only_the_inbox_pane_writes_the_gif_pickers_consent() {
+    use crate::dashboard_stream::frame::FrameCallerKind;
+    let frame = |kind, inbox| {
+        let mut frame = review_media_frame(kind, inbox);
+        frame.effective_grant.push("sessions:read".into());
+        frame
+    };
+    let consent = json!({"topic":"ui:gif","patch":{"consent":{"giphy":true}}});
+    for (kind, inbox) in [
+        (FrameCallerKind::Message, false),
+        (FrameCallerKind::Message, true),
+        (FrameCallerKind::Builtin, false),
+    ] {
+        assert_eq!(
+            Dispatcher::default().dispatch_frame(
+                &frame(kind, inbox),
+                "setUiState",
+                consent.clone(),
+                &Policy::default(),
+                0
+            ),
+            Decision::Deny {
+                reason: "denied: setUiState requires the Inbox pane".into()
+            },
+            "{kind:?} inbox={inbox}"
+        );
+    }
+    let pane = frame(FrameCallerKind::Builtin, true);
+    assert!(matches!(
+        Dispatcher::default().dispatch_frame(&pane, "setUiState", consent, &Policy::default(), 0),
+        Decision::Admit { .. }
+    ));
+    // A topic that is not a string is refused in the pane and out of it: the bridge would write ["ui:gif"] as ui:gif.
+    let page = frame(FrameCallerKind::Builtin, false);
+    for topic in [json!(["ui:gif"]), json!({"ui:gif": true}), json!(null)] {
+        for who in [&pane, &page] {
+            assert_eq!(
+                Dispatcher::default().dispatch_frame(
+                    who,
+                    "setUiState",
+                    json!({"topic":topic.clone(),"patch":{"consent":{"giphy":true}}}),
+                    &Policy::default(),
+                    0
+                ),
+                Decision::Deny {
+                    reason: "invalid: setUiState topic must be a string".into()
+                },
+                "{topic}"
+            );
+        }
+    }
+    // Another page keeps its own UI state; only the ui:gif topic is the pane's.
+    assert!(matches!(
+        Dispatcher::default().dispatch_frame(
+            &page,
+            "setUiState",
+            json!({"topic":"ui:right-pane","patch":{"tab":"inbox"}}),
+            &Policy::default(),
+            0
+        ),
+        Decision::Admit { .. }
+    ));
+    // A near miss is not the picker's topic: it meets no pane test, and its write goes to its own key.
+    for topic in [" ui:gif", "UI:GIF", "ui:gif "] {
+        assert!(
+            matches!(
+                Dispatcher::default().dispatch_frame(
+                    &page,
+                    "setUiState",
+                    json!({"topic":topic,"patch":{"consent":{"giphy":true}}}),
+                    &Policy::default(),
+                    0
+                ),
+                Decision::Admit { .. }
+            ),
+            "{topic:?}"
+        );
+    }
+}
+
+#[test]
+fn a_subscription_topic_must_be_a_string() {
+    // The capability a topic needs compares it as a string: ["inbox"] would pass on sessions:read.
+    let mut page = review_media_frame(
+        crate::dashboard_stream::frame::FrameCallerKind::Builtin,
+        false,
+    );
+    page.effective_grant.push("sessions:read".into());
+    for verb in ["subscribe", "unsubscribe", "page"] {
+        for topic in [
+            json!(["inbox"]),
+            json!(["pins"]),
+            json!({"inbox": true}),
+            json!(null),
+        ] {
+            assert_eq!(
+                Dispatcher::default().dispatch_frame(
+                    &page,
+                    verb,
+                    json!({"topic":topic.clone(),"cursor":"c1"}),
+                    &Policy::default(),
+                    0
+                ),
+                Decision::Deny {
+                    reason: format!("invalid: {verb} topic must be a string")
+                },
+                "{verb} {topic}"
+            );
+        }
+        assert!(
+            matches!(
+                Dispatcher::default().dispatch_frame(
+                    &page,
+                    verb,
+                    json!({"topic":"sessions","cursor":"c1"}),
+                    &Policy::default(),
+                    0
+                ),
+                Decision::Admit { .. }
+            ),
+            "{verb} sessions"
+        );
+    }
+}
+
+#[test]
 fn gif_search_audit_names_the_query_length_never_the_text() {
     let caller = caller("builtin");
     let target =
@@ -1307,6 +1433,149 @@ fn gif_search_audit_names_the_query_length_never_the_text() {
     );
     assert_eq!(target(json!({"ids":["a","b"]})).as_deref(), Some("2 ids"));
     assert_eq!(target(json!({})), None);
+}
+
+#[test]
+fn gif_provider_is_an_inbox_pane_only_read_with_no_prompt() {
+    use crate::dashboard_stream::frame::FrameCallerKind;
+    let registry = Registry::default();
+    let verb = registry.get("gifProvider").unwrap();
+    assert_eq!(verb.grant, "inbox:write");
+    assert_eq!(verb.class, Class::Read);
+    assert!(verb.inbox_target && verb.audited && verb.action && !verb.confirmable);
+    assert!(verb.mcp_twin.is_none() && verb.presentation_only_reason.is_some());
+    for result in [
+        json!({"status":"ok","provider":"klipy"}),
+        json!({"status":"error","error":"mediaOff","message":"off"}),
+        json!({"status":"error","error":"noProvider","message":"off"}),
+    ] {
+        assert!(
+            jsonschema::is_valid(&verb.result_schema, &result),
+            "{result}"
+        );
+    }
+    for result in [
+        json!({"status":"ok"}),
+        json!({"status":"ok","provider":"tenor"}),
+        json!({"status":"error","error":"invalidKey","message":"a key error is the search's"}),
+    ] {
+        assert!(
+            !jsonschema::is_valid(&verb.result_schema, &result),
+            "{result}"
+        );
+    }
+    for (kind, inbox) in [
+        (FrameCallerKind::Message, false),
+        (FrameCallerKind::Message, true),
+        (FrameCallerKind::Builtin, false),
+    ] {
+        assert_eq!(
+            Dispatcher::default().dispatch_frame(
+                &review_media_frame(kind, inbox),
+                "gifProvider",
+                json!({}),
+                &Policy::default(),
+                0
+            ),
+            Decision::Deny {
+                reason: "denied: gifProvider requires the Inbox pane".into()
+            },
+            "{kind:?} inbox={inbox}"
+        );
+    }
+    let mut pane = review_media_frame(FrameCallerKind::Builtin, true);
+    assert!(matches!(
+        Dispatcher::default().dispatch_frame(
+            &pane,
+            "gifProvider",
+            json!({}),
+            &Policy::default(),
+            0
+        ),
+        Decision::Admit { .. }
+    ));
+    pane.effective_grant.clear();
+    assert_eq!(
+        Dispatcher::default().dispatch_frame(
+            &pane,
+            "gifProvider",
+            json!({}),
+            &Policy::default(),
+            0
+        ),
+        Decision::Deny {
+            reason: "denied: grant".into()
+        },
+        "the pane still needs inbox:write"
+    );
+}
+
+#[test]
+fn open_gif_settings_is_an_inbox_pane_only_read_with_no_args() {
+    use crate::dashboard_stream::frame::FrameCallerKind;
+    let registry = Registry::default();
+    let verb = registry.get("openGifSettings").unwrap();
+    assert_eq!(verb.grant, "inbox:write");
+    assert_eq!(verb.class, Class::Read);
+    assert!(!verb.inbox_target && verb.audited && verb.action && !verb.confirmable);
+    assert!(verb.mcp_twin.is_none() && verb.presentation_only_reason.is_some());
+    assert!(jsonschema::is_valid(&verb.args_schema, &json!({})));
+    for args in [
+        json!({"section":"general"}),
+        json!({"org":"acme","team":"core"}),
+        json!([]),
+    ] {
+        assert!(!jsonschema::is_valid(&verb.args_schema, &args), "{args}");
+    }
+    assert!(jsonschema::is_valid(
+        &verb.result_schema,
+        &json!({"opened":true})
+    ));
+    assert!(!jsonschema::is_valid(
+        &verb.result_schema,
+        &json!({"opened":false})
+    ));
+    for (kind, inbox) in [
+        (FrameCallerKind::Message, false),
+        (FrameCallerKind::Message, true),
+        (FrameCallerKind::Builtin, false),
+    ] {
+        assert_eq!(
+            Dispatcher::default().dispatch_frame(
+                &review_media_frame(kind, inbox),
+                "openGifSettings",
+                json!({}),
+                &Policy::default(),
+                0
+            ),
+            Decision::Deny {
+                reason: "denied: openGifSettings requires the Inbox pane".into()
+            },
+            "{kind:?} inbox={inbox}"
+        );
+    }
+    assert!(matches!(
+        Dispatcher::default().dispatch_frame(
+            &review_media_frame(FrameCallerKind::Builtin, true),
+            "openGifSettings",
+            json!({}),
+            &Policy::default(),
+            0
+        ),
+        Decision::Admit { .. }
+    ));
+}
+
+#[test]
+fn gif_search_takes_the_provider_the_picker_asked_consent_for() {
+    let registry = Registry::default();
+    let verb = registry.get("gifSearch").unwrap();
+    for provider in ["giphy", "klipy"] {
+        let args = json!({"query":"cat","provider":provider});
+        assert!(jsonschema::is_valid(&verb.args_schema, &args), "{args}");
+    }
+    let args = json!({"query":"cat","provider":"tenor"});
+    assert!(!jsonschema::is_valid(&verb.args_schema, &args), "{args}");
 }
 
 #[test]

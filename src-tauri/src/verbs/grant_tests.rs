@@ -187,7 +187,10 @@ fn open_frame_admits_registered_verbs_except_inbox_media_and_team_safe_denies_te
         None,
     );
     for verb in builtin_registry().all() {
-        if matches!(verb.name.as_str(), "loadMedia" | "gifSearch" | "gifPicked") {
+        if matches!(
+            verb.name.as_str(),
+            "loadMedia" | "gifSearch" | "gifProvider" | "gifPicked" | "openGifSettings"
+        ) {
             assert!(matches!(
                 Dispatcher::default().dispatch_frame(
                     &record,
@@ -200,12 +203,21 @@ fn open_frame_admits_registered_verbs_except_inbox_media_and_team_safe_denies_te
             ));
             continue;
         }
+        // A topic verb needs a string topic; sessions asks only for sessions:read.
+        let args = if matches!(
+            verb.name.as_str(),
+            "setUiState" | "subscribe" | "unsubscribe" | "page"
+        ) {
+            json!({"topic":"sessions"})
+        } else {
+            json!({})
+        };
         assert!(
             matches!(
                 Dispatcher::default().dispatch_frame(
                     &record,
                     &verb.name,
-                    json!({}),
+                    args,
                     &Policy::default(),
                     0
                 ),

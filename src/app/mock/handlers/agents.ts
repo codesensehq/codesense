@@ -40,6 +40,7 @@ import { SESSION_STATE_CHANGED_EVENT } from "@/features/viewer/lib/session-event
 import {
   AGENT_TEAM_ASK,
   agentTeamInboxHandlers,
+  mockGifWorld,
   agentTeamSessions,
   HAND_STARTED_STATUS,
   isAgentTeamWorld,
@@ -1496,6 +1497,7 @@ export function agentHandlers(
   const inbox = agentTeamInboxHandlers((event, payload = null) => events.emit(event, payload), {
     simulate: true,
     sessions: teamSessions,
+    gif: mockGifWorld(search),
   });
   const hub = agentListHub(events, {
     ...agentTeamListWorld(search, () => teamSessions),

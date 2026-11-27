@@ -14,6 +14,7 @@ import {
 } from "@/tauri/commands";
 import { buildTeamKey } from "@/shared/lib/team-key";
 import { openRoutineDraft } from "@/features/routines/routines-virtual-tab";
+import { openSettingsTab } from "@/features/settings/lib/open-settings-tab";
 import { messageDocKey, INITIAL_MESSAGE_HEIGHT } from "@/features/weft/lib/inbox-message-frame";
 import { VERB_REGISTRY } from "../lib/verb-registry.generated";
 import { threadOf } from "@/features/inbox/lib/chat-core";
@@ -67,6 +68,7 @@ import {
   agentPinsPrepareView,
   loadInboxMedia,
   gifSearchPage,
+  gifProviderPage,
   gifPicked,
   markInboxMessagesRead,
   markInboxMessagesUnread,
@@ -548,6 +550,12 @@ function argObject(args: unknown, verb: string): Record<string, unknown> {
   return args as Record<string, unknown>;
 }
 
+/** A topic is a string, as the native dispatcher checks it: String() would turn ["inbox"] into "inbox". */
+function topicArg(a: Record<string, unknown>, verb: string): string {
+  if (typeof a.topic !== "string") throw new Error(`invalid: ${verb} topic must be a string`);
+  return a.topic;
+}
+
 function optionalEpochMs(value: unknown, verb: string, field: string): number | undefined {
   if (value === undefined || value === null) return undefined;
   if (typeof value !== "number" || !Number.isSafeInteger(Math.floor(value))) {
@@ -943,40 +951,42 @@ export const HTML_BRIDGE_ALLOWLIST: Record<string, BridgeHandler> = {
   // The app-root roster is loaded alongside: its changes are what nudge `onSessions`.
   subscribe: async (args, ctx) => {
     const a = argObject(args, "subscribe");
+    const topic = topicArg(a, "subscribe");
     const frame = await ctx?.liveFrame?.();
     if (!frame) throw new Error("unavailable: live frame is starting");
     const view = await subscriptionView(a, ctx);
     return frame.subscribe(
-      String(a.topic),
+      topic,
       typeof a.sinceRev === "number" ? a.sinceRev : undefined,
       Array.isArray(a.window) ? { ...view, window: a.window as [number, number] } : view,
     );
   },
   page: async (args, ctx) => {
     const a = argObject(args, "page");
+    const topic = topicArg(a, "page");
     // A pins view is one short list, never paged; preparing it here would only register a view
     // that no subscription ever releases.
-    if (a.topic === "pins") throw new Error("invalid: the pins topic has no pages");
+    if (topic === "pins") throw new Error("invalid: the pins topic has no pages");
     const frame = await ctx?.liveFrame?.();
     if (!frame) throw new Error("unavailable: live frame is starting");
-    return frame.page(String(a.topic), String(a.cursor), await subscriptionView(a, ctx));
+    return frame.page(topic, String(a.cursor), await subscriptionView(a, ctx));
   },
   unsubscribe: async (args, ctx) => {
     const a = argObject(args, "unsubscribe");
-    await (
-      await ctx?.liveFrame?.()
-    )?.unsubscribe(String(a.topic), await subscriptionView(a, ctx, false));
+    const topic = topicArg(a, "unsubscribe");
+    await (await ctx?.liveFrame?.())?.unsubscribe(topic, await subscriptionView(a, ctx, false));
     return null;
   },
   setUiState: async (args, ctx) => {
     const a = argObject(args, "setUiState");
+    const topic = topicArg(a, "setUiState");
     const frame = await ctx?.liveFrame?.();
     if (!frame) throw new Error("unavailable: live frame is starting");
     // The dock's selected row is the CLI focus: the host writes it; a page calls gotoAgent.
-    if (a.topic === "ui:dock" && a.patch && typeof a.patch === "object" && "selected" in a.patch)
+    if (topic === "ui:dock" && a.patch && typeof a.patch === "object" && "selected" in a.patch)
       throw new Error("invalid: ui:dock.selected follows the CLI focus; call gotoAgent");
     return frame.writeUi(
-      String(a.topic),
+      topic,
       a.patch as Record<string, unknown>,
       typeof a.requestId === "string" ? a.requestId : undefined,
     );
@@ -1513,7 +1523,19 @@ export const HTML_BRIDGE_ALLOWLIST: Record<string, BridgeHandler> = {
       throw new Error("gifSearch: pass exactly one of {query} and {ids}");
     }
     const limit = optionalLimit(a.limit, "gifSearch") ?? null;
-    return inboxWrite(ctx, "gifSearch", a, (team) => gifSearchPage(team, query, ids, limit));
+    if (a.provider != null && a.provider !== "giphy" && a.provider !== "klipy") {
+      throw new Error("gifSearch: provider, if present, must be 'giphy' or 'klipy'");
+    }
+    const provider = a.provider ?? null;
+    return inboxWrite(ctx, "gifSearch", a, (team) =>
+      gifSearchPage(team, query, ids, limit, provider),
+    );
+  },
+  // The provider the Inbox pane's GIF search would use, from the settings alone (no key read,
+  // no search), so the picker asks consent for that provider. The host refuses other frames.
+  gifProvider: async (args, ctx) => {
+    const a = argObject(args, "gifProvider");
+    return inboxWrite(ctx, "gifProvider", a, (team) => gifProviderPage(team));
   },
   // A pick in the Inbox pane's GIF picker, once per pick; the host registers it with the
   // provider in the background and refuses it from any other frame.
@@ -1526,6 +1548,15 @@ export const HTML_BRIDGE_ALLOWLIST: Record<string, BridgeHandler> = {
       throw new Error("gifPicked: {id} must be a GIF id from gifSearch");
     }
     return gifPicked(a.provider, a.id);
+  },
+  // The GIF picker's Open Settings: Settings at its GIF search row, where search is turned on
+  // and the key is added. It takes no args, so a page can't aim it elsewhere; the host refuses
+  // it from any frame but the Inbox pane.
+  openGifSettings: async (args) => {
+    const a = argObject(args, "openGifSettings");
+    if (Object.keys(a).length) throw new Error("openGifSettings: takes no args");
+    openSettingsTab("messaging", "gifSearch");
+    return { opened: true };
   },
   replyAsHuman: async (args, ctx) => {
     const a = argObject(args, "replyAsHuman");

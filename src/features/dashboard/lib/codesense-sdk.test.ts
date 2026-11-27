@@ -103,7 +103,7 @@ describe("codesense.d.ts kit.chat", { timeout: 30_000 }, () => {
   it("types exactly the members the kit chat serves", () => {
     expect(
       contract(`
-        const keys: Same<keyof CodesenseSdk.KitChat, "mount" | "createSendState" | "targetOf" | "pinToBottom" | "core" | "thread"> = true;
+        const keys: Same<keyof CodesenseSdk.KitChat, "mount" | "createSendState" | "targetOf" | "pinToBottom" | "core" | "thread" | "gifPicker" | "gifStage"> = true;
         const pin: Same<keyof ReturnType<CodesenseSdk.KitChat["pinToBottom"]>, "onContentChanged" | "release" | "reset"> = true;
         void [keys, pin];
       `),

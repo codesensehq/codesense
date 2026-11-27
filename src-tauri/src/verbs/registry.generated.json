@@ -907,6 +907,75 @@
     "module": "inbox"
   },
   {
+    "name": "gifProvider",
+    "class": "read",
+    "argsSchema": {
+      "additionalProperties": true,
+      "properties": {
+        "org": {
+          "type": "string"
+        },
+        "team": {
+          "type": "string"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "resultSchema": {
+      "oneOf": [
+        {
+          "properties": {
+            "provider": {
+              "enum": [
+                "giphy",
+                "klipy"
+              ]
+            },
+            "status": {
+              "const": "ok"
+            }
+          },
+          "required": [
+            "status",
+            "provider"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "error": {
+              "enum": [
+                "noProvider",
+                "mediaOff"
+              ]
+            },
+            "message": {
+              "type": "string"
+            },
+            "status": {
+              "const": "error"
+            }
+          },
+          "required": [
+            "status",
+            "error",
+            "message"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "grant": "inbox:write",
+    "inboxTarget": true,
+    "confirmable": false,
+    "mcpTwin": null,
+    "presentationOnlyReason": "The Inbox pane GIF picker's provider, read from Settings with no search",
+    "audited": true,
+    "action": true,
+    "module": "inbox"
+  },
+  {
     "name": "gifSearch",
     "class": "read",
     "argsSchema": {
@@ -928,6 +997,12 @@
         },
         "org": {
           "type": "string"
+        },
+        "provider": {
+          "enum": [
+            "giphy",
+            "klipy"
+          ]
         },
         "query": {
           "maxLength": 100,
@@ -3405,6 +3480,34 @@
     "audited": true,
     "action": true,
     "module": "processes"
+  },
+  {
+    "name": "openGifSettings",
+    "class": "read",
+    "argsSchema": {
+      "additionalProperties": false,
+      "properties": {},
+      "type": "object"
+    },
+    "resultSchema": {
+      "properties": {
+        "opened": {
+          "const": true
+        }
+      },
+      "required": [
+        "opened"
+      ],
+      "type": "object"
+    },
+    "grant": "inbox:write",
+    "inboxTarget": false,
+    "confirmable": false,
+    "mcpTwin": null,
+    "presentationOnlyReason": "Opens Settings at GIF search from the Inbox pane GIF picker",
+    "audited": true,
+    "action": true,
+    "module": "inbox"
   },
   {
     "name": "openLauncher",

@@ -10,6 +10,7 @@ import type {
   AgentSessionRow,
   AvatarPacksView,
   ConversationMessage,
+  GifProvider,
   HumanStatusView,
   InboxDelivery,
   InboxMediaAttachment,
@@ -524,7 +525,7 @@ export const AGENT_TEAM_ASK: AskUserRequest = {
 };
 
 /** One row of the team world's inbox, as the store keeps it. */
-interface MockInboxRow {
+export interface MockInboxRow {
   messageId: number;
   from: string;
   fromName: string;
@@ -543,6 +544,8 @@ interface MockInboxRow {
   /** What it asks of the human; `update` when unset (SW-AGR-18). */
   kind?: "needs-you" | "update";
   attachments?: InboxMediaAttachment[];
+  /** Where replies go instead of to the sender: a handle, or `role:<id>` for a role queue. */
+  replyTo?: string | null;
 }
 
 /** The person's `media` as the real send stores it (pending until fetched), an error message
@@ -571,20 +574,93 @@ function humanMedia(v: unknown): InboxMediaAttachment | string | null {
   };
 }
 
-/** The mock GIF search's candidates: a few GIFs, each with a 1×1 still. */
+/** The mock GIF search's candidates from `provider`: a few GIFs, each with a 1×1 still. */
 const MOCK_GIF_STILL =
   "data:image/gif;base64,R0lGODlhAQABAIAAAP///wAAACH5BAEAAAAALAAAAAABAAEAAAICRAEAOw==";
-const MOCK_GIFS = ["cat", "wave", "thumbs up", "party"].map((title, i) => ({
-  provider: "giphy" as const,
-  id: `mockgif${i + 1}`,
-  title: `A ${title}`,
-  url: `https://media.giphy.com/media/mockgif${i + 1}/giphy.gif`,
-  previewUrl: `https://media.giphy.com/media/mockgif${i + 1}/giphy_s.gif`,
-  width: 480,
-  height: 270,
-  autoLoads: true,
-  previewData: MOCK_GIF_STILL,
-}));
+const MOCK_GIF_HOSTS = { giphy: "media.giphy.com", klipy: "static.klipy.com" } as const;
+const mockGifs = (provider: GifProvider) =>
+  ["cat", "wave", "thumbs up", "party"].map((title, i) => ({
+    provider,
+    id: `mockgif${i + 1}`,
+    title: `A ${title}`,
+    url: `https://${MOCK_GIF_HOSTS[provider]}/media/mockgif${i + 1}/giphy.gif`,
+    previewUrl: `https://${MOCK_GIF_HOSTS[provider]}/media/mockgif${i + 1}/giphy_s.gif`,
+    width: 480,
+    height: 270,
+    autoLoads: true,
+    previewData: MOCK_GIF_STILL,
+  }));
+
+/** Every error code the Inbox pane's GIF verbs return, as the host names them. */
+export const MOCK_GIF_ERRORS = [
+  "noProvider",
+  "keychainUnavailable",
+  "invalidKey",
+  "rateLimited",
+  "providerUnavailable",
+  "badQuery",
+  "mediaOff",
+] as const;
+export type MockGifError = (typeof MOCK_GIF_ERRORS)[number];
+
+/** A stand-in for the saved key. It is never in a verb result, as the host's isn't. */
+export const MOCK_GIF_KEY = "mock-gif-key-7c1e93b0";
+
+/**
+ * The mock world's GIF settings: the active provider, search On or Off, and an error each search
+ * returns (`mediaOff` stands for the team's remote media Off, which `gifProvider` reports too).
+ * A test changes it in place; `?gifProvider=klipy`, `?gifSearch=off` and `?gifError=<code>`
+ * set it for a mock world.
+ */
+export interface MockGifWorld {
+  provider: GifProvider;
+  enabled: boolean;
+  error: MockGifError | null;
+  /** Seconds a `rateLimited` search says to wait. */
+  retryAfter: number;
+  key: string;
+}
+
+export function mockGifWorld(search = ""): MockGifWorld {
+  const params = new URLSearchParams(search);
+  const error = params.get("gifError");
+  return {
+    provider: params.get("gifProvider") === "klipy" ? "klipy" : "giphy",
+    enabled: params.get("gifSearch") !== "off",
+    error: MOCK_GIF_ERRORS.find((code) => code === error) ?? null,
+    retryAfter: 720,
+    key: MOCK_GIF_KEY,
+  };
+}
+
+const GIF_NAMES = { giphy: "GIPHY", klipy: "KLIPY" } as const;
+
+/** The host's `{status:"error"}` result for `error`, worded as `GifError::message` words it with
+ *  `provider` active (none: search Off, the team's media Off or an input check). */
+function gifFailure(error: MockGifError, provider: GifProvider | null, retryAfter: number) {
+  const name = provider ? GIF_NAMES[provider] : null;
+  const key = name ? `${name} key` : "GIF search key";
+  const message = {
+    noProvider: name
+      ? `GIF search has no ${name} key. The user can add one in Settings → Messaging.`
+      : "GIF search is off or has no key. The user can turn it on and add a key in Settings → Messaging.",
+    keychainUnavailable: `The ${key} could not be read from the OS keychain. The user can open Settings → Messaging, where the key is read while they are there to allow it.`,
+    invalidKey: `${name ?? "The GIF search provider"} refused the key. The user can replace it in Settings → Messaging.`,
+    rateLimited: `${name ?? "GIF"} search is paused. Try again in ${retryAfter} seconds.`,
+    providerUnavailable: `${name ?? "GIF search"} is unavailable right now. Try again later.`,
+    badQuery: "Bad GIF search input: the provider refused the request.",
+    mediaOff: "Remote media is off for this team, so GIF search can't show anything.",
+  }[error];
+  return {
+    status: "error" as const,
+    error,
+    message,
+    ...(error === "rateLimited" ? { retryAfter } : {}),
+  };
+}
+
+/** A GIF id as the host checks one (`gif::ID_PATTERN`). */
+const GIF_ID = /^[A-Za-z0-9_-]{1,128}$/;
 
 /** As the store keeps a summary: one trimmed line, control and format
  *  characters dropped, at most 280 characters (code points). */
@@ -627,10 +703,16 @@ export function agentTeamInboxHandlers(
   {
     simulate = false,
     sessions = [],
+    gif = mockGifWorld(),
+    extraRows = [],
   }: {
     simulate?: boolean;
     /** The world's sessions: the inbox read model names and tracks them. */
     sessions?: readonly AgentSessionRow[];
+    /** The GIF settings the pane's GIF verbs answer from. */
+    gif?: MockGifWorld;
+    /** Rows added after the world's own, e.g. a message whose Reply-To is a role queue. */
+    extraRows?: readonly MockInboxRow[];
   } = {},
 ) {
   const at = (minutesAgo: number) => Date.now() - minutesAgo * MINUTE;
@@ -824,6 +906,7 @@ export function agentTeamInboxHandlers(
       inReplyTo: 9,
       unread: false,
     },
+    ...extraRows,
   ];
   let next = rows.length + 1;
   let humanStatus: HumanStatusView = { status: "online", updatedAtMs: 0 };
@@ -915,7 +998,7 @@ export function agentTeamInboxHandlers(
       archivedAtMs: r.archivedAtMs ?? null,
       inReplyTo: r.inReplyTo,
       via: null,
-      replyTo: null,
+      replyTo: r.replyTo ?? null,
       summary: r.summary ?? null,
       unread: r.unread,
       delivery: role ? claimState(r.delivery ?? queued()) : null,
@@ -1251,40 +1334,78 @@ export function agentTeamInboxHandlers(
       if (!text.trim() && !media) return { status: "invalid", message: "text must not be blank" };
       const parent = find(args);
       if (!parent) return { status: "invalid", message: "unknown message" };
+      // The reply goes to the message's Reply-To when it names one, else to its sender, and a
+      // `role:<id>` there is that role's queue (`role:human` still means the person), as the
+      // real `reply_as` routes it. The person's media never goes to a role queue (v1).
+      const target = parent.replyTo ?? parent.from;
+      const named = target.startsWith("role:") ? target.slice("role:".length).trim() : null;
+      const role = named && named.toLowerCase() !== "human" ? named : null;
+      if (role && media) {
+        return { status: "invalid", message: "Not sent: media can't go to a role queue." };
+      }
+      const to = role ?? (named ? "human" : target);
       const messageId = next++;
-      rows.push({
+      const row: MockInboxRow = {
         messageId,
         from: "human",
         fromName: "human",
-        to: parent.from,
-        toName: parent.fromName,
+        to,
+        toName:
+          to === parent.from
+            ? parent.fromName
+            : (sessions.find((s) => s.handle === to)?.displayName ?? to),
         text,
         createdAtMs: Date.now(),
         inReplyTo: parent.messageId,
         unread: true,
+        ...(role ? { delivery: queued() } : {}),
         ...(media ? { attachments: [media] } : {}),
-      });
+      };
+      rows.push(row);
+      if (simulate && role && ROLE_INBOXES.has(role)) consumeLater(row);
       inboxChanged([messageId]);
       return { status: "sent", messageId };
     },
-    // The Inbox pane's GIF search: a query matches titles, ids name candidates.
+    // The Inbox pane's GIF provider read: settings only, so no key and no search.
+    gif_provider_page: () => {
+      if (gif.error === "mediaOff") return gifFailure("mediaOff", null, gif.retryAfter);
+      if (!gif.enabled) return gifFailure("noProvider", null, gif.retryAfter);
+      return { status: "ok", provider: gif.provider };
+    },
+    // The Inbox pane's GIF search: a query matches titles, ids name candidates. The checks run
+    // in the host's order: the team's media, the input, search Off, the provider, then the key
+    // and the provider's own answer (the world's `error`).
     gif_search_page: (args: Record<string, unknown>) => {
+      if (gif.error === "mediaOff") return gifFailure("mediaOff", null, gif.retryAfter);
       const query = typeof args.query === "string" ? args.query.trim().toLowerCase() : null;
       const ids = Array.isArray(args.ids) ? args.ids.map(String) : null;
       if ((query === null) === (ids === null) || query === "") {
         return { status: "error", error: "badQuery", message: "Pass a search or GIF ids." };
       }
+      if (!gif.enabled) return gifFailure("noProvider", null, gif.retryAfter);
+      if (args.provider != null && args.provider !== gif.provider) {
+        return {
+          status: "error",
+          error: "badQuery",
+          message: `Bad GIF search input: provider is not the active GIF provider (the active provider is ${GIF_NAMES[gif.provider]}).`,
+        };
+      }
+      if (gif.error) return gifFailure(gif.error, gif.provider, gif.retryAfter);
       const limit = typeof args.limit === "number" ? args.limit : 10;
-      const candidates = MOCK_GIFS.filter((g) =>
-        ids ? ids.includes(g.id) : g.title.toLowerCase().includes(query!) || query === "gif",
-      ).slice(0, limit);
-      return { status: "ok", provider: "giphy", candidates };
+      const candidates = mockGifs(gif.provider)
+        .filter((g) =>
+          ids ? ids.includes(g.id) : g.title.toLowerCase().includes(query!) || query === "gif",
+        )
+        .slice(0, limit);
+      return { status: "ok", provider: gif.provider, candidates };
     },
+    // A pick: any well-formed id is accepted, and one no search returned is a quiet no-op.
     gif_picked: (args: Record<string, unknown>) =>
-      MOCK_GIFS.some((g) => g.id === args.id) &&
-      (args.provider === "giphy" || args.provider === "klipy")
+      (args.provider === "giphy" || args.provider === "klipy") &&
+      typeof args.id === "string" &&
+      GIF_ID.test(args.id)
         ? { status: "ok" }
-        : { status: "error", error: "badQuery", message: "unknown GIF" },
+        : { status: "error", error: "badQuery", message: "Bad GIF search input: unknown GIF." },
     send_role_message_cmd: (args: Record<string, unknown>) => {
       const text = String(args.text ?? "");
       if (!text.trim()) return { status: "invalid", message: "text must not be blank" };

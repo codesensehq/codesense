@@ -14,6 +14,9 @@ pub fn args_schema(name: &str) -> Value {
     if name == "whyLine" {
         return serde_json::to_value(rmcp::schemars::schema_for!(crate::attribution::why_line::Params)).expect("why line schema");
     }
+    if name == "openGifSettings" {
+        return json!({"type":"object","properties":{},"additionalProperties":false});
+    }
     if name == "sessionRecord" {
         return json!({"type":"object","properties":{"handle":{"type":"string","minLength":1}},"required":["handle"],"additionalProperties":false});
     }
@@ -110,8 +113,10 @@ pub fn args_schema(name: &str) -> Value {
             "query":{"type":"string","minLength":1,"maxLength":crate::gif::MAX_QUERY_CHARS},
             "ids":{"type":"array","minItems":1,"maxItems":crate::gif::MAX_IDS,"items":{"type":"string","pattern":crate::gif::ID_PATTERN}},
             "limit":{"type":"integer","minimum":1,"maximum":crate::gif::MAX_LIMIT},
+            "provider":{"enum":["giphy","klipy"]},
             "org":string(),"team":string()
         }),
+        "gifProvider" => json!({"org":string(),"team":string()}),
         "gifPicked" => json!({
             "provider":{"enum":["giphy","klipy"]},
             "id":{"type":"string","pattern":crate::gif::ID_PATTERN}
@@ -257,6 +262,10 @@ pub fn result_schema(name: &str) -> Value {
                 {"type":"object","properties":{"status":{"const":"error"},"error":{"enum":["noProvider","keychainUnavailable","invalidKey","rateLimited","providerUnavailable","badQuery","mediaOff"]},"message":{"type":"string"},"retryAfter":{"type":"integer","minimum":1}},"required":["status","error","message"]}
             ]})
         }
+        "gifProvider" => json!({"oneOf":[
+            {"type":"object","properties":{"status":{"const":"ok"},"provider":{"enum":["giphy","klipy"]}},"required":["status","provider"]},
+            {"type":"object","properties":{"status":{"const":"error"},"error":{"enum":["noProvider","mediaOff"]},"message":{"type":"string"}},"required":["status","error","message"]}
+        ]}),
         "gifPicked" => json!({"oneOf":[
             {"type":"object","properties":{"status":{"const":"ok"}},"required":["status"]},
             {"type":"object","properties":{"status":{"const":"error"},"error":{"const":"badQuery"},"message":{"type":"string"}},"required":["status","error","message"]}
@@ -275,6 +284,9 @@ pub fn result_schema(name: &str) -> Value {
         }
         "showMenu" => {
             json!({"oneOf":[{"type":"object","properties":{"closed":{"const":true}},"required":["closed"]},{"type":"object","properties":{"itemId":{"type":"string"},"row":{},"builtin":{"type":"boolean"}},"required":["itemId","row"]}]})
+        }
+        "openGifSettings" => {
+            json!({"type":"object","properties":{"opened":{"const":true}},"required":["opened"]})
         }
         "showPopover" => {
             json!({"type":"object","properties":{"closed":{"const":true}},"required":["closed"]})

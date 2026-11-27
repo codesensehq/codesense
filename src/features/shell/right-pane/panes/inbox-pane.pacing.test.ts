@@ -8,12 +8,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const PANE = readFileSync(resolve(__dirname, "../__fixtures__/inbox-pane.html"), "utf8");
 const page = new DOMParser().parseFromString(PANE, "text/html");
 const SCRIPT = [...page.querySelectorAll("script:not([src])")].map((s) => s.textContent).join(";");
+// The kit chat bundle the pane loads from /kit/v1/chat.js, for the GIF picker.
+const CHAT_JS = readFileSync(
+  resolve(__dirname, "../../../../../src-tauri/src/http/routes/dashboard_kit/chat.js"),
+  "utf8",
+);
 
 const TEAM = { org: "acme", team: "web" };
 type Row = { id: number; from: string; to: string; unread: boolean };
 type Scope = "all-teams" | "team";
 
-function boot(rows: Row[], scope: Scope) {
+function boot(rows: Row[], scope: Scope, { gifs = false } = {}) {
   const nudges = new Set<(change: unknown) => void>();
   const shows = new Set<(shown: boolean) => void>();
   const intents = new Set<(intent: unknown) => void>();
@@ -80,7 +85,10 @@ function boot(rows: Row[], scope: Scope) {
     humanStatus: vi.fn(async () => ({ status: "online", note: "" })),
     agents: vi.fn(async (): Promise<unknown[]> => []),
     // Mia runs, so the composer can reply to her.
-    subscribe: vi.fn(async (topic: string, { onChange }: { onChange: (s: unknown) => void }) => {
+    subscribe: vi.fn(async (topic: string, options?: { onChange: (s: unknown) => void }) => {
+      // The GIF picker's consent read: GIPHY allowed.
+      if (topic === "ui:gif") return { snapshot: [{ id: "ui:gif", consent: { giphy: true } }] };
+      const { onChange } = options!;
       const watchers = topic === "sessions" ? sessionWatchers : definitionWatchers;
       watchers.add(onChange);
       onChange({ snapshot: topic === "sessions" ? running : [] });
@@ -88,7 +96,13 @@ function boot(rows: Row[], scope: Scope) {
     }),
     unsubscribe: vi.fn(async () => {}),
     act: vi.fn(async (verb: string) =>
-      verb === "sendAsHuman" || verb === "replyAsHuman" ? { status: "sent" } : {},
+      verb === "sendAsHuman" || verb === "replyAsHuman"
+        ? { status: "sent" }
+        : verb === "gifProvider"
+          ? { status: "ok", provider: "giphy" }
+          : verb === "gifSearch"
+            ? { status: "ok", provider: "giphy", candidates: [] }
+            : {},
     ),
     setBadge: vi.fn(),
     onInboxChanged: (cb: (change: unknown) => void) => nudges.add(cb),
@@ -106,6 +120,10 @@ function boot(rows: Row[], scope: Scope) {
   document.head.innerHTML = page.head.innerHTML;
   document.body.innerHTML = page.body.innerHTML;
   (window as unknown as { codesense: typeof cs }).codesense = cs;
+  if (gifs) {
+    (cs as { kit?: object }).kit = {};
+    new Function(CHAT_JS)();
+  }
   new Function(SCRIPT)();
   // The list read each refresh makes: the rollup across teams, or the team's to-human page.
   const reads = () =>
@@ -664,5 +682,38 @@ describe("inbox pane refresh pacing", () => {
       expect(p.cs.act).toHaveBeenCalledWith("replyAsHuman", expect.anything());
       expect(p.reads()).toBe(2);
     });
+  });
+
+  it("the GIF picker adds no reads: nothing until it opens, then one gifSearch per typing pause", async () => {
+    const p = boot([MIA], "all-teams", { gifs: true });
+    p.show(true);
+    await settle(2500);
+    const gifVerbs = () =>
+      p.cs.act.mock.calls.filter(([verb]) => verb.startsWith("gif")).map(([verb]) => verb);
+    const gifReads = () => p.cs.subscribe.mock.calls.filter(([topic]) => topic === "ui:gif");
+    for (let i = 0; i < 20; i++) {
+      p.nudge([100 + i]);
+      await settle(50);
+    }
+    await settle(2000);
+    expect(gifVerbs()).toEqual([]);
+    expect(gifReads()).toEqual([]);
+    document.getElementById("gif")!.click();
+    await settle(0);
+    expect(gifVerbs()).toEqual(["gifProvider"]);
+    expect(gifReads()).toHaveLength(1);
+    const input = document.querySelector<HTMLInputElement>(".gp-input")!;
+    for (const text of ["s", "sh", "shi", "ship", "ship i", "ship it"]) {
+      input.value = text;
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      await settle(150);
+    }
+    expect(gifVerbs()).toEqual(["gifProvider"]);
+    await settle(400);
+    expect(p.cs.act.mock.calls.filter(([verb]) => verb === "gifSearch")).toEqual([
+      ["gifSearch", { query: "ship it", limit: 10, provider: "giphy" }],
+    ]);
+    await settle(10_000);
+    expect(gifVerbs()).toEqual(["gifProvider", "gifSearch"]);
   });
 });

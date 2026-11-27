@@ -2055,22 +2055,10 @@ pub(crate) async fn reply_request_with_story<'a>(
 /// reply goes only where an agent's `reply` would (the message's `reply_to`, else its
 /// sender) and the original is marked read for the human. Nobody else (no foreman or
 /// controller) is copied. The reply's provenance is the displayed conversation's owning
-/// team, never a later UI-active team.
-pub(crate) async fn reply_from_human(
-    host: &Arc<dyn InboxHost>,
-    team: &LaunchTeam,
-    message_id: i64,
-    text: &str,
-    content_type: Option<inbox::MessageContentType>,
-    summary: Option<&str>,
-) -> Result<SendResult, String> {
-    reply_from_human_with_media(host, team, message_id, text, content_type, summary, None).await
-}
-
-/// [`reply_from_human`] with an optional GIF or image. The person's `url` media is
-/// admitted as this machine's own; `path` media and a reply that would go to a role
-/// queue are `invalid`, with nothing stored. A newly stored provider GIF is registered
-/// once.
+/// team, never a later UI-active team. `media` is an optional GIF or image: the person's
+/// `url` media is admitted as this machine's own; `path` media and a reply that would go
+/// to a role queue are `invalid`, with nothing stored. A newly stored provider GIF is
+/// registered once.
 pub(crate) async fn reply_from_human_with_media(
     host: &Arc<dyn InboxHost>,
     team: &LaunchTeam,

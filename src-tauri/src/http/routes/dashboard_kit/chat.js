@@ -48,6 +48,44 @@
     return m ? `${m[1][0].toUpperCase() + m[1].slice(1)} ${m[2]}${m[3] ? "." + m[3] : ""}` : String(id || "");
   };
   var timeLabel = (ms) => Number.isFinite(ms) ? new Date(ms).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "";
+  var GIF_PROVIDER_COPY = {
+    giphy: { name: "GIPHY", searchPlaceholder: "Search GIPHY", poweredBy: "Powered By GIPHY" },
+    klipy: { name: "KLIPY", searchPlaceholder: "Search KLIPY", poweredBy: "Powered by KLIPY" }
+  };
+  var GIF_COPY = {
+    dialog: "GIF search",
+    close: "Close GIF search",
+    clear: "Clear search",
+    results: "GIF results",
+    searchLabel: "Search GIFs",
+    start: (name) => `Search ${name}, or start with`,
+    starters: ["thumbs up", "thank you", "ship it", "on it"],
+    typeMore: "Type 2+ letters",
+    escClose: "Esc close",
+    searching: (name) => `Searching ${name}…`,
+    hover: "click to add",
+    focus: "Enter add · Esc close",
+    untitled: "Untitled GIF",
+    failedStill: "Preview unavailable",
+    loading: "Checking GIF search…",
+    consent: { big: (name) => `Search GIFs with ${name}?`, body: (name) => `What you type in this box is sent to ${name}, a third-party service, to find GIFs. Nothing leaves this Mac until you allow it.`, fine: "Asked once per provider. To turn GIF search off: Settings › Messaging › GIF search.", allow: "Allow search", notNow: "Not now" },
+    settingsPath: "Settings › Messaging › GIF search",
+    openSettings: "Open Settings",
+    tryAgain: "Try again",
+    state: {
+      noProvider: { big: "Turn on GIF search and add a key", body: () => "GIF search is off, or it has no key yet." },
+      invalidKey: { big: "The key was refused", body: (name) => `${name} didn't accept the key. Replace it in Settings to search again.` },
+      mediaOff: { big: "GIFs are off for this team", body: () => "This team's remote media is off (media.remote: off in its config/inbox.yml), so no GIFs load." },
+      keychainUnavailable: { big: (name) => `Couldn't read your ${name} key`, body: () => "The keychain didn't answer, or this Mac has no secret store. If it's locked, unlock it, then try again." },
+      rateLimited: { big: "GIF search limit reached", body: (_name, wait) => `You and your agents share an hourly limit on GIF searches. Try again in ${wait}.` },
+      providerUnavailable: { big: (name) => `${name} isn't answering`, body: () => "The search didn't go through. Your message is safe." },
+      badQuery: { big: "Try different words", body: (name) => `${name} couldn't search for that.` },
+      failed: { big: "Couldn't search for GIFs", body: (_name, _wait, why) => why }
+    },
+    noResults: { big: (query) => `No GIFs for “${query}”`, body: "Try fewer or different words." },
+    wait: (seconds) => seconds >= 90 ? `${Math.ceil(seconds / 60)} min` : `${Math.max(1, Math.ceil(seconds))} s`,
+    stage: { remove: "Remove GIF", thumb: (alt) => `GIF: ${alt || "no alt text"}. Backspace removes it.`, alt: "Alt text", required: "required", placeholder: "Describe the GIF for agents", help: (name) => `From ${name}'s title. Agents read this instead of the GIF.`, missing: "Add alt text to send. Agents only see this text." }
+  };
 
   // src-tauri/src/http/routes/dashboard_kit/chat/presence.js
   var leadRowsOf = (rows, storyId, role) => (Array.isArray(rows) ? rows : []).filter((row) => row.story === storyId && row.role === role);
@@ -1007,6 +1045,56 @@
         watch.disconnect();
         log.removeEventListener("keydown", onKeyDown);
         log.removeEventListener("focusin", onFocusIn);
+      }
+    };
+  }
+  function rovingGrid(list, { cols = 1, onMove = () => {
+  }, onPick = () => {
+  } } = {}) {
+    let at = -1;
+    const cells = () => [...list.querySelectorAll("[role=option]")];
+    function moveTo(index) {
+      const all = cells();
+      if (!all.length) {
+        at = -1;
+        list.removeAttribute("aria-activedescendant");
+        return;
+      }
+      at = Math.max(0, Math.min(all.length - 1, index));
+      all.forEach((cell, i) => cell.setAttribute("aria-selected", String(i === at)));
+      list.setAttribute("aria-activedescendant", all[at].id);
+      if (all[at].scrollIntoView) all[at].scrollIntoView({ block: "nearest" });
+      onMove(all[at]);
+    }
+    const onKeyDown = (event) => {
+      if (event.altKey || event.ctrlKey || event.metaKey) return;
+      const last = cells().length - 1;
+      if (last < 0) return;
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        if (at >= 0) onPick(cells()[at]);
+        return;
+      }
+      const to = event.key === "ArrowRight" ? at + 1 : event.key === "ArrowLeft" ? at - 1 : event.key === "ArrowDown" ? at + cols : event.key === "ArrowUp" ? at - cols : event.key === "Home" ? 0 : event.key === "End" ? last : null;
+      if (to === null) return;
+      event.preventDefault();
+      if (to < 0 || to > last) return;
+      moveTo(to);
+    };
+    const onFocus = () => moveTo(at < 0 ? 0 : at);
+    list.addEventListener("keydown", onKeyDown);
+    list.addEventListener("focus", onFocus);
+    return {
+      active: () => cells()[at] || null,
+      moveTo,
+      // A new set of cells: nothing is active until the list takes focus again.
+      reset() {
+        at = -1;
+        list.removeAttribute("aria-activedescendant");
+      },
+      release() {
+        list.removeEventListener("keydown", onKeyDown);
+        list.removeEventListener("focus", onFocus);
       }
     };
   }
@@ -2041,9 +2129,511 @@
     };
   }
 
+  // src-tauri/src/http/routes/dashboard_kit/chat/gif-picker.js
+  var GIF_ICONS = {
+    x: [["path", { d: "m6 6 12 12M18 6 6 18" }]],
+    search: [["circle", { cx: "11", cy: "11", r: "6.5" }], ["path", { d: "m20 20-4.2-4.2" }]],
+    imageOff: [["path", { d: "m3 3 18 18M3 9v10a2 2 0 0 0 2 2h14M9 3h10a2 2 0 0 1 2 2v10M5 21l7-7m3-3 1-1 5 5" }]],
+    alert: [["circle", { cx: "12", cy: "12", r: "9" }], ["path", { d: "M12 8v4m0 4h.01" }]],
+    open: [["path", { d: "M15 3h6v6" }], ["path", { d: "M10 14 21 3" }], ["path", { d: "M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" }]],
+    key: [["circle", { cx: "7.5", cy: "15.5", r: "4" }], ["path", { d: "m10.4 12.6 8.6-8.6M16 7l2.5 2.5M19 4l2 2" }]],
+    clock: [["circle", { cx: "12", cy: "12", r: "9" }], ["path", { d: "M12 7v5l3 2" }]],
+    cloudOff: [["path", { d: "m3 3 18 18M8.5 6.2A6 6 0 0 1 17.7 10H18a4 4 0 0 1 2.3 7.3M17 19H7a5 5 0 0 1-2.6-9.3" }]],
+    shield: [["path", { d: "M12 3 5 6v5c0 4.4 3 8.3 7 10 4-1.7 7-5.6 7-10V6z" }], ["path", { d: "m9 12 2 2 4-4" }]]
+  };
+  function gifIcon(name) {
+    const NS = "http://www.w3.org/2000/svg", svg = document.createElementNS(NS, "svg");
+    svg.setAttribute("viewBox", "0 0 24 24");
+    svg.setAttribute("class", "gp-i");
+    svg.setAttribute("aria-hidden", "true");
+    for (const [tag, attrs] of GIF_ICONS[name]) {
+      const shape = document.createElementNS(NS, tag);
+      for (const [key, value] of Object.entries(attrs)) shape.setAttribute(key, value);
+      svg.append(shape);
+    }
+    return svg;
+  }
+  var GIF_PROVIDERS = ["giphy", "klipy"];
+  var GIF_DEBOUNCE_MS = 400;
+  var GIF_MIN_QUERY = 2;
+  var GIF_LIMIT = 10;
+  var GIF_COLS = 3;
+  var GIF_STATES = {
+    noProvider: { icon: "key", action: "settings", inert: true, hold: true },
+    invalidKey: { icon: "key", tone: "bad", action: "settings", inert: true, hold: true },
+    mediaOff: { icon: "imageOff", action: null, inert: true },
+    keychainUnavailable: { icon: "alert", tone: "bad", action: "retry", inert: true },
+    rateLimited: { icon: "clock", tone: "warn", action: null, inert: true, hold: true },
+    providerUnavailable: { icon: "cloudOff", tone: "bad", action: "retry", inert: false },
+    badQuery: { icon: "search", action: null, inert: false },
+    failed: { icon: "alert", tone: "bad", action: null, inert: false }
+  };
+  function gifConsentOf(state) {
+    const consent = state && typeof state === "object" && !Array.isArray(state) ? state.consent : null;
+    if (!consent || typeof consent !== "object" || Array.isArray(consent)) return {};
+    return Object.fromEntries(GIF_PROVIDERS.filter((p) => consent[p] === true).map((p) => [p, true]));
+  }
+  var gifStill = (value) => typeof value === "string" && value.startsWith("data:image/") ? value : null;
+  var gifReadState = async (uiState) => {
+    try {
+      return gifConsentOf(await (typeof uiState === "function" ? uiState() : uiState));
+    } catch {
+      return {};
+    }
+  };
+  var gifIds = 0;
+  function mountGifPicker(el, { act, uiState = null, onStage = () => {
+  }, provider: guess = null, openSettings = null, onClose = () => {
+  }, anchor = null, styles = true } = {}) {
+    const doc = el.ownerDocument || document, win = doc.defaultView || window;
+    if (styles) linkChatStyles(doc);
+    const n = ++gifIds, ids = { input: `cs-gif-input-${n}`, grid: `cs-gif-grid-${n}`, now: `cs-gif-now-${n}`, cell: (i) => `cs-gif-${n}-${i}` };
+    const input = h("input", { id: ids.input, type: "search", class: "gp-input", autocomplete: "off", spellcheck: "false", "aria-label": GIF_COPY.searchLabel });
+    const clear = h("button", { type: "button", class: "gp-clear", "aria-label": GIF_COPY.clear, hidden: true }, gifIcon("x"));
+    const closeButton = h("button", { type: "button", class: "gp-close", "aria-label": GIF_COPY.close }, gifIcon("x"));
+    const body = h("div", { class: "gp-body" });
+    const now = h("span", { id: ids.now, class: "gp-now", "aria-live": "polite" });
+    const attr = h("span", { class: "gp-attr" });
+    const root = h(
+      "div",
+      { class: "cs-gif gp", role: "dialog", "aria-label": GIF_COPY.dialog, hidden: true },
+      h("div", { class: "gp-top" }, h("div", { class: "gp-search" }, gifIcon("search"), input, clear), closeButton),
+      body,
+      h("div", { class: "gp-foot" }, now, attr)
+    );
+    el.append(root);
+    let open = false, generation = 0, provider = GIF_PROVIDERS.includes(guess) ? guess : "giphy", allowed = {}, inert = true, seq = 0, timer = null, wake = null, last = "", retried = null, grid = null, rover = null, candidates = [], flying = null;
+    let held = null;
+    const words = () => GIF_PROVIDER_COPY[provider];
+    const later = (fn, ms) => win.setTimeout(fn, ms);
+    const stopTimers = () => {
+      if (timer !== null) {
+        win.clearTimeout(timer);
+        timer = null;
+      }
+      if (wake !== null) {
+        win.clearTimeout(wake);
+        wake = null;
+      }
+    };
+    function paintProvider() {
+      input.placeholder = words().searchPlaceholder;
+      attr.textContent = words().poweredBy;
+    }
+    function setInert(on) {
+      inert = on;
+      input.disabled = on;
+      root.classList.toggle("inert", on);
+    }
+    function foot(text, { bold = null } = {}) {
+      now.replaceChildren(...bold ? [h("b", { text: bold }), text] : [text]);
+    }
+    function dropGrid() {
+      if (rover) {
+        rover.release();
+        rover = null;
+      }
+      grid = null;
+      candidates = [];
+    }
+    function alreadyAsked(query) {
+      const q = query.trim();
+      return q === last && (flying !== null || grid !== null);
+    }
+    function chips() {
+      return h("div", { class: "gp-chips" }, GIF_COPY.starters.map((text) => h("button", { type: "button", class: "gp-chip", onclick: () => {
+        if (inert || alreadyAsked(text)) return;
+        input.value = text;
+        syncClear();
+        searchNow(text);
+      } }, text)));
+    }
+    function showStart() {
+      dropGrid();
+      body.replaceChildren(h("div", { class: "gp-start" }, h("span", { text: GIF_COPY.start(words().name) }), chips()));
+      foot(`${GIF_COPY.typeMore} · ${GIF_COPY.escClose}`);
+    }
+    function showState({ icon, tone = "", big, line, fine = null, acts = [], extra = null }) {
+      dropGrid();
+      const node = h("div", { class: `gp-state${tone ? " " + tone : ""}`, role: "status" }, gifIcon(icon), h("div", { class: "gp-big", text: big }), h("p", { text: line }), fine ? h("p", { class: "gp-fine", text: fine }) : null, acts.length ? h("div", { class: "gp-acts" }, acts) : null, extra);
+      body.replaceChildren(node);
+      return node;
+    }
+    function syncClear() {
+      clear.hidden = !input.value || inert;
+    }
+    function showError(result, query, { hold = false, until = null } = {}) {
+      const code = GIF_STATES[result && result.error] ? result.error : "failed";
+      const kind = GIF_STATES[code], text = GIF_COPY.state[code], name = words().name;
+      const given = Number(result && result.retryAfter), seconds = Number.isFinite(given) && given > 0 ? given : 60;
+      const wait = GIF_COPY.wait(seconds);
+      if (hold && kind.hold) held = { provider, result, query, until: code === "rateLimited" ? until ?? Date.now() + seconds * 1e3 : null };
+      const acts = [];
+      if (kind.action === "settings" && openSettings) acts.push(h("button", { type: "button", class: "gp-btn primary", onclick: () => {
+        held = null;
+        openSettings();
+      } }, gifIcon("open"), GIF_COPY.openSettings));
+      if (kind.action === "retry" && retried !== code) acts.push(h("button", { type: "button", class: "gp-btn outline", onclick: () => {
+        retried = code;
+        setInert(false);
+        searchNow(query);
+      } }, GIF_COPY.tryAgain));
+      const why = result && typeof result.message === "string" ? result.message : String(result && result.error || "");
+      showState({ icon: kind.icon, tone: kind.tone, big: typeof text.big === "function" ? text.big(name) : text.big, line: text.body(name, wait, why), fine: kind.action === "settings" ? GIF_COPY.settingsPath : null, acts });
+      foot("");
+      setInert(kind.inert);
+      syncClear();
+      if (code === "rateLimited") {
+        wake = later(() => {
+          wake = null;
+          held = null;
+          if (!open) return;
+          setInert(false);
+          syncClear();
+          showStart();
+          input.focus();
+        }, seconds * 1e3);
+      }
+      if (acts.length) acts[0].focus();
+      else if (!inert) input.focus();
+    }
+    function showConsent() {
+      setInert(true);
+      syncClear();
+      const name = words().name;
+      const allow = h("button", { type: "button", class: "gp-btn primary", onclick: () => void allowSearch() }, GIF_COPY.consent.allow);
+      const notNow = h("button", { type: "button", class: "gp-btn outline", onclick: () => close("notNow") }, GIF_COPY.consent.notNow);
+      showState({ icon: "shield", big: GIF_COPY.consent.big(name), line: GIF_COPY.consent.body(name), fine: GIF_COPY.consent.fine, acts: [allow, notNow] });
+      foot("");
+      allow.focus();
+    }
+    async function allowSearch() {
+      const at = generation, asked = provider;
+      const current = await gifReadState(uiState);
+      allowed = { ...current, [asked]: true };
+      try {
+        await act("setUiState", { topic: "ui:gif", patch: { consent: allowed } });
+      } catch {
+      }
+      if (at !== generation || !open) return;
+      ready();
+    }
+    function showHeld() {
+      const { result, query, until } = held;
+      input.value = query;
+      last = query;
+      showError(until === null ? result : { ...result, retryAfter: Math.ceil((until - Date.now()) / 1e3) }, query, { hold: true, until });
+    }
+    function ready() {
+      if (held) {
+        showHeld();
+        return;
+      }
+      setInert(false);
+      input.value = "";
+      last = "";
+      retried = null;
+      syncClear();
+      showStart();
+      input.focus();
+    }
+    async function readProvider() {
+      const at = generation;
+      let answer;
+      try {
+        answer = await act("gifProvider", {});
+      } catch (e) {
+        answer = { status: "error", error: "failed", message: e && e.message || String(e) };
+      }
+      if (at !== generation || !open) return null;
+      if (!answer || answer.status !== "ok" || !GIF_PROVIDERS.includes(answer.provider)) {
+        showError(answer, "");
+        setInert(true);
+        syncClear();
+        return null;
+      }
+      provider = answer.provider;
+      paintProvider();
+      return provider;
+    }
+    async function start() {
+      const at = generation;
+      setInert(true);
+      dropGrid();
+      body.replaceChildren(h("div", { class: "gp-start", role: "status", text: GIF_COPY.loading }));
+      foot("");
+      const [named, consent] = await Promise.all([readProvider(), gifReadState(uiState)]);
+      if (at !== generation || !open) return;
+      if (held && (held.provider !== named || held.until !== null && Date.now() >= held.until)) held = null;
+      if (!named) return;
+      allowed = consent;
+      if (allowed[named]) ready();
+      else showConsent();
+    }
+    function showSkeleton() {
+      dropGrid();
+      body.replaceChildren(h("div", { class: "gp-grid", "aria-hidden": "true" }, Array.from({ length: GIF_LIMIT }, () => h("span", { class: "gp-cell skel" }))));
+      foot(GIF_COPY.searching(words().name));
+    }
+    function showResults(list) {
+      dropGrid();
+      candidates = list;
+      grid = h("div", { id: ids.grid, class: "gp-grid", role: "listbox", tabindex: "0", "aria-label": GIF_COPY.results });
+      list.forEach((c, i) => {
+        const title = c.title || GIF_COPY.untitled;
+        const still = gifStill(c.previewData);
+        const cell = h("div", { id: ids.cell(i), class: "gp-cell", role: "option", "aria-selected": "false", "aria-label": still ? title : `${title} (${GIF_COPY.failedStill})`, "data-index": String(i) });
+        const empty = () => {
+          cell.classList.add("failed");
+          cell.replaceChildren(gifIcon("imageOff"));
+        };
+        if (still) {
+          const img = h("img", { alt: "", src: still, draggable: "false" });
+          img.addEventListener("error", empty);
+          cell.append(img);
+        } else empty();
+        cell.addEventListener("mouseenter", () => foot(` · ${GIF_COPY.hover}`, { bold: title }));
+        cell.addEventListener("click", () => pick(i));
+        grid.append(cell);
+      });
+      rover = rovingGrid(grid, { cols: GIF_COLS, onMove: (cell) => {
+        const c = candidates[Number(cell.dataset.index)];
+        foot(` · ${GIF_COPY.focus}`, { bold: c && c.title || GIF_COPY.untitled });
+      }, onPick: (cell) => pick(Number(cell.dataset.index)) });
+      grid.addEventListener("focus", (e) => e.currentTarget.classList.add("kbd"));
+      grid.addEventListener("blur", (e) => e.currentTarget.classList.remove("kbd"));
+      body.replaceChildren(grid);
+      foot(`${GIF_COPY.typeMore} · ${GIF_COPY.escClose}`);
+    }
+    async function searchNow(query) {
+      if (timer !== null) {
+        win.clearTimeout(timer);
+        timer = null;
+      }
+      const q = query.trim();
+      if (inert || !open || !allowed[provider]) return;
+      if (q.length < GIF_MIN_QUERY) {
+        seq++;
+        showStart();
+        return;
+      }
+      const mine = ++seq, at = generation, asked = provider;
+      last = q;
+      flying = mine;
+      showSkeleton();
+      let result;
+      try {
+        result = await act("gifSearch", { query: q, limit: GIF_LIMIT, provider: asked });
+      } catch (e) {
+        result = { status: "error", error: "failed", message: e && e.message || String(e) };
+      }
+      if (flying === mine) flying = null;
+      if (mine !== seq || at !== generation || !open) return;
+      if (result && result.status === "ok" && Array.isArray(result.candidates)) {
+        retried = null;
+        if (!result.candidates.length) {
+          showState({ icon: "search", big: GIF_COPY.noResults.big(q), line: GIF_COPY.noResults.body, extra: chips() });
+          foot("");
+          return;
+        }
+        showResults(result.candidates.slice(0, GIF_LIMIT));
+        return;
+      }
+      if (result && result.error === "badQuery") {
+        const named = await readProvider();
+        if (mine !== seq || at !== generation || !open || !named) return;
+        if (named !== asked) {
+          allowed = await gifReadState(uiState);
+          if (at !== generation || !open) return;
+          if (!allowed[named]) {
+            showConsent();
+            return;
+          }
+          searchNow(q);
+          return;
+        }
+      }
+      showError(result, q, { hold: true });
+    }
+    function pick(index) {
+      const c = candidates[index];
+      if (!c) return;
+      const chosen = { provider, id: String(c.id), url: c.url, title: c.title || "", alt: c.title || "", previewData: gifStill(c.previewData), width: c.width, height: c.height };
+      Promise.resolve().then(() => act("gifPicked", { provider: chosen.provider, id: chosen.id })).catch(() => {
+      });
+      close("pick");
+      onStage(chosen);
+    }
+    input.addEventListener("input", () => {
+      syncClear();
+      if (inert) return;
+      if (timer !== null) win.clearTimeout(timer);
+      const q = input.value.trim();
+      if (q.length < GIF_MIN_QUERY) {
+        timer = null;
+        seq++;
+        showStart();
+        return;
+      }
+      timer = later(() => {
+        timer = null;
+        if (!alreadyAsked(input.value)) searchNow(input.value);
+      }, GIF_DEBOUNCE_MS);
+    });
+    input.addEventListener("keydown", (event) => {
+      if (imeKey(event)) return;
+      if (event.key === "Enter") {
+        event.preventDefault();
+        if (!inert && !event.repeat && !alreadyAsked(input.value)) searchNow(input.value);
+      } else if (event.key === "ArrowDown" && grid) {
+        event.preventDefault();
+        grid.focus();
+      }
+    });
+    clear.addEventListener("click", () => {
+      input.value = "";
+      syncClear();
+      seq++;
+      last = "";
+      if (!inert) showStart();
+      input.focus();
+    });
+    closeButton.addEventListener("click", () => close("close"));
+    root.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && !imeKey(event)) {
+        event.preventDefault();
+        event.stopPropagation();
+        close("escape");
+      }
+    });
+    const outside = (event) => {
+      if (!open) return;
+      const t = event.target;
+      if (root.contains(t) || anchor && anchor.contains(t)) return;
+      close("outside");
+    };
+    function openPicker() {
+      if (open) return;
+      open = true;
+      generation++;
+      root.hidden = false;
+      if (anchor) anchor.setAttribute("aria-expanded", "true");
+      input.value = "";
+      last = "";
+      retried = null;
+      syncClear();
+      paintProvider();
+      doc.addEventListener("pointerdown", outside, true);
+      input.focus();
+      void start();
+    }
+    function close(reason = "close") {
+      if (!open) return;
+      open = false;
+      generation++;
+      seq++;
+      flying = null;
+      stopTimers();
+      dropGrid();
+      root.hidden = true;
+      if (anchor) anchor.setAttribute("aria-expanded", "false");
+      doc.removeEventListener("pointerdown", outside, true);
+      onClose(reason);
+    }
+    return {
+      root,
+      open: openPicker,
+      close: () => close("close"),
+      toggle() {
+        if (open) close("close");
+        else openPicker();
+      },
+      isOpen: () => open,
+      destroy() {
+        close("close");
+        root.remove();
+      }
+    };
+  }
+  function mountGifStage(el, { pick, onRemove = () => {
+  }, onChange = () => {
+  }, onEnter = () => {
+  }, styles = true }) {
+    const doc = el.ownerDocument || document;
+    if (styles) linkChatStyles(doc);
+    const n = ++gifIds, altId = `cs-gif-alt-${n}`, helpId = `cs-gif-alt-help-${n}`;
+    const words = GIF_PROVIDER_COPY[pick.provider] || GIF_PROVIDER_COPY.giphy, still = gifStill(pick.previewData);
+    const alt = h("input", { id: altId, class: "gs-in", type: "text", autocomplete: "off", placeholder: GIF_COPY.stage.placeholder, "aria-describedby": helpId, "aria-required": "true" });
+    alt.value = pick.alt || "";
+    const help = h("div", { id: helpId, class: "gs-help" });
+    const removeButton = h("button", { type: "button", class: "gs-x", "aria-label": GIF_COPY.stage.remove }, gifIcon("x"));
+    const thumb = h("div", { class: "gs-thumb", tabindex: "0", role: "img" }, still ? h("img", { alt: "", src: still, draggable: "false" }) : gifIcon("imageOff"), removeButton);
+    const root = h(
+      "div",
+      { class: "cs-gif gs" },
+      h("div", { class: "gs-media" }, thumb, h("span", { class: "gs-attr", text: words.poweredBy })),
+      h("div", { class: "gs-f" }, h("label", { for: altId }, GIF_COPY.stage.alt, " ", h("span", { class: "gs-req", text: GIF_COPY.stage.required })), alt, help)
+    );
+    let gone = false;
+    const valid = () => Boolean(alt.value.trim());
+    function paint() {
+      const ok = valid();
+      thumb.setAttribute("aria-label", GIF_COPY.stage.thumb(alt.value.trim()));
+      alt.classList.toggle("err", !ok);
+      if (ok) alt.removeAttribute("aria-invalid");
+      else alt.setAttribute("aria-invalid", "true");
+      help.classList.toggle("err", !ok);
+      help.replaceChildren(...ok ? [h("span", { text: GIF_COPY.stage.help(words.name) })] : [gifIcon("alert"), h("span", { text: GIF_COPY.stage.missing })]);
+    }
+    function remove() {
+      if (gone) return;
+      gone = true;
+      root.remove();
+      onRemove();
+    }
+    alt.addEventListener("input", () => {
+      paint();
+      onChange(valid());
+    });
+    alt.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" && !imeKey(event)) {
+        event.preventDefault();
+        onEnter();
+      }
+    });
+    thumb.addEventListener("keydown", (event) => {
+      if ((event.key === "Backspace" || event.key === "Delete") && event.target === thumb) {
+        event.preventDefault();
+        remove();
+      }
+    });
+    removeButton.addEventListener("click", remove);
+    paint();
+    el.prepend(root);
+    return {
+      root,
+      alt: () => alt.value.trim(),
+      valid,
+      // The alt field with its text selected, so typing replaces the title.
+      focusAlt() {
+        alt.focus();
+        alt.select();
+      },
+      // The send's media: the animated rendition, its alt text and where it came from.
+      media: () => ({ url: pick.url, alt: alt.value.trim(), provider: pick.provider, providerId: pick.id }),
+      remove,
+      // Gone without onRemove: the page cleared it after a send.
+      clear() {
+        if (gone) return;
+        gone = true;
+        root.remove();
+      }
+    };
+  }
+
   // src-tauri/src/http/routes/dashboard_kit/chat/index.js
   var cs = window.codesense;
   if (cs && cs.kit && !cs.kit.chat) {
-    cs.kit.chat = { mount, createSendState, targetOf, pinToBottom, core: { cardAnswer, createMarkLatch, deliveryMark, isBusy, parseCard, parseNext, CONSENT_CLASSES, formatCardLine, parseCardLine, PIN_CAP, pinCapLabel, pinCapNote, pinFirstSentence, pinFirstWords, pinLiveText, pinTitleOf, pinWho, pinReplaceLabel, pinChooserHeading, pinPinnedAtLine, pinReplacedText, pinNewRowText, pinListChangeText, pinPinnedMeanwhileText, PIN_REPLACE_FAILED, PIN_ROOM_NOW, PIN_UNDO_FULL, PIN_UNDO_GONE }, thread: { mergeThread, newestFrom, rowsOf, sideOf } };
+    cs.kit.chat = { mount, createSendState, targetOf, pinToBottom, core: { cardAnswer, createMarkLatch, deliveryMark, isBusy, parseCard, parseNext, CONSENT_CLASSES, formatCardLine, parseCardLine, PIN_CAP, pinCapLabel, pinCapNote, pinFirstSentence, pinFirstWords, pinLiveText, pinTitleOf, pinWho, pinReplaceLabel, pinChooserHeading, pinPinnedAtLine, pinReplacedText, pinNewRowText, pinListChangeText, pinPinnedMeanwhileText, PIN_REPLACE_FAILED, PIN_ROOM_NOW, PIN_UNDO_FULL, PIN_UNDO_GONE }, thread: { mergeThread, newestFrom, rowsOf, sideOf }, gifPicker: mountGifPicker, gifStage: mountGifStage };
   }
 })();

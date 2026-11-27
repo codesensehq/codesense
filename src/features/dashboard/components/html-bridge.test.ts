@@ -34,6 +34,10 @@ vi.mock("@/shared/lib/send-to-terminal", async (importOriginal) => ({
   canPasteToTerminal: () => mockCanPasteToTerminal(),
   subscribePasteTarget: () => () => {},
 }));
+const mockOpenSettingsTab = vi.fn();
+vi.mock("@/features/settings/lib/open-settings-tab", () => ({
+  openSettingsTab: (...args: unknown[]) => mockOpenSettingsTab(...args),
+}));
 const mockOpenMessageTab = vi.fn();
 vi.mock("@/features/weft/components/inbox-message-dashboard", () => ({
   openMessageTab: (...args: unknown[]) => mockOpenMessageTab(...args),
@@ -49,6 +53,7 @@ const mockGetHumanStatus = vi.fn();
 const mockSetHumanStatus = vi.fn();
 const mockReplyAsHuman = vi.fn();
 const mockGifSearchPage = vi.fn();
+const mockGifProviderPage = vi.fn();
 const mockGifPicked = vi.fn();
 const mockReactAsHuman = vi.fn();
 const mockAgentPins = vi.fn();
@@ -125,6 +130,7 @@ vi.mock("@/tauri/commands", () => ({
   setHumanStatus: (...a: unknown[]) => mockSetHumanStatus(...a),
   replyAsHuman: (...a: unknown[]) => mockReplyAsHuman(...a),
   gifSearchPage: (...a: unknown[]) => mockGifSearchPage(...a),
+  gifProviderPage: (...a: unknown[]) => mockGifProviderPage(...a),
   gifPicked: (...a: unknown[]) => mockGifPicked(...a),
   reactAsHuman: (...a: unknown[]) => mockReactAsHuman(...a),
   agentPins: (...a: unknown[]) => mockAgentPins(...a),
@@ -304,6 +310,7 @@ describe("HTML_BRIDGE_ALLOWLIST", () => {
       "getEpicHandle",
       "getWorkspaceStatus",
       "gifPicked",
+      "gifProvider",
       "gifSearch",
       "gotoAgent",
       "humanStatus",
@@ -325,6 +332,7 @@ describe("HTML_BRIDGE_ALLOWLIST", () => {
       "openAgentInbox",
       "openDiff",
       "openFile",
+      "openGifSettings",
       "openLauncher",
       "openMessage",
       "openRoutineDraft",
@@ -2369,6 +2377,40 @@ describe("agents read model verbs", () => {
     expect(writeUi).toHaveBeenCalledTimes(1);
   });
 
+  it("refuses a setUiState topic that is not a string before writing, so ['ui:gif'] never becomes ui:gif", async () => {
+    const writeUi = vi.fn(async () => ({}));
+    const ctx = { liveFrame: async () => ({ writeUi }) as never };
+    for (const topic of [["ui:gif"], { "ui:gif": true }, undefined])
+      await expect(
+        runBridgeCommand("setUiState", { topic, patch: { consent: { giphy: true } } }, ctx),
+      ).rejects.toThrow("invalid: setUiState topic must be a string");
+    expect(writeUi).not.toHaveBeenCalled();
+  });
+
+  it("writes a near miss of ui:gif to its own topic, never to ui:gif", async () => {
+    const writeUi = vi.fn(async (_topic: string, _patch: unknown) => ({}));
+    const ctx = { liveFrame: async () => ({ writeUi }) as never };
+    const patch = { consent: { giphy: true } };
+    for (const topic of [" ui:gif", "UI:GIF", "ui:gif "])
+      await runBridgeCommand("setUiState", { topic, patch }, ctx);
+    expect(writeUi.mock.calls.map(([topic]) => topic)).toEqual([" ui:gif", "UI:GIF", "ui:gif "]);
+  });
+
+  it.each(["subscribe", "unsubscribe", "page"])(
+    "refuses a %s topic that is not a string, so ['inbox'] or ['pins'] never becomes that topic",
+    async (verb) => {
+      const live = { subscribe: vi.fn(), unsubscribe: vi.fn(), page: vi.fn() };
+      const ctx = { liveFrame: async () => live as never };
+      for (const topic of [["inbox"], ["pins"], { inbox: true }, undefined])
+        await expect(runBridgeCommand(verb, { topic, cursor: "c1" }, ctx)).rejects.toThrow(
+          `invalid: ${verb} topic must be a string`,
+        );
+      expect(live.subscribe).not.toHaveBeenCalled();
+      expect(live.unsubscribe).not.toHaveBeenCalled();
+      expect(live.page).not.toHaveBeenCalled();
+    },
+  );
+
   it("uses the projection's team metadata without a roster join", async () => {
     const rows = [
       { id: "Remote", handle: "Remote", state: "idle", team: { org: "acme", team: "remote" } },
@@ -2613,13 +2655,33 @@ describe("agents read model verbs", () => {
     await expect(runBridgeCommand("gifSearch", { query: "cat", limit: 4 }, DOC)).resolves.toBe(
       found,
     );
-    expect(mockGifSearchPage).toHaveBeenLastCalledWith(TEAM, "cat", null, 4);
+    expect(mockGifSearchPage).toHaveBeenLastCalledWith(TEAM, "cat", null, 4, null);
     await runBridgeCommand("gifSearch", { ids: ["g1"] }, DOC);
-    expect(mockGifSearchPage).toHaveBeenLastCalledWith(TEAM, null, ["g1"], null);
-    for (const bad of [{}, { query: "cat", ids: ["g1"] }, { query: 3 }, { ids: [1] }]) {
+    expect(mockGifSearchPage).toHaveBeenLastCalledWith(TEAM, null, ["g1"], null, null);
+    // The picker names the provider it asked consent for; the host refuses another.
+    await runBridgeCommand("gifSearch", { query: "cat", provider: "klipy" }, DOC);
+    expect(mockGifSearchPage).toHaveBeenLastCalledWith(TEAM, "cat", null, null, "klipy");
+    for (const bad of [
+      {},
+      { query: "cat", ids: ["g1"] },
+      { query: 3 },
+      { ids: [1] },
+      { query: "cat", provider: "KLIPY" },
+    ]) {
       await expect(runBridgeCommand("gifSearch", bad, DOC)).rejects.toThrow(/gifSearch/);
     }
-    expect(mockGifSearchPage).toHaveBeenCalledTimes(2);
+    expect(mockGifSearchPage).toHaveBeenCalledTimes(3);
+
+    // The provider read takes no arguments but the team, and passes the host's answer through.
+    const active = { status: "ok", provider: "klipy" };
+    mockGifProviderPage.mockResolvedValue(active);
+    await expect(runBridgeCommand("gifProvider", undefined, DOC)).resolves.toBe(active);
+    expect(mockGifProviderPage).toHaveBeenLastCalledWith(TEAM);
+    const off = { status: "error", error: "noProvider", message: "GIF search is off." };
+    mockGifProviderPage.mockResolvedValue(off);
+    await expect(runBridgeCommand("gifProvider", {}, DOC)).resolves.toBe(off);
+    await expect(runBridgeCommand("gifProvider", [], DOC)).rejects.toThrow(/gifProvider/);
+    expect(mockGifProviderPage).toHaveBeenCalledTimes(2);
 
     mockGifPicked.mockResolvedValue({ status: "ok" });
     await expect(
@@ -2635,6 +2697,18 @@ describe("agents read model verbs", () => {
       await expect(runBridgeCommand("gifPicked", bad, DOC)).rejects.toThrow(/gifPicked/);
     }
     expect(mockGifPicked).toHaveBeenCalledTimes(2);
+
+    // Open Settings lands on the GIF search row and takes no args, so a page can't aim it.
+    await expect(runBridgeCommand("openGifSettings", undefined, DOC)).resolves.toEqual({
+      opened: true,
+    });
+    expect(mockOpenSettingsTab).toHaveBeenLastCalledWith("messaging", "gifSearch");
+    for (const bad of [{ section: "general" }, { row: "gifKey" }, []]) {
+      await expect(runBridgeCommand("openGifSettings", bad, DOC)).rejects.toThrow(
+        /openGifSettings/,
+      );
+    }
+    expect(mockOpenSettingsTab).toHaveBeenCalledTimes(1);
 
     mockReplyAsHuman.mockResolvedValue({ status: "sent", messageId: 10 });
     await runBridgeCommand("replyAsHuman", { messageId: 9, text: "yes" }, DOC);

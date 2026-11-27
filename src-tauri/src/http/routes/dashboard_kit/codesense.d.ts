@@ -778,6 +778,74 @@ declare namespace CodesenseSdk {
       newestFrom(rows: ChatRow[], leadHandles: Set<string>): number;
       rowsOf(answer: unknown): ChatRow[];
     };
+    /** The GIF search popover, appended to `element` and closed until `open()`. It reads the provider with `gifProvider` on each open, asks consent for that provider once (kept in the page's `ui:gif` state), and passes it on every `gifSearch` and `gifPicked`. The Inbox pane is the only page those verbs answer. */
+    gifPicker(element: HTMLElement, options: GifPickerOptions): GifPickerHandle;
+    /** The staged GIF with its required alt text, put first in `element` (a composer box, above the text). */
+    gifStage(element: HTMLElement, options: GifStageOptions): GifStageHandle;
+  }
+
+  type GifProviderId = "giphy" | "klipy";
+  /** A GIF the person picked: a `gifSearch` candidate with its provider and its alt text (the provider's cleaned title). */
+  interface GifPick {
+    provider: GifProviderId;
+    id: string;
+    url: string;
+    title: string;
+    alt: string;
+    previewData: string | null;
+    width?: number;
+    height?: number;
+  }
+  interface GifPickerOptions {
+    /** The bridge's `act`. */
+    act(verb: string, args?: Record<string, unknown>): Promise<any>;
+    /** The page's `ui:gif` state, or a read of it; read on each open and before Allow writes. A missing or malformed value allows no provider. */
+    uiState?: Record<string, unknown> | null | (() => unknown);
+    /** Takes a pick; the popover has closed. */
+    onStage?(pick: GifPick): void;
+    /** The provider the placeholder names until `gifProvider` answers. */
+    provider?: GifProviderId | null;
+    /** The Open Settings button's action; without it the states name the Settings path with no button. */
+    openSettings?: (() => void) | null;
+    /** Hears each close: `pick`, `escape`, `close` (× or `close()`), `outside` or `notNow`. */
+    onClose?(reason: "pick" | "escape" | "close" | "outside" | "notNow"): void;
+    /** The control that opens the picker: a press on it is not a press outside. */
+    anchor?: HTMLElement | null;
+    /** Link `/kit/v1/chat.css` once per page (every rule under `.cs-gif`). Default `true`. */
+    styles?: boolean;
+  }
+  interface GifPickerHandle {
+    readonly root: HTMLElement;
+    open(): void;
+    close(): void;
+    toggle(): void;
+    isOpen(): boolean;
+    destroy(): void;
+  }
+  interface GifStageOptions {
+    pick: GifPick;
+    /** × or Backspace on the thumbnail removed it. */
+    onRemove?(): void;
+    /** Each alt text edit, with whether the alt text is there. */
+    onChange?(valid: boolean): void;
+    /** Enter in the alt field: the page moves to the message. It never sends. */
+    onEnter?(): void;
+    styles?: boolean;
+  }
+  interface GifStageHandle {
+    readonly root: HTMLElement;
+    /** The alt text, trimmed. */
+    alt(): string;
+    /** The alt text is there, so the GIF can be sent. */
+    valid(): boolean;
+    /** Focus the alt field with its text selected. */
+    focusAlt(): void;
+    /** The send's `media`. */
+    media(): { url: string; alt: string; provider: GifProviderId; providerId: string };
+    /** Remove it, as × does. */
+    remove(): void;
+    /** Remove it without `onRemove`, as after a send. */
+    clear(): void;
   }
 
   /** The replace chooser's state: the pins it opened on plus the rows arrived on since, the list as last drawn, the current row, what changed, a failed replace. */
@@ -1369,10 +1437,26 @@ declare namespace CodesenseSdk {
       [key: string]: unknown;
     }>;
     /** read · inbox:write */
+    gifProvider(args?: {
+      org?: string;
+      team?: string;
+      [key: string]: unknown;
+    }): Promise<{
+      provider: "giphy" | "klipy";
+      status: "ok";
+      [key: string]: unknown;
+    } | {
+      error: "noProvider" | "mediaOff";
+      message: string;
+      status: "error";
+      [key: string]: unknown;
+    }>;
+    /** read · inbox:write */
     gifSearch(args?: {
       ids?: string[];
       limit?: number;
       org?: string;
+      provider?: "giphy" | "klipy";
       query?: string;
       team?: string;
       [key: string]: unknown;
@@ -1909,6 +1993,11 @@ declare namespace CodesenseSdk {
       team?: string;
       [key: string]: unknown;
     }): Promise<unknown>;
+    /** read · inbox:write */
+    openGifSettings(args?: Record<string, unknown>): Promise<{
+      opened: true;
+      [key: string]: unknown;
+    }>;
     /** spawn · sessions:read */
     openLauncher(args: {
       org?: string;
