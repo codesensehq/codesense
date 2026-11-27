@@ -20,7 +20,7 @@ import type { InboxMediaAttachment, WorkspaceChatMessage } from "@/tauri/command
 import { chatMediaLoader } from "@/features/workspace-chat/lib/chat-media-loader";
 import { fixtureMessages } from "../fixtures";
 import { formatClock } from "../model";
-import { isCachedImage, MessageMedia, type MediaLoader } from "./message-media";
+import { isCachedImage, mediaReason, MessageMedia, type MediaLoader } from "./message-media";
 import { inboxMediaLoader } from "./primitives";
 
 const SHA = "b".repeat(64);
@@ -198,6 +198,19 @@ describe("isCachedImage", () => {
     expect(isCachedImage(image({ sha256: undefined }))).toBe(false);
     expect(isCachedImage(image({ sha256: "B".repeat(64) }))).toBe(false);
     expect(isCachedImage(image({ state: "pending" }))).toBe(false);
+  });
+});
+
+describe("mediaReason with no team", () => {
+  it("says the team config, not a team name, when the chat's post names no team", () => {
+    const team = chatMediaLoader({ ...chatMessage, mediaTeam: undefined }).teamLabel;
+    expect(team).toBeNull();
+    expect(mediaReason(image({ state: "blocked" }), team)).toBe(
+      "GIF · media is off in the team config",
+    );
+    expect(mediaReason(image({ state: "pending", reason: "ask" }), team)).toBe(
+      "GIF · the team asks before loading",
+    );
   });
 });
 
