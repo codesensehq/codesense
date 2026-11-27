@@ -146,6 +146,20 @@ describe.each(LOADERS)("MessageMedia with the $name loader", (c) => {
     expect(container.querySelectorAll("[aria-live]")).toHaveLength(1);
   });
 
+  it("names a still image, not a GIF, while it loads", async () => {
+    const png = (over: Partial<InboxMediaAttachment>) =>
+      image({ mime: "image/png", alt: "a chart", ...over });
+    const { container, rerender } = render(
+      <MessageMedia a={png({ state: c.held, sha256: undefined })} loader={c.loader()} />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /^Load Image from/ }));
+    expect(container.querySelector("[aria-live]")!.textContent).toBe("Loading Image…");
+    rerender(<MessageMedia a={png({ state: "loading", sha256: undefined })} loader={c.loader()} />);
+    await waitFor(() =>
+      expect(screen.getByTestId("ibx-media-live").textContent).toBe("Loading Image…"),
+    );
+  });
+
   it("announces a failed load in the tapped card's region", async () => {
     c.load.mockRejectedValue(new Error("media is off in team config"));
     const { container } = render(
