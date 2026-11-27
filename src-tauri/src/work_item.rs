@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 //! Work items: the one piece of work a lead launch starts, shared by every session below it.
 //!
-//! A work item is minted when an agent session starts and its launcher has none (a person,
-//! the Foreman, a routine, or an agent outside a work item). A launch by a session that has
-//! one inherits it, a restore keeps the id it had and never mints, and a plain shell never
-//! gets one. [`resolve_for_launch`] is the one place that rule lives, and
+//! A work item is minted when an agent session or a routine run starts and its launcher
+//! has none (a person, the Foreman, a routine, or an agent outside a work item). A launch
+//! by a session that has one inherits it, a restore keeps the id it had and never mints,
+//! and a plain shell never gets one. [`resolve_for_launch`] is the one place that rule lives, and
 //! [`WorkItemId::mint`] is private to this module so no other code can make an id.
 
 use serde::{Deserialize, Serialize};
@@ -70,29 +70,6 @@ pub fn deserialize_lenient<'de, D: serde::Deserializer<'de>>(
         .and_then(WorkItemId::parse))
 }
 
-/// What a work item records: its team, the lead that started it, the sprint it belongs to
-/// and the context worktree it works in. Written on the context worktree's record and on
-/// the session record of every session in it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct WorkItem {
-    pub id: WorkItemId,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub org: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub team: Option<String>,
-    /// The lead's session: the one whose launch minted the work item.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub lead_session: Option<String>,
-    /// The lead's named agent.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub lead_agent: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub sprint_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub context_worktree: Option<String>,
-}
-
 /// How a launch reaches the registry, for [`resolve_for_launch`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LaunchKind<'a> {
@@ -107,8 +84,8 @@ pub enum LaunchKind<'a> {
 /// - A restore keeps the id it had, and never mints.
 /// - A plain shell (`names_an_agent` false) never has one.
 /// - An agent launched by a session that has a work item inherits it.
-/// - Any other agent launch (a person, the Foreman, a routine, or an agent outside a
-///   work item) mints a new one.
+/// - Any other agent session or routine run, launched by a person, the Foreman, a routine
+///   or an agent outside a work item, mints a new one.
 pub fn resolve_for_launch(
     launcher: Option<&WorkItemId>,
     names_an_agent: bool,

@@ -214,6 +214,7 @@ fn create_new(
         created_at: now,
         last_used_at: now,
         extras: Default::default(),
+        work_item: None,
     };
     // A failed add made nothing this attempt may remove, so there is nothing to roll back.
     git(
@@ -414,21 +415,31 @@ fn legacy_warning(
     }
     vec![LaunchWarning { code: LaunchWarningCode::LegacyWorker, message: format!("{name} used to run in its own folder ({}). That folder is kept; this launch uses worktree {destination}.", legacy.display()) }]
 }
+/// Record a launch named `name` in `destination`: its last use and, when this launch
+/// created the worktree, `work_item`. A reused worktree (the team's shared default one
+/// included) keeps the work item it has, or none.
 pub(crate) fn note_used(
     home: &Path,
     principal: &Principal,
-    row: &crate::install::worktree_index::ContextWorktreeRecord,
+    destination: &ContextDestination,
     name: &str,
+    work_item: Option<crate::install::worktree_index::ContextWorkItem>,
 ) -> Result<(), String> {
-    let mut row = row.clone();
-    row.last_used_at = std::time::SystemTime::now()
+    let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64;
-    worktree_index::write_context_record(home, principal, &row).map_err(|e| e.to_string())?;
+    let row = &destination.record;
+    worktree_index::update_context_record(home, principal, row, |stored| {
+        if destination.created && stored.work_item.is_none() {
+            stored.work_item = work_item;
+        }
+        stored.last_used_at = now;
+    })
+    .map_err(|e| e.to_string())?;
     let scope = ActiveTeam {
-        org: row.org,
-        team: row.team,
+        org: row.org.clone(),
+        team: row.team.clone(),
     };
     if let Some((_, notice)) = legacy_notice(home, principal, &scope, name) {
         crate::content_engine::atomic_io::write_tmp_fsync_rename(&notice, b"shown")
@@ -776,6 +787,7 @@ mod tests {
             created_at: 1,
             last_used_at: 1,
             extras: Default::default(),
+            work_item: None,
         };
         worktree_index::write_context_record(&f.home, &f.principal, &other).unwrap();
         // While this open creates its branch, another attempt makes its worktree at the
@@ -949,7 +961,7 @@ mod tests {
             .warnings
             .iter()
             .any(|w| w.message.contains(&*legacy.to_string_lossy())));
-        note_used(&f.home, &f.principal, &a.record, "Agent").unwrap();
+        note_used(&f.home, &f.principal, &a, "Agent", None).unwrap();
         let again = resolve(
             &f.home,
             &f.principal,
@@ -965,6 +977,79 @@ mod tests {
             std::fs::read_to_string(legacy.join("notes.txt")).unwrap(),
             "old work"
         );
+    }
+
+    /// Only the launch that creates a worktree stamps its work item. A reused worktree (with
+    /// no name asked, the team's shared one) keeps what it has, or none, and a stale copy of
+    /// the record never clears it.
+    #[test]
+    fn only_the_launch_that_creates_a_worktree_stamps_its_work_item() {
+        use crate::install::worktree_index::ContextWorkItem;
+        let open = |f: &Fixture, name: &str| {
+            resolve(&f.home, &f.principal, &f.scope, &f.content, name, None, false).unwrap()
+        };
+        let stamped = |f: &Fixture, id: &str| {
+            worktree_index::context_records(&f.home, &f.principal)
+                .unwrap()
+                .into_iter()
+                .find(|r| r.id == id)
+                .unwrap()
+                .work_item
+        };
+        let item = |id: &str, lead: &str| ContextWorkItem {
+            id: crate::work_item::WorkItemId::parse(id).unwrap(),
+            lead_session: Some(format!("{lead}-session")),
+            lead_handle: Some(lead.to_lowercase()),
+            lead_agent: Some(lead.to_string()),
+            sprint_id: None,
+        };
+        let lead = item("wi_00000000000000a1", "Lead");
+
+        let f = Fixture::new();
+        let first = open(&f, "Lead");
+        assert!(first.created);
+        note_used(&f.home, &f.principal, &first, "Lead", Some(lead.clone())).unwrap();
+        assert_eq!(stamped(&f, &first.record.id), Some(lead.clone()));
+        let again = open(&f, "Other lead");
+        assert!(!again.created);
+        assert_eq!(again.record.id, first.record.id, "the team's shared worktree");
+        let other = item("wi_00000000000000b2", "Other");
+        note_used(&f.home, &f.principal, &again, "Other lead", Some(other)).unwrap();
+        assert_eq!(stamped(&f, &first.record.id), Some(lead.clone()), "reuse keeps it");
+        note_used(&f.home, &f.principal, &first, "Lead", None).unwrap();
+        assert_eq!(stamped(&f, &first.record.id), Some(lead.clone()), "a stale copy");
+
+        // A worktree a launch with no work item created keeps none when a lead reuses it.
+        let f = Fixture::new();
+        let first = open(&f, "Shell");
+        note_used(&f.home, &f.principal, &first, "Shell", None).unwrap();
+        let again = open(&f, "Lead");
+        assert!(!again.created);
+        note_used(&f.home, &f.principal, &again, "Lead", Some(lead)).unwrap();
+        assert_eq!(stamped(&f, &first.record.id), None);
+    }
+
+    /// A stored record whose work item is malformed still lists, with none, and rewrites.
+    #[test]
+    fn a_malformed_work_item_never_hides_its_worktree() {
+        let f = Fixture::new();
+        let first = resolve(&f.home, &f.principal, &f.scope, &f.content, "Lead", None, false)
+            .unwrap();
+        let mut row = first.record.clone();
+        row.extras.insert(
+            "work_item".into(),
+            serde_json::json!({"id": "not-a-work-item", "lead_agent": "Lead"}),
+        );
+        worktree_index::write_context_record(&f.home, &f.principal, &row).unwrap();
+        let listed = |f: &Fixture| {
+            worktree_index::context_records(&f.home, &f.principal)
+                .unwrap()
+                .into_iter()
+                .find(|r| r.id == first.record.id)
+        };
+        assert_eq!(listed(&f).expect("still listed").work_item, None);
+        note_used(&f.home, &f.principal, &first, "Lead", None).unwrap();
+        assert!(listed(&f).is_some(), "and rewritten");
     }
 
     #[test]

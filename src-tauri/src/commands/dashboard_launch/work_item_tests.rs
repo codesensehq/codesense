@@ -31,6 +31,23 @@ fn wi(raw: &str) -> crate::work_item::WorkItemId {
     crate::work_item::WorkItemId::parse(raw).unwrap()
 }
 
+/// What `work_item_lead` returns for a lead with `session` (if bound), `handle` and
+/// agent name `agent`.
+fn lead_of(
+    id: &crate::work_item::WorkItemId,
+    session: Option<&str>,
+    handle: &str,
+    agent: &str,
+) -> Option<crate::install::worktree_index::ContextWorkItem> {
+    Some(crate::install::worktree_index::ContextWorkItem {
+        id: id.clone(),
+        lead_session: session.map(str::to_string),
+        lead_handle: Some(handle.into()),
+        lead_agent: Some(agent.into()),
+        sprint_id: None,
+    })
+}
+
 /// The registry's side of every fresh launch path: who it records as the launcher and
 /// whether it mints, inherits or leaves no work item.
 #[test]
@@ -105,6 +122,73 @@ fn every_launch_path_records_its_launcher_and_work_item() {
     let all = [&lead, &yours, &outside, &foreman, &bridged, &routine];
     let distinct: std::collections::HashSet<_> = all.iter().collect();
     assert_eq!(distinct.len(), all.len(), "each root launch mints its own");
+
+    // What a context worktree records: a worker's (and its worker's) is its lead's work
+    // item and lead; a root launch leads its own, and a shell has none.
+    launch_agent(&state, "lead#worker#sub", "s-sub", by(Some("s-worker")));
+    for (handle, expected) in [
+        ("lead", lead_of(&lead, Some("s-lead"), "lead", "lead")),
+        ("lead#worker", lead_of(&lead, Some("s-lead"), "lead", "lead")),
+        ("lead#worker#sub", lead_of(&lead, Some("s-lead"), "lead", "lead")),
+        ("shell#agent", lead_of(&outside, Some("s-shell-agent"), "shell#agent", "shell#agent")),
+        ("lead-shell", None),
+    ] {
+        assert_eq!(state.work_item_lead(handle), expected, "{handle}");
+    }
+}
+
+/// The lead a worktree records: its agent name when it has one, its handle alone until it is
+/// bound, the last session still known once it has gone, and a launcher cycle still ends.
+#[test]
+fn a_work_items_lead_is_named_bound_or_not_gone_or_in_a_cycle() {
+    let state = DashboardLaunchState::new(16);
+    let named = LaunchRecord {
+        meta: LaunchMeta {
+            display_name: Some("Planner".into()),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    launch_agent(&state, "planner", "s-planner", named);
+    launch_agent(&state, "planner#worker", "s-planner-worker", by(Some("s-planner")));
+    let planned = state.work_item("planner").unwrap();
+    assert_eq!(
+        state.work_item_lead("planner#worker"),
+        lead_of(&planned, Some("s-planner"), "planner", "Planner"),
+        "the lead's agent name"
+    );
+
+    assert!(state.begin_with_provenance("unbound", None, by(None)).unwrap());
+    let unbound = state.work_item("unbound").unwrap();
+    assert_eq!(
+        state.work_item_lead("unbound"),
+        lead_of(&unbound, None, "unbound", "unbound"),
+        "no session until it is bound"
+    );
+
+    launch_agent(&state, "gone", "s-gone", by(None));
+    launch_agent(&state, "gone#worker", "s-gone-worker", by(Some("s-gone")));
+    let gone = state.work_item("gone").unwrap();
+    assert!(state.release_for_session("s-gone").is_some());
+    assert_eq!(
+        state.work_item_lead("gone#worker"),
+        lead_of(&gone, Some("s-gone-worker"), "gone#worker", "gone#worker"),
+        "a lead no longer registered leaves the last session still known"
+    );
+
+    // `a` names `b` as its launcher before `b` exists, then `b` launches from `a`.
+    launch_agent(&state, "a", "s-a", by(Some("s-b")));
+    launch_agent(&state, "b", "s-b", by(Some("s-a")));
+    let cycle = state.work_item("a").unwrap();
+    assert_eq!(state.work_item("b"), Some(cycle.clone()));
+    assert_eq!(
+        state.work_item_lead("a"),
+        lead_of(&cycle, Some("s-b"), "b", "b")
+    );
+    assert_eq!(
+        state.work_item_lead("b"),
+        lead_of(&cycle, Some("s-a"), "a", "a")
+    );
 }
 
 #[test]

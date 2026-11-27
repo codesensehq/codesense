@@ -726,6 +726,7 @@ impl Fx {
             created_at: 1,
             last_used_at: 1,
             extras: Default::default(),
+            work_item: None,
         };
         worktree_index::write_context_record(self.home.path(), &alice(), &row).unwrap();
         row
@@ -1291,6 +1292,7 @@ fn retained_story_hydration_intersects_real_checkout_shares_before_copying() {
         created_at: 1,
         last_used_at: 1,
         extras: Default::default(),
+        work_item: None,
     };
     worktree_index::write_context_record(home.path(), &alice(), &row).unwrap();
     assert_eq!(

@@ -301,7 +301,15 @@ pub(crate) trait OpenHost: Send + Sync {
     ) -> Result<(), String> {
         Ok(())
     }
-    async fn context_used(&self, _destination: &context::ContextDestination, _name: &str) {}
+    /// Record that `handle`'s launch, named `name`, started in `destination`: see
+    /// [`context::note_used`] and [`context_work_item`].
+    async fn context_used(
+        &self,
+        _destination: &context::ContextDestination,
+        _name: &str,
+        _handle: &str,
+    ) {
+    }
     /// Prepare the agent `reference` names for a launch against `team` with `prompt`, in
     /// `mode` when the caller chose one, else the agent's own declared mode
     /// ([`crate::agents::launch::prepare_named`]). `Err` is an agent that cannot be found.
@@ -1048,7 +1056,7 @@ async fn open_agent_as(
         Ok(launched) if launched.fresh => {
             warnings.extend(launched.warnings);
             if let Some(destination) = &destination {
-                host.context_used(destination, &name).await;
+                host.context_used(destination, &name, &handle).await;
             }
             if mode.is_visible() {
                 host.reveal(&handle, mode.is_focused());
@@ -2510,6 +2518,20 @@ impl AppOpenHost {
     }
 }
 
+/// The work item a launch stamps on the worktree it created: `handle`'s, with its lead.
+/// The launch is reserved by now, so its work item is settled; its lead may not be bound
+/// yet, so the lead is named by handle as well. None for a reused worktree.
+pub(crate) fn context_work_item(
+    launch: Option<&super::dashboard_launch::DashboardLaunchState>,
+    destination: &context::ContextDestination,
+    handle: &str,
+) -> Option<crate::install::worktree_index::ContextWorkItem> {
+    if !destination.created {
+        return None;
+    }
+    super::dashboard_launch::DashboardLaunchState::work_item_lead(launch?, handle)
+}
+
 #[async_trait::async_trait]
 impl OpenHost for AppOpenHost {
     fn sweep_seats(&self, story_id: &str) {
@@ -2798,15 +2820,27 @@ impl OpenHost for AppOpenHost {
         .await
     }
 
-    async fn context_used(&self, destination: &context::ContextDestination, name: &str) {
-        let (home, principal, row, name) = (
+    async fn context_used(
+        &self,
+        destination: &context::ContextDestination,
+        name: &str,
+        handle: &str,
+    ) {
+        let work_item = context_work_item(
+            self.app
+                .try_state::<super::dashboard_launch::DashboardLaunchState>()
+                .as_deref(),
+            destination,
+            handle,
+        );
+        let (home, principal, destination, name) = (
             self.codesense_home.clone(),
             self.principal.clone(),
-            destination.record.clone(),
+            destination.clone(),
             name.to_string(),
         );
         if let Err(error) = super::await_blocking("open_workspace.context_used", move || {
-            context::note_used(&home, &principal, &row, &name)
+            context::note_used(&home, &principal, &destination, &name, work_item)
         })
         .await
         {

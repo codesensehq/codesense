@@ -820,9 +820,46 @@ pub struct ContextWorktreeRecord {
     pub launch_cwd: PathBuf,
     pub created_at: u64,
     pub last_used_at: u64,
+    /// The work item of the launch that created this worktree, with its lead. A reused
+    /// worktree keeps what it has. Older readers keep it through `extras`; a malformed one
+    /// reads as none.
+    #[serde(
+        default,
+        deserialize_with = "lenient_work_item",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub work_item: Option<ContextWorkItem>,
     /// Preserve fields written by newer clients when updating this record.
     #[serde(flatten)]
     pub extras: std::collections::BTreeMap<String, serde_json::Value>,
+}
+
+/// The work item a context worktree belongs to: its id and its lead (the session up the
+/// launcher chain that minted it). A worker's worktree carries its lead's work item.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContextWorkItem {
+    pub id: crate::work_item::WorkItemId,
+    /// The lead's session id, once it is bound.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lead_session: Option<String>,
+    /// The lead's registry handle: it names the lead before its session is bound.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lead_handle: Option<String>,
+    /// The lead's agent name, else its handle.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lead_agent: Option<String>,
+    /// Always None for now: no launch path carries a sprint yet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sprint_id: Option<String>,
+}
+
+/// A malformed work item reads as none, the rule [`crate::work_item::deserialize_lenient`]
+/// keeps for a bare id, so it never hides its worktree or blocks a rewrite of the record.
+fn lenient_work_item<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<ContextWorkItem>, D::Error> {
+    let raw = serde_json::Value::deserialize(deserializer)?;
+    Ok(Result::ok(serde_json::from_value(raw)))
 }
 
 pub fn write_context_record(
@@ -830,11 +867,26 @@ pub fn write_context_record(
     principal: &Principal,
     record: &ContextWorktreeRecord,
 ) -> Result<(), Error> {
+    update_context_record(home, principal, record, |row| *row = record.clone())
+}
+
+/// Change the context record at `record.root` under the record-write lock, starting from
+/// what is stored now (else `record`), so two launches never overwrite each other's change.
+pub fn update_context_record(
+    home: &Path,
+    principal: &Principal,
+    record: &ContextWorktreeRecord,
+    change: impl FnOnce(&mut ContextWorktreeRecord),
+) -> Result<(), Error> {
     let _guard = record_writes().lock().unwrap_or_else(|e| e.into_inner());
     let path = record_path(home, principal, &record.root)?;
-    let _ = read_index_record_at(&path)?;
+    let mut row = match read_index_record_at(&path)? {
+        Some(WorktreeRecord::Context(stored)) => stored,
+        _ => record.clone(),
+    };
+    change(&mut row);
     let bytes =
-        serde_json::to_vec_pretty(record).map_err(|e| Error::Io(std::io::Error::other(e)))?;
+        serde_json::to_vec_pretty(&row).map_err(|e| Error::Io(std::io::Error::other(e)))?;
     write_tmp_fsync_rename(&path, &bytes)
 }
 
@@ -2771,6 +2823,7 @@ mod context_tests {
             created_at: 1,
             last_used_at: 2,
             extras: Default::default(),
+            work_item: None,
         };
         write_context_record(home, &principal, &row).unwrap();
         assert_eq!(

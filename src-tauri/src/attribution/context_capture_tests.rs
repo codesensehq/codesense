@@ -95,6 +95,7 @@ fn context_worktree(fixture: &Launch) -> (PathBuf, PathBuf, PathBuf) {
             created_at: 1,
             last_used_at: 1,
             extras: Default::default(),
+            work_item: None,
         },
     )
     .unwrap();
