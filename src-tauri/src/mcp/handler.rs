@@ -9967,7 +9967,7 @@ impl CodesenseHandler {
     }
 
     #[tool(
-        description = "Set or clear a team's landing page — the file CodeSense opens whenever the team has nothing open (`teams.yml` `landing_page:`), the same edit as the UI's Set as team landing page. Pass `path`: relative to the team's content folder (`guide/start.md`) or an absolute path inside it; it must be an existing file, not hidden and not outside the folder. `path` is required: pass `null` to clear it (the team then falls back to README.md, README.html, then index.html); leaving it out is refused. `org` and `team` name the team; omit both for the active team. The edit stays a local working-tree change of the context repo (publish it to share it). Returns { status:\"ok\", data:{ orgSlug, edit:\"SetTeamLandingPage\", team, starterPage } }; a missing `path`, a missing, hidden or outside file, an unknown team, or the read-only CodeSense Docs returns { status:\"validation\", message } and changes nothing. `set_team_starter_page` is its old name, kept as an alias."
+        description = "Set or clear a team's landing page — the file CodeSense opens whenever the team has nothing open (`teams.yml` `landing_page:`), the same edit as the UI's Set as team landing page. Pass `path`: relative to the team's content folder (`guide/start.md`) or an absolute path inside it; it must be an existing file, not hidden and not outside the folder. `path` is required: pass `null` to clear it (the team then falls back to README.md, README.html, then index.html); leaving it out is refused. `org` and `team` name the team; omit both for the active team. The edit stays a local working-tree change of the context repo (publish it to share it). Returns { status:\"ok\", data:{ orgSlug, edit:\"SetTeamLandingPage\", team, landingPage } }; a missing `path`, a missing, hidden or outside file, an unknown team, or the read-only CodeSense Docs returns { status:\"validation\", message } and changes nothing. `set_team_starter_page` is its old name, kept as an alias."
     )]
     async fn set_team_landing_page(
         &self,
@@ -9976,11 +9976,11 @@ impl CodesenseHandler {
         let reply = self
             .set_team_landing_page_as(team_tools::LANDING_PAGE_TOOL, params)
             .await?;
-        envelope_json(&reply)
+        envelope_json(&team_tools::landing_page_reply(reply))
     }
 
     #[tool(
-        description = "An alias of set_team_landing_page, its old name: the same arguments and the same edit to a team's landing page. Its `ok` reply adds `alias:true` and `use:\"set_team_landing_page\"`; call set_team_landing_page instead."
+        description = "An alias of set_team_landing_page, its old name: the same arguments and the same edit to a team's landing page. It replies with the page under its old key, `starterPage`, and only its `ok` reply adds `alias:true` and `use:\"set_team_landing_page\"`; call set_team_landing_page instead."
     )]
     async fn set_team_starter_page(
         &self,
@@ -9989,7 +9989,7 @@ impl CodesenseHandler {
         let reply = self
             .set_team_landing_page_as(team_tools::STARTER_PAGE_ALIAS, params)
             .await?;
-        envelope_json(&reply.aliased(team_tools::LANDING_PAGE_TOOL))
+        envelope_json(&team_tools::starter_page_alias_reply(reply))
     }
 
     #[tool(
@@ -20514,6 +20514,53 @@ pub(crate) mod tests {
                 tool.name
             );
         }
+    }
+
+    #[test]
+    fn the_landing_page_tool_replies_landing_page_and_its_old_name_replies_as_an_alias() {
+        use crate::mcp::team_tools::{
+            landing_page_reply, starter_page_alias_reply, StarterPageSet,
+        };
+        use crate::mcp::tool_envelope::ToolEnvelope;
+        let set = || {
+            ToolEnvelope::Ok(StarterPageSet {
+                change: crate::commands::registry_local::OrgRegistryChanged {
+                    principal: "7".into(),
+                    org_slug: "acme/ctx".into(),
+                    edit: "SetTeamLandingPage",
+                    team: Some("web".into()),
+                    previous_team: None,
+                },
+                starter_page: Some("guide/start.md".into()),
+            })
+        };
+        // What the served tools send: their reply through `envelope_json`, read
+        // back as an MCP client reads the text content.
+        let sent = |result: CallToolResult| -> serde_json::Value {
+            serde_json::from_str(&result.content[0].as_text().unwrap().text).unwrap()
+        };
+        let page = json!({ "principal": "7", "orgSlug": "acme/ctx", "edit": "SetTeamLandingPage", "team": "web" });
+        let mut landing = page.clone();
+        landing["landingPage"] = json!("guide/start.md");
+        assert_eq!(
+            sent(envelope_json(&landing_page_reply(set())).unwrap()),
+            json!({ "status": "ok", "data": landing })
+        );
+        let mut alias = page;
+        alias["starterPage"] = json!("guide/start.md");
+        alias["alias"] = json!(true);
+        alias["use"] = json!("set_team_landing_page");
+        assert_eq!(
+            sent(envelope_json(&starter_page_alias_reply(set())).unwrap()),
+            json!({ "status": "ok", "data": alias })
+        );
+        let landing_doc = tool_description("set_team_landing_page").unwrap();
+        assert!(landing_doc.contains("team, landingPage }"), "{landing_doc}");
+        let alias_doc = tool_description("set_team_starter_page").unwrap();
+        assert!(
+            alias_doc.contains("`starterPage`") && alias_doc.contains("only its `ok` reply"),
+            "{alias_doc}"
+        );
     }
 
     /// The registered description of MCP tool `name` (tests read tool copy through it).

@@ -21,7 +21,7 @@ use crate::context_repo::RegistryEdit;
 use crate::domain::Principal;
 
 use super::setup_tools::{ActiveTeamSwitched, Reply, SetActiveTeamParams};
-use super::tool_envelope::ToolEnvelope;
+use super::tool_envelope::{Aliased, ToolEnvelope};
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -115,14 +115,50 @@ pub(crate) const LANDING_PAGE_TOOL: &str = "set_team_landing_page";
 /// Its old name, still served: the same edit, its reply marked as an alias.
 pub(crate) const STARTER_PAGE_ALIAS: &str = "set_team_starter_page";
 
-/// What `set_team_landing_page` did: the registry change and the page now set
-/// (relative to the team's content folder; `null` once cleared).
+/// What setting a team's landing page did: the registry change and the page now
+/// set (relative to the team's content folder; `null` once cleared). The
+/// `set_team_starter_page` alias replies with it, keeping the old `starterPage`
+/// key for existing callers.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StarterPageSet {
     #[serde(flatten)]
     pub change: OrgRegistryChanged,
     pub starter_page: Option<String>,
+}
+
+/// What `set_team_landing_page` replies: the same as [`StarterPageSet`], with
+/// the page under `landingPage`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LandingPageSet {
+    #[serde(flatten)]
+    pub change: OrgRegistryChanged,
+    pub landing_page: Option<String>,
+}
+
+impl From<StarterPageSet> for LandingPageSet {
+    fn from(set: StarterPageSet) -> Self {
+        Self {
+            change: set.change,
+            landing_page: set.starter_page,
+        }
+    }
+}
+
+/// `set_team_landing_page`'s reply: the page under `landingPage`.
+pub(crate) fn landing_page_reply(
+    reply: ToolEnvelope<StarterPageSet>,
+) -> ToolEnvelope<LandingPageSet> {
+    reply.map_ok(LandingPageSet::from)
+}
+
+/// `set_team_starter_page`'s reply: the old `starterPage` key, and on `ok` the
+/// alias marker naming the tool to call instead.
+pub(crate) fn starter_page_alias_reply(
+    reply: ToolEnvelope<StarterPageSet>,
+) -> ToolEnvelope<Aliased<StarterPageSet>> {
+    reply.aliased(LANDING_PAGE_TOOL)
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -1292,13 +1328,19 @@ mod tests {
             Some("guide/start.md"),
         )
         .await;
-        let landing = serde_json::to_value(&reply).unwrap();
-        let mut expected = landing.clone();
-        expected["data"]["alias"] = serde_json::json!(true);
-        expected["data"]["use"] = serde_json::json!(LANDING_PAGE_TOOL);
+        let landing = serde_json::to_value(landing_page_reply(reply.clone())).unwrap();
         assert_eq!(
-            serde_json::to_value(reply.aliased(LANDING_PAGE_TOOL)).unwrap(),
-            expected
+            landing["data"],
+            serde_json::json!({ "principal": UID.to_string(), "orgSlug": ORG, "edit": "SetTeamLandingPage", "team": "web", "landingPage": "guide/start.md" })
+        );
+        let alias = serde_json::to_value(starter_page_alias_reply(reply)).unwrap();
+        assert_eq!(
+            alias["data"],
+            serde_json::json!({ "principal": UID.to_string(), "orgSlug": ORG, "edit": "SetTeamLandingPage", "team": "web", "starterPage": "guide/start.md", "alias": true, "use": LANDING_PAGE_TOOL })
+        );
+        assert_eq!(
+            (&landing["status"], &alias["status"]),
+            (&serde_json::json!("ok"), &serde_json::json!("ok"))
         );
         assert_eq!(LANDING_PAGE_TOOL, "set_team_landing_page");
         assert_eq!(STARTER_PAGE_ALIAS, "set_team_starter_page");
@@ -1308,6 +1350,23 @@ mod tests {
                 .landing_page
                 .as_deref(),
             Some("guide/start.md")
+        );
+    }
+
+    #[test]
+    fn only_an_ok_reply_carries_the_alias_marker() {
+        let refused = || ToolEnvelope::<StarterPageSet>::Validation {
+            message: "no such file".into(),
+        };
+        let expected =
+            serde_json::json!({ "status": "validation", "data": { "message": "no such file" } });
+        assert_eq!(
+            serde_json::to_value(landing_page_reply(refused())).unwrap(),
+            expected
+        );
+        assert_eq!(
+            serde_json::to_value(starter_page_alias_reply(refused())).unwrap(),
+            expected
         );
     }
 

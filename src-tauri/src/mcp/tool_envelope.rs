@@ -46,14 +46,10 @@ pub(crate) struct Aliased<T> {
 }
 
 impl<T> ToolEnvelope<T> {
-    /// This reply as the old name `use_instead` replaces gives it.
-    pub(crate) fn aliased(self, use_instead: &'static str) -> ToolEnvelope<Aliased<T>> {
+    /// This reply with its `ok` payload mapped by `f`; other arms pass through.
+    pub(crate) fn map_ok<U>(self, f: impl FnOnce(T) -> U) -> ToolEnvelope<U> {
         match self {
-            Self::Ok(data) => ToolEnvelope::Ok(Aliased {
-                data,
-                alias: true,
-                use_instead,
-            }),
+            Self::Ok(data) => ToolEnvelope::Ok(f(data)),
             Self::NotSyncedLocally => ToolEnvelope::NotSyncedLocally,
             Self::UnauthorizedTeam => ToolEnvelope::UnauthorizedTeam,
             Self::Validation { message } => ToolEnvelope::Validation { message },
@@ -65,6 +61,15 @@ impl<T> ToolEnvelope<T> {
                 current_revision,
             },
         }
+    }
+
+    /// This reply as the old name `use_instead` replaces gives it.
+    pub(crate) fn aliased(self, use_instead: &'static str) -> ToolEnvelope<Aliased<T>> {
+        self.map_ok(|data| Aliased {
+            data,
+            alias: true,
+            use_instead,
+        })
     }
 }
 
