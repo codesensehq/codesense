@@ -1530,8 +1530,8 @@ pub(crate) async fn open_workspace_call_for(
     if mode.is_visible() {
         port.reveal(&outcome.handle, mode.is_focused());
     }
-    // SW-OR-1b (AC-6): `reconciled` is `{from,to}` when the story's recorded branch
-    // converged to the opened branch, else `null`.
+    // `reconciled` is `{from,to}` when the story's recorded branch differs from the
+    // opened branch (the story doc is not written), else `null`.
     let mut result = serde_json::json!({
         "handle": outcome.handle,
         "mode": mode.as_wire(),

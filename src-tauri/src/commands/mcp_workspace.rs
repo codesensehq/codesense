@@ -579,11 +579,11 @@ fn agent_telemetry_id(agent: &crate::agents::launch::AgentLaunch, _binary: &Path
     agent.agent.key.to_string()
 }
 
-/// SW-OR-1b: the honest branch-reconcile result carried on an open result — the
-/// story's recorded branch BEFORE (`from`, `None` for a cold story) and the
-/// observed branch it was converged to (`to`). Serializes to `null` on the wire
-/// when no reconcile happened (already in sync, or the branch was unreadable) via
-/// the `Option<BranchReconcile>` it lives in.
+/// The branch drift carried on an open result: the story's recorded branch (`from`,
+/// `None` for a story that records none) and the branch its worktree is on (`to`).
+/// Nothing is written; the story doc keeps `from` until something else writes it.
+/// Serializes to `null` on the wire when there is no drift (already in sync, or the
+/// branch was unreadable) via the `Option<BranchReconcile>` it lives in.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub(crate) struct BranchReconcile {
     pub from: Option<String>,
@@ -639,9 +639,9 @@ impl LaunchHome {
     }
 }
 
-/// SW-OR-1b: the outcome of a story launch — the opaque handle (the `story_id`)
-/// plus any branch reconciliation that happened on open, so `open_workspace` can
-/// render an honest line ("Story SW-XX branch → feat/…").
+/// The outcome of a story launch: the opaque handle (the `story_id`) plus any branch
+/// drift seen on open, so `open_workspace` can report where the worktree is against
+/// what the story records.
 #[derive(Debug, Clone)]
 pub(crate) struct LaunchOutcome {
     pub handle: String,
@@ -753,51 +753,56 @@ async fn fill_launch_work_product<F, Fut>(
     }
 }
 
-/// SW-OR-1b: converge the story's canonical `branch` frontmatter to the branch
-/// the worktree is actually on. Reuses the shipped byte-preserving, idempotent,
-/// fail-safe, watcher-suppressed stamp ([`content_engine::write_story_branch`]) —
-/// the SAME mechanism the establish/derive wave uses, so there is one stamp, one
-/// field, everywhere. The write target is the story SOURCE doc in the managed
-/// context store (always a managed surface); the worktree dir is read only for
-/// its current git HEAD.
-///
-/// Returns `Some({from,to})` ONLY when the recorded branch value actually changed
-/// (a real reconcile worth reporting); `None` when already in sync, when the
-/// canonical field was merely materialized from a byte-identical legacy value, or
-/// when the branch was unreadable (detached HEAD). Best-effort: a cache miss or a
-/// write failure is a silent skip — it never fails the launch.
+/// Compare the story's recorded `branch` with the branch the worktree is on. It only
+/// reads: the story doc lives in the canonical context clone, which an open must leave
+/// unchanged, so a drift is reported and never written back. The recorded branch comes
+/// from the same managed-doc oracle `ensure_story_worktree` uses; a cache miss is a
+/// silent skip that never fails the launch.
 fn reconcile_branch_on_open(
     app: &AppHandle,
     story_id: &str,
     worktree_dir: &Path,
 ) -> (Option<BranchReconcile>, Option<String>) {
-    // Resolve the story's source path + prior recorded branch from the SAME
-    // managed-doc oracle `ensure_story_worktree` uses. A miss is non-fatal.
-    let (story_path, from) = {
-        let Some(shared) =
-            app.try_state::<crate::install::frontmatter_cache::SharedFrontmatterCache>()
-        else {
-            return (None, None);
-        };
-        let cache = crate::install::frontmatter_cache::FrontmatterCache::snapshot(&shared);
-        let Ok(entry) = cache.single_by_story_id(story_id) else {
-            return (None, None);
-        };
-        (entry.path.clone(), entry.story_branch().map(str::to_string))
+    let Some(shared) = app.try_state::<crate::install::frontmatter_cache::SharedFrontmatterCache>()
+    else {
+        return (None, None);
     };
-    let wrote = crate::commands::content_engine::write_story_branch(app, &story_path, worktree_dir);
-    let canonical_branch = wrote.clone().or_else(|| from.clone());
-    (reconcile_report(from, wrote), canonical_branch)
+    let cache = crate::install::frontmatter_cache::FrontmatterCache::snapshot(&shared);
+    let Ok(entry) = cache.single_by_story_id(story_id) else {
+        return (None, None);
+    };
+    let from = entry.story_branch().map(str::to_string);
+    reconcile_on_open_core(&entry.path, from, worktree_dir)
 }
 
-/// Pure decision (unit-testable, no I/O): given the story's prior recorded branch
-/// (`from`) and the value the stamp actually wrote (`wrote` — `None` when nothing
-/// was written: already in sync, or a detached HEAD fail-safe), produce the honest
-/// reconcile to report. `Some` only on a genuine value change; a write that merely
-/// materialized the canonical `branch` from a byte-identical legacy value (`from ==
-/// to`) reports `None` — no noisy "X → X" line.
-fn reconcile_report(from: Option<String>, wrote: Option<String>) -> Option<BranchReconcile> {
-    let to = wrote?;
+/// Pure core of [`reconcile_branch_on_open`]: reads the worktree's HEAD and returns the
+/// drift to report and the branch the launch works on (HEAD, else the recorded `from`).
+/// `story_path` is only logged; nothing is written.
+fn reconcile_on_open_core(
+    story_path: &Path,
+    from: Option<String>,
+    worktree_dir: &Path,
+) -> (Option<BranchReconcile>, Option<String>) {
+    let head = crate::commands::worktree::current_branch_of_worktree(worktree_dir);
+    let canonical_branch = head.clone().or_else(|| from.clone());
+    let reconciled = reconcile_report(from, head);
+    if let Some(drift) = &reconciled {
+        log::debug!(
+            "{} records branch {:?}, its worktree is on {}; not written",
+            story_path.display(),
+            drift.from,
+            drift.to
+        );
+    }
+    (reconciled, canonical_branch)
+}
+
+/// Pure decision (unit-testable, no I/O): given the story's recorded branch (`from`)
+/// and the worktree's HEAD branch (`head`, `None` on a detached or unreadable HEAD),
+/// produce the drift to report. `Some` only when the two differ; a story already on
+/// its worktree's branch reports `None`, with no noisy "X → X" line.
+fn reconcile_report(from: Option<String>, head: Option<String>) -> Option<BranchReconcile> {
+    let to = head?;
     if from.as_deref() == Some(to.as_str()) {
         return None;
     }
@@ -1080,11 +1085,10 @@ pub(crate) async fn launch_story_session_typed(
             Some(seat) => Some(ensure_seat_worktree(app, &ctx, story_id, seat).await?),
             None => None,
         };
-        // SW-OR-1b: converge the story's `branch` frontmatter to the worktree's actual
-        // HEAD before binding the session, so a board opening the story can trust the
-        // linked doc reflects reality. Runs on every launch path (open_workspace +
-        // sprint-run) — idempotent, so a no-drift reopen is a true no-op. A seat launch
-        // skips it: its worktree is on the seat's branch, or detached.
+        // Compare the story's recorded `branch` with the worktree's HEAD before binding
+        // the session, and report a drift without writing the story doc. Runs on every
+        // launch path (open_workspace + sprint-run). A seat launch skips it: its worktree
+        // is on the seat's branch, or detached.
         let (reconciled, canonical_branch) = if plan.reconcile {
             reconcile_branch_on_open(app, story_id, &story_dir)
         } else {
@@ -3835,7 +3839,10 @@ mod tests {
     /// The open reconcile only reads: its body never reaches the story-doc writer.
     #[test]
     fn reconcile_branch_on_open_never_writes() {
-        let body = fn_source(include_str!("mcp_workspace.rs"), "fn reconcile_branch_on_open(");
+        let body = fn_source(
+            include_str!("mcp_workspace.rs"),
+            "fn reconcile_branch_on_open(",
+        );
         assert!(!body.contains("write_story_branch"));
         assert!(body.contains("reconcile_on_open_core("));
     }
@@ -3850,16 +3857,25 @@ mod tests {
         let establish = fn_source(workspace, "async fn establish_story_worktree(");
         assert!(establish.contains("establish_worktree_story_link_unstamped("));
         assert!(!establish.contains("establish_worktree_story_link("));
-        let hydrate = fn_source(workspace, "pub(crate) async fn resolve_hydrated_story_worktree(");
+        let hydrate = fn_source(
+            workspace,
+            "pub(crate) async fn resolve_hydrated_story_worktree(",
+        );
         assert!(hydrate.contains("resolve_hydrated_story_worktree_unlocked("));
-        let unlocked = fn_source(workspace, "async fn resolve_hydrated_story_worktree_unlocked(");
+        let unlocked = fn_source(
+            workspace,
+            "async fn resolve_hydrated_story_worktree_unlocked(",
+        );
         assert!(unlocked.contains("establish_story_worktree("));
         assert!(!unlocked.contains("establish_worktree_story_link"));
         let seat = fn_source(workspace, "async fn ensure_seat_worktree(");
         assert!(!seat.contains("establish_worktree_story_link"));
 
         let engine = include_str!("content_engine.rs");
-        let command = squish(fn_source(engine, "pub async fn establish_worktree_story_link("));
+        let command = squish(fn_source(
+            engine,
+            "pub async fn establish_worktree_story_link(",
+        ));
         assert!(command.contains("establish_worktree_story_link_with("));
         assert!(command.contains(",true") && !command.contains(",false"));
         let unstamped = squish(fn_source(
@@ -3868,10 +3884,16 @@ mod tests {
         ));
         assert!(unstamped.contains("establish_worktree_story_link_with("));
         assert!(unstamped.contains(",false") && !unstamped.contains(",true"));
-        let with = squish(fn_source(engine, "async fn establish_worktree_story_link_with("));
+        let with = squish(fn_source(
+            engine,
+            "async fn establish_worktree_story_link_with(",
+        ));
         assert!(with.contains("establish_worktree_story_link_blocking("));
         assert!(with.contains(",stamp"));
-        let blocking = squish(fn_source(engine, "fn establish_worktree_story_link_blocking("));
+        let blocking = squish(fn_source(
+            engine,
+            "fn establish_worktree_story_link_blocking(",
+        ));
         assert!(blocking.contains("register_story_workspace("));
         assert!(blocking.contains("ifstamp&&stamps_story_branch("));
     }
