@@ -13,7 +13,7 @@ fn team() -> LaunchTeam {
     }
 }
 
-fn row(handle: &str, name: &str, state: SessionState) -> SessionListRow {
+pub(super) fn row(handle: &str, name: &str, state: SessionState) -> SessionListRow {
     SessionListRow {
         id: handle.into(),
         team: Some(team()),

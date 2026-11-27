@@ -1638,3 +1638,132 @@ async fn pbf211_private_recovery_payload_deleted_org_scoped_without_file_view() 
 async fn pbf211_private_recovery_payload_deleted_org_global_without_file_view() {
     recovery_payload_contract("private", "deleted-org-global", false).await;
 }
+
+fn plain_view(own: PathBuf) -> FileView {
+    FileView {
+        access: ContentAccess::new(
+            own,
+            None,
+            crate::context_repo::caller_scope::CallerScope::Human,
+        ),
+        args: ListFiles::default(),
+        team_key: "team".into(),
+        root: PathBuf::new(),
+        rows: BTreeMap::new(),
+        folder_rows: BTreeMap::new(),
+    }
+}
+
+fn untracked_folders(content: &std::path::Path, folders: usize) {
+    for n in 0..folders {
+        let folder = content.join(format!("folder-{n}"));
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join("note.md"), "note").unwrap();
+    }
+}
+
+/// How many `folder-N` listings (keyed by their logical path) hold rows that are all
+/// tinted `added`.
+fn tinted_folders(folder_rows: &BTreeMap<String, BTreeMap<String, Value>>) -> usize {
+    folder_rows
+        .iter()
+        .filter(|(folder, _)| {
+            std::path::Path::new(folder)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("folder-"))
+        })
+        .filter(|(_, children)| {
+            !children.is_empty() && children.values().all(|row| row["gitState"] == "added")
+        })
+        .count()
+}
+
+#[tokio::test]
+async fn one_reset_runs_one_git_status_whatever_the_folder_count() {
+    use crate::commands::file_surface::{tests::committed_repo, TINT_STATUSES};
+    use crate::routines::test_support::TEAM;
+    for folders in [1, 5, 12] {
+        let (_dir, _repo, own) = committed_repo(&[("tracked.md", "tracked")]);
+        untracked_folders(&own, folders);
+        let mut view = plain_view(own);
+        TINT_STATUSES.take();
+        reset(&mut view);
+        assert_eq!(TINT_STATUSES.take().len(), 1, "reset at {folders} folders");
+        assert_eq!(view.folder_rows.len(), folders);
+        assert_eq!(
+            tinted_folders(&view.folder_rows),
+            folders,
+            "reset at {folders} folders"
+        );
+    }
+    for folders in [1, 5, 12] {
+        let (fixture, _) = content_fixture(false);
+        git2::Repository::init(&fixture.org_root).unwrap();
+        untracked_folders(&fixture.team_root.join("docs"), folders);
+        let frame = fixture.frame("file-nav", Some(TEAM), "open");
+        let args = ListFiles {
+            dir: Some("docs".into()),
+            ..Default::default()
+        };
+        TINT_STATUSES.take();
+        let key = file_surface_prepare_view(fixture.app.handle().clone(), frame.frame_id, args)
+            .await
+            .unwrap();
+        assert_eq!(
+            TINT_STATUSES.take().len(),
+            1,
+            "first paint at {folders} folders"
+        );
+        let hub = fixture.app.state::<super::super::LiveHub>();
+        let model = hub.model.lock().unwrap();
+        let view = &model.files.views[&key];
+        assert_eq!(view.folder_rows.len(), folders);
+        assert_eq!(
+            tinted_folders(&view.folder_rows),
+            folders,
+            "first paint at {folders} folders"
+        );
+        assert_eq!(view.rows["docs/a.md"]["gitState"], "added");
+    }
+}
+
+#[test]
+fn reset_tints_match_the_per_listing_result() {
+    use crate::commands::file_surface::tests::{committed_repo, stage_move};
+    let (_dir, repo, own) = committed_repo(&[
+        ("tracked.md", "first"),
+        ("before.md", "identical bytes"),
+        ("kept/inside.md", "kept"),
+    ]);
+    std::fs::write(own.join("tracked.md"), "changed").unwrap();
+    std::fs::write(own.join("untracked.md"), "new").unwrap();
+    std::fs::create_dir_all(own.join("fresh")).unwrap();
+    std::fs::write(own.join("fresh/inside.md"), "fresh").unwrap();
+    stage_move(&repo, &own, "before.md", "after.md");
+    let mut view = plain_view(own);
+    reset(&mut view);
+    // What the per-listing tint gave before one status fed the whole reset.
+    assert_eq!(view.rows["tracked.md"]["gitState"], "modified");
+    assert_eq!(view.rows["untracked.md"]["gitState"], "added");
+    assert_eq!(view.rows["after.md"]["gitState"], "renamed");
+    assert_eq!(view.rows["after.md"]["oldName"], "before.md");
+    assert_eq!(
+        view.folder_rows["fresh"]["fresh/inside.md"]["gitState"],
+        "added"
+    );
+    assert!(view.folder_rows["kept"]["kept/inside.md"]
+        .get("gitState")
+        .is_none());
+    assert_eq!(
+        view.rows,
+        rows(json!({"rows":view.access.list_rows(None).unwrap()}))
+    );
+    for (folder, children) in &view.folder_rows {
+        assert_eq!(
+            children,
+            &rows(json!({"rows":view.access.list_rows(Some(folder)).unwrap()})),
+            "{folder}"
+        );
+    }
+}
