@@ -53,7 +53,6 @@ import {
 } from "@/features/viewer/lib/cli-workspace/store/terminal-selectors";
 import type { PipelineStatus } from "@/shared/lib/pipeline-graph/types";
 import { ShellTerminalPanel } from "./shell-terminal-panel";
-import { MosaicView } from "./mosaic-view";
 import { MIN_CELL_WIDTH_PX, MIN_CELL_HEIGHT_PX } from "../lib/tab-grid-layout";
 import { TerminalTileChrome } from "./terminal-tile-chrome";
 import type { SelectTabOptions } from "./terminal-tab-bar";
@@ -66,7 +65,12 @@ import { WorktreeEditorSurface } from "./source-editor-inset";
 import { foregroundTilesFor, isSplitActive, epicForegroundTiles } from "../lib/foreground-tiles";
 import { getKindCapabilities } from "@/shared/lib/workspace-kind-capabilities";
 import { workspaceDisplayLabel } from "@/shared/lib/worktree";
-import { findLeafPath, placementChangesLayout, reconcilePresetTree } from "../lib/mosaic-tree";
+import {
+  MosaicView,
+  findLeafPath,
+  placementChangesLayout,
+  reconcilePresetTree,
+} from "@/shared/tiling";
 import { useTerminalLives } from "../hooks/use-active-workspace-terminal-tabs";
 import { type TerminalThemeConfig } from "./terminal-constants";
 import {
@@ -159,7 +163,7 @@ function useWorkspaceTabs(teamKey: string, workspaceId: string) {
 //
 // Renders the foreground as a MOSAIC TREE (SW-EW-17): a leaf is one workspace,
 // a depth-1 split is the flat columns/rows of SW-EW-3/4 (rendered through the
-// unchanged TerminalTileGroup), a nested split is the 2D mosaic. Membership is
+// unchanged TileGroup), a nested split is the 2D mosaic. Membership is
 // the open-workspace set (derived); the *arrangement* tree is reconciled to it
 // on read via `effectiveMosaicRoot`.
 //

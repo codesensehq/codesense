@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 import type { ReactNode } from "react";
 
-import type { Axis, MosaicNode } from "../lib/mosaic-tree";
-import { TerminalTileGroup, type TileLike } from "./terminal-tile-group";
+import type { Axis, MosaicNode } from "./mosaic-tree";
+import { TileGroup, type TileLike } from "./tile-group";
 
 // ---------------------------------------------------------------------------
 // MosaicView — renders a mosaic tree as nested resizable groups. The one
@@ -83,7 +83,7 @@ function MosaicNodeView({
     zoomedChildKey != null && tileItems.some((tile) => tile.key === zoomedChildKey);
 
   return (
-    <TerminalTileGroup
+    <TileGroup
       tiles={tileItems}
       resizeIdentity={resizeIdentity}
       direction={node.axis}

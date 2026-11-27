@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 import { describe, it, expect, vi } from "vitest";
 import { act, fireEvent, render, screen } from "@testing-library/react";
-import { reconcileSizes, TerminalTileGroup } from "./terminal-tile-group";
+import { reconcileSizes, TileGroup } from "./tile-group";
 
 // SW-EW-3 Task 2: the reusable tiling primitive. We test MY composition
 // (N panels, reconciled sizes) by mocking the react-resizable-panels wrapper
@@ -68,12 +68,12 @@ describe("reconcileSizes (R-3 — no stale/desynced sizes)", () => {
   });
 });
 
-describe("TerminalTileGroup", () => {
+describe("TileGroup", () => {
   const tiles = [{ key: "ws-a" }, { key: "ws-b" }, { key: "ws-c" }];
 
   it("renders one panel per tile, the group seeded with the reconciled sizes", () => {
     render(
-      <TerminalTileGroup
+      <TileGroup
         tiles={tiles}
         direction="row"
         sizes={[]}
@@ -96,7 +96,7 @@ describe("TerminalTileGroup", () => {
 
   it("a pixel floor replaces the percent one", () => {
     render(
-      <TerminalTileGroup
+      <TileGroup
         tiles={tiles}
         direction="row"
         sizes={[]}
@@ -110,7 +110,7 @@ describe("TerminalTileGroup", () => {
 
   it("threads direction to the panel group", () => {
     render(
-      <TerminalTileGroup
+      <TileGroup
         tiles={tiles}
         direction="column"
         sizes={[]}
@@ -124,7 +124,7 @@ describe("TerminalTileGroup", () => {
 
   it("renders nothing-but-empty for zero tiles (no dead cell)", () => {
     render(
-      <TerminalTileGroup
+      <TileGroup
         tiles={[] as { key: string }[]}
         direction="row"
         sizes={[]}
@@ -136,7 +136,7 @@ describe("TerminalTileGroup", () => {
   });
 });
 
-describe("TerminalTileGroup — SW-EW-4 zoom (D-1: CSS promotion, never remount)", () => {
+describe("TileGroup — SW-EW-4 zoom (D-1: CSS promotion, never remount)", () => {
   const tiles = [{ key: "ws-a" }, { key: "ws-b" }, { key: "ws-c" }];
 
   it("does NOT remount tiles across a zoom toggle — DOM node identity persists (R-1/R-6)", () => {
@@ -157,22 +157,22 @@ describe("TerminalTileGroup — SW-EW-4 zoom (D-1: CSS promotion, never remount)
       onSizesCommit: vi.fn(),
       renderTile,
     };
-    const { rerender } = render(<TerminalTileGroup {...props} zoomedKey={null} />);
+    const { rerender } = render(<TileGroup {...props} zoomedKey={null} />);
     const zoomedBefore = screen.getByTestId("content-ws-b");
     const siblingBefore = screen.getByTestId("content-ws-a");
 
-    rerender(<TerminalTileGroup {...props} zoomedKey="ws-b" />); // zoom ON
+    rerender(<TileGroup {...props} zoomedKey="ws-b" />); // zoom ON
     expect(screen.getByTestId("content-ws-b")).toBe(zoomedBefore);
     expect(screen.getByTestId("content-ws-a")).toBe(siblingBefore); // sibling kept mounted
 
-    rerender(<TerminalTileGroup {...props} zoomedKey={null} />); // zoom OFF
+    rerender(<TileGroup {...props} zoomedKey={null} />); // zoom OFF
     expect(screen.getByTestId("content-ws-b")).toBe(zoomedBefore);
     expect(screen.getByTestId("content-ws-a")).toBe(siblingBefore);
   });
 
   it("promotes the zoomed panel (data-zoom=active), collapses siblings + hides handles, keeps ALL mounted", () => {
     render(
-      <TerminalTileGroup
+      <TileGroup
         tiles={tiles}
         direction="row"
         sizes={[]}
@@ -198,7 +198,7 @@ describe("TerminalTileGroup — SW-EW-4 zoom (D-1: CSS promotion, never remount)
 
   it("ignores a stale zoomedKey not in the live tile set (R-5)", () => {
     render(
-      <TerminalTileGroup
+      <TileGroup
         tiles={tiles}
         direction="row"
         sizes={[]}
@@ -214,7 +214,7 @@ describe("TerminalTileGroup — SW-EW-4 zoom (D-1: CSS promotion, never remount)
 
   it("no zoom classes when zoomedKey is null", () => {
     render(
-      <TerminalTileGroup
+      <TileGroup
         tiles={tiles}
         direction="row"
         sizes={[]}
@@ -239,22 +239,12 @@ it("cancels an in-flight resize when the persistent mosaic changes teams, even w
     renderTile: (tile: { key: string }) => <span data-testid={`live-${tile.key}`}>{tile.key}</span>,
   };
   const { rerender } = render(
-    <TerminalTileGroup
-      {...props}
-      resizeIdentity="acme:alpha"
-      sizes={[50, 50]}
-      onSizesCommit={commitA}
-    />,
+    <TileGroup {...props} resizeIdentity="acme:alpha" sizes={[50, 50]} onSizesCommit={commitA} />,
   );
   const tile = screen.getByTestId("live-same-a");
   fireEvent.pointerDown(screen.getByTestId("panel-group"));
   rerender(
-    <TerminalTileGroup
-      {...props}
-      resizeIdentity="acme:beta"
-      sizes={[30, 70]}
-      onSizesCommit={commitB}
-    />,
+    <TileGroup {...props} resizeIdentity="acme:beta" sizes={[30, 70]} onSizesCommit={commitB} />,
   );
   act(() => resizeProbe.changed?.({ "same-a": 60, "same-b": 40 }));
   expect(commitA).not.toHaveBeenCalled();

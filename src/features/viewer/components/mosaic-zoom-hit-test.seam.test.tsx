@@ -2,9 +2,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, screen } from "@testing-library/react";
 
-import type { MosaicNode } from "../lib/mosaic-tree";
+import { MosaicView, type MosaicNode } from "@/shared/tiling";
 import { dragSeparator, installPanelGeometry } from "@/test/panel-geometry";
-import { MosaicView } from "./mosaic-view";
 
 // Seam: the real MosaicView on the real panel library, the test DOM given flex
 // geometry — including what the browser reports for a `display:none` element

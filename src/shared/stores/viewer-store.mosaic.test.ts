@@ -34,7 +34,7 @@ vi.mock("@/shared/lib/logger", () => ({
 }));
 
 import { useViewerStore, effectiveMosaicRoot, type ForegroundLayout } from "./viewer-store";
-import { leafWorkspaceIds, type MosaicNode } from "@/features/viewer/lib/mosaic-tree";
+import { leafWorkspaceIds, type MosaicNode } from "@/shared/tiling";
 
 const TEAM = "acme:default";
 const A = "e-1-a";

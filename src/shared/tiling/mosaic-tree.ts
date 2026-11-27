@@ -3,7 +3,7 @@
 // SW-EW-17 — mosaic-tree: the pure, unit-tested layout model for 2D workspace
 // tiling. A `MosaicNode` is the UNIFIED representation of the foreground
 // arrangement: a single leaf is 1-up, a depth-1 split is SW-EW-3/SW-EW-4's flat
-// columns/rows (rendered through the unchanged flat TerminalTileGroup), and a
+// columns/rows (rendered through the unchanged flat TileGroup), and a
 // nested split is the 2D mosaic this story adds.
 //
 // Membership (which workspaces are foreground) stays DERIVED from
@@ -13,7 +13,8 @@
 // split/move/collapse logic is exhaustively testable in isolation.
 // ---------------------------------------------------------------------------
 
-import type { LayoutPreset } from "@/shared/stores/viewer-store";
+/** The pickable arrangement presets, shared by the workspace mosaic and a workspace's tab grid. */
+export type LayoutPreset = "columns" | "rows" | "grid";
 
 export type Axis = "row" | "column";
 export type SplitSide = "before" | "after";

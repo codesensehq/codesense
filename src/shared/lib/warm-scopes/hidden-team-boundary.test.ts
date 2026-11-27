@@ -125,7 +125,7 @@ const SITES: Record<string, { count: number; reason: string }> = {
     reason:
       "Gated: the Escape keydown and the outside pointerdown both install only while ownsKeys (useScopeActive).",
   },
-  "src/features/viewer/components/terminal-tile-group.tsx": {
+  "src/shared/tiling/tile-group.tsx": {
     count: 2,
     reason: "drag-end listeners installed only for the duration of the user's own pointer drag.",
   },

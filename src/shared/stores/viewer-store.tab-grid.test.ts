@@ -43,7 +43,7 @@ import {
   shouldRenderTabGrid,
   selectWorkspaceKey,
 } from "./viewer-store";
-import { buildPresetTree, setNodeSizes, type MosaicNode } from "@/features/viewer/lib/mosaic-tree";
+import { buildPresetTree, setNodeSizes, type MosaicNode } from "@/shared/tiling";
 import { seedTerminalTabs, installTerminalLayoutHarness } from "@/test/terminal-layout-harness";
 import type { Workspace } from "@/features/viewer/lib/cli-workspace/store/viewer-access";
 import * as commands from "@/tauri/commands";

@@ -254,7 +254,8 @@ import {
   splitAt,
   moveLeaf,
   replaceLeafWorkspaceId,
-} from "@/features/viewer/lib/mosaic-tree";
+  type LayoutPreset,
+} from "@/shared/tiling";
 import type {
   PipelineStatus,
   DerivedPipelineTree,
@@ -1846,12 +1847,11 @@ export function defaultForegroundLayout(partial?: Partial<ForegroundLayout>): Fo
  *  `cycleForegroundPreset` stays type-safe without a second copy of the literals.
  *  `custom` is intentionally absent — it is not a pickable preset, so it falls
  *  off the ring (indexOf → -1) and the next step restarts at `columns`. */
-const PRESET_RING = ["columns", "rows", "grid"] as const;
+const PRESET_RING = ["columns", "rows", "grid"] as const satisfies readonly LayoutPreset[];
 
-/** SW-EW-46: the pickable-preset union shared by the workspace mosaic and the
- *  tab-grid, sourced from `PRESET_RING` so there is exactly one layout vocabulary
- *  (no second enum). Mirrors `setForegroundPreset`'s inline argument type. */
-export type LayoutPreset = (typeof PRESET_RING)[number];
+/** The pickable-preset union shared by the workspace mosaic and the tab-grid. The
+ *  tiling kit owns it; the store re-exports it so its callers keep one import. */
+export type { LayoutPreset };
 
 /** SW-EW-46: step a preset one place around `PRESET_RING`. An ABSENT slot reads as
  *  `columns` (→ `rows`), matching the pre-refactor `cycleForegroundPreset`; `custom`
