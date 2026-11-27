@@ -20,6 +20,7 @@ import {
   type Workspace,
 } from "./viewer-store";
 import { useOrgStore } from "./org-store";
+import { serializeMosaicNode } from "@/shared/tiling";
 import * as commands from "@/tauri/commands";
 import { buildRootWorkspaceId, NO_TEAM_SENTINEL } from "@/shared/lib/team-key";
 import { EMPTY_TERMINAL_LAYOUT } from "@/shared/lib/terminal-layout-projection";
@@ -322,8 +323,8 @@ describe("viewer persistence round-trip", () => {
           kind: "split" as const,
           axis: "column" as const,
           children: [
-            { kind: "leaf" as const, workspaceId: "remote-a" },
-            { kind: "leaf" as const, workspaceId: "remote-b" },
+            { kind: "leaf" as const, id: "remote-a" },
+            { kind: "leaf" as const, id: "remote-b" },
           ],
           sizes: [30, 70],
         },
@@ -336,7 +337,10 @@ describe("viewer persistence round-trip", () => {
     });
     const parsed = await persisted();
     expect(parsed.viewer.terminalViewerGrid).toEqual(grids);
-    expect(parsed.viewer.terminalTabGridSizes).toEqual(sizes);
+    // The in-memory leaf carries `id`; the saved one carries both keys.
+    expect(parsed.viewer.terminalTabGridSizes).toEqual({
+      [key]: { preset: "rows", root: serializeMosaicNode(sizes[key].root) },
+    });
     resetViewer();
     useViewerStore.setState({ terminalLayout: EMPTY_TERMINAL_LAYOUT, tabGridLayout: {} });
     loadAppStateMock.mockResolvedValue(JSON.stringify(parsed));
@@ -1505,4 +1509,108 @@ it("the launch's mirror push carries every viewer field, the saved one-time tip 
   for (const key of Object.keys(viewerMirrorFields(useViewerStore.getState()))) {
     expect(pushed).toHaveProperty(key);
   }
+});
+
+describe("mosaic leaves saved before leaves carried an id", () => {
+  // An app-state.json written by a build whose leaves had only `workspaceId`.
+  const legacyRoot = {
+    kind: "split",
+    axis: "row",
+    sizes: [30, 70],
+    children: [
+      { kind: "leaf", workspaceId: "S-1" },
+      {
+        kind: "split",
+        axis: "column",
+        sizes: [50, 50],
+        children: [
+          { kind: "leaf", workspaceId: "S-2" },
+          { kind: "leaf", workspaceId: "S-3" },
+        ],
+      },
+    ],
+  };
+  const inMemory = {
+    kind: "split",
+    axis: "row",
+    sizes: [30, 70],
+    children: [
+      { kind: "leaf", id: "S-1" },
+      {
+        kind: "split",
+        axis: "column",
+        sizes: [50, 50],
+        children: [
+          { kind: "leaf", id: "S-2" },
+          { kind: "leaf", id: "S-3" },
+        ],
+      },
+    ],
+  };
+  const bothKeys = JSON.parse(
+    JSON.stringify(legacyRoot).replace(/"workspaceId":("[^"]+")/g, '"id":$1,"workspaceId":$1'),
+  );
+  const gridKey = `${TEAM_KEY}|S-1`;
+  const legacyViewer = {
+    foregroundLayout: {
+      [TEAM_KEY]: { sizes: [], direction: "row", preset: "custom", root: legacyRoot },
+    },
+    foregroundLayoutByRail: {
+      [TEAM_KEY]: { epic: { sizes: [], direction: "row", preset: "custom", root: legacyRoot } },
+    },
+    terminalTabGridSizes: { [gridKey]: { preset: "rows", root: legacyRoot } },
+  };
+
+  it("loads to the same layout", async () => {
+    resetViewer();
+    seedOrg([SLUG_A]);
+    loadAppStateMock.mockResolvedValue(JSON.stringify({ viewer: legacyViewer }));
+    await useViewerStore.getState().loadPersistedState();
+    const s = useViewerStore.getState();
+    expect(s.foregroundLayout[TEAM_KEY]).toEqual({
+      sizes: [],
+      direction: "row",
+      preset: "custom",
+      root: inMemory,
+    });
+    expect(s.foregroundLayoutByRail[TEAM_KEY].epic.root).toEqual(inMemory);
+    expect(s.tabGridLayout[gridKey]).toEqual({ preset: "rows", root: inMemory });
+  });
+
+  it("saves every root with both leaf keys", async () => {
+    resetViewer();
+    useViewerStore.setState({
+      foregroundLayout: {
+        [TEAM_KEY]: { sizes: [], direction: "row", preset: "custom", root: inMemory as never },
+      },
+      foregroundLayoutByRail: {
+        [TEAM_KEY]: {
+          epic: { sizes: [], direction: "row", preset: "custom", root: inMemory as never },
+        },
+      },
+      tabGridLayout: { [gridKey]: { preset: "rows", root: inMemory as never } },
+    });
+    const parsed = await persisted();
+    const fg = parsed.viewer.foregroundLayout as Record<string, { root: unknown }>;
+    const byRail = parsed.viewer.foregroundLayoutByRail as Record<
+      string,
+      Record<string, { root: unknown }>
+    >;
+    const grids = parsed.viewer.terminalTabGridSizes as Record<string, { root: unknown }>;
+    expect(fg[TEAM_KEY].root).toEqual(bothKeys);
+    expect(byRail[TEAM_KEY].epic.root).toEqual(bothKeys);
+    expect(grids[gridKey].root).toEqual(bothKeys);
+  });
+
+  it("syncs a legacy root from another window into the in-memory form", () => {
+    resetViewer();
+    applyOwnedViewerPrefs({}, true);
+    useViewerStore.setState({ stateLoaded: true });
+    applyOwnedViewerPrefs(legacyViewer);
+    const s = useViewerStore.getState();
+    expect(s.foregroundLayout[TEAM_KEY].root).toEqual(inMemory);
+    expect(s.foregroundLayoutByRail[TEAM_KEY].epic.root).toEqual(inMemory);
+    expect(s.tabGridLayout[gridKey].root).toEqual(inMemory);
+    applyOwnedViewerPrefs({}, true);
+  });
 });

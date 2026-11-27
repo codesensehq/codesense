@@ -127,12 +127,12 @@ describe("setForegroundNodeSizes", () => {
           kind: "split",
           axis: "row",
           children: [
-            { kind: "leaf", workspaceId: A },
-            { kind: "leaf", workspaceId: B },
+            { kind: "leaf", id: A },
+            { kind: "leaf", id: B },
           ],
           sizes: [50, 50],
         },
-        { kind: "leaf", workspaceId: C },
+        { kind: "leaf", id: C },
       ],
       sizes: [60, 40],
     };
@@ -196,8 +196,8 @@ describe("effectiveMosaicRoot", () => {
         kind: "split",
         axis: "row",
         children: [
-          { kind: "leaf", workspaceId: A },
-          { kind: "leaf", workspaceId: B },
+          { kind: "leaf", id: A },
+          { kind: "leaf", id: B },
         ],
         sizes: [50, 50],
       },

@@ -30,7 +30,7 @@ afterEach(() => {
   }
 });
 
-const leaf = (id: string): MosaicNode => ({ kind: "leaf", workspaceId: id });
+const leaf = (id: string): MosaicNode => ({ kind: "leaf", id: id });
 
 /** Three workspaces stacked top to bottom. */
 const stacked: MosaicNode = {

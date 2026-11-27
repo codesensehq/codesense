@@ -893,8 +893,8 @@ it.each([
           kind: "split",
           axis: "row",
           children: [
-            { kind: "leaf", workspaceId: "one" },
-            { kind: "leaf", workspaceId: "two" },
+            { kind: "leaf", id: "one" },
+            { kind: "leaf", id: "two" },
           ],
           sizes: [50, 50],
         },
