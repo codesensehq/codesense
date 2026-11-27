@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import { InboxRole } from "./inbox-role";
 import {
   AlertTriangle,
@@ -7,20 +7,14 @@ import {
   ArrowRightLeft,
   ArrowUpRight,
   Check,
-  CircleAlert,
-  ImageIcon,
-  ImageOff,
   List,
   MessageSquare,
-  Pause,
-  Play,
   Reply,
   RotateCw,
   Terminal,
   type LucideIcon,
 } from "lucide-react";
 
-import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { isLiveInboxMessage } from "@/features/weft/lib/live-inbox-message";
 import { InboxMessageContent } from "@/features/weft/components/inbox-message-content";
 import type { InboxLens } from "@/features/viewer/stores/agent-inbox-rail-store";
@@ -28,20 +22,12 @@ import { openFileInTeam } from "@/shared/lib/open-file-in-team";
 import { join } from "@/shared/lib/path";
 import { resolveOpenPath } from "@/shared/lib/resolve-open-path";
 import { pathToTeamContentDirSync } from "@/shared/lib/team-content-path";
-import { usePrefersReducedMotion } from "@/shared/lib/use-prefers-reduced-motion";
 import { useOrgStore } from "@/shared/stores/org-store";
-import {
-  bridgeResolveOpenTarget,
-  loadInboxMedia,
-  readInboxMedia,
-  type InboxMediaAttachment,
-} from "@/tauri/commands";
+import { bridgeResolveOpenTarget, loadInboxMedia, readInboxMedia } from "@/tauri/commands";
 
 import type { ConversationMessage } from "../api";
-import { acquireMediaUrl } from "../lib/media-urls";
 import {
   dotClass,
-  formatClock,
   initials,
   isLive,
   isRoleKey,
@@ -51,6 +37,7 @@ import {
   type ClaimBadge,
   type Directory,
 } from "../model";
+import { MessageMedia, type MediaLoader } from "./message-media";
 
 /** A key that belongs to an IME composition in progress: ↵ there picks a candidate. */
 export function isComposing(e: React.KeyboardEvent): boolean {
@@ -345,7 +332,13 @@ export function MessageBody({
       ) : (
         m.text.trim() && <InboxMessageContent text={m.text} contentType="markdown" />
       )}
-      {media && <MessageMedia m={m} a={media} />}
+      {media && (
+        <MessageMedia
+          a={media}
+          loader={inboxMediaLoader(m)}
+          sender={{ name: m.fromName, atMs: m.createdAtMs }}
+        />
+      )}
       {capTarget && (
         <button
           type="button"
@@ -364,353 +357,14 @@ export function MessageBody({
   );
 }
 
-/** Whether an image may move: a GIF or WebP, the types the pane gives a Play button. */
-const isAnimated = (a: InboxMediaAttachment) => /gif|webp/.test(a.mime || "");
-
-/** "GIF" for a GIF or WebP (or an unknown type), else "Image", as the pane names media. */
-const mediaKind = (a: InboxMediaAttachment) => (!a.mime || isAnimated(a) ? "GIF" : "Image");
-
-const FAILURE_REASONS: Record<string, string> = {
-  size: "The file is over 8 MB.",
-  pixels: "The image dimensions exceed 4096 × 4096.",
-  address: "The source resolves to a private or blocked address.",
-  cache: "This image is no longer in the cache.",
-  type: "It isn't a GIF, WebP, PNG or JPEG.",
-  redirect: "It redirected to a site that isn't on the list.",
-  https: "The source must use HTTPS.",
-  changed: "The source now serves a different image.",
-};
-
-/** Whether `host` is `domain` or one of its subdomains. */
-const onDomain = (host: string, domain: string) => host === domain || host.endsWith("." + domain);
-
-/** Whose attribution an image carries, in every state: the sender's provider claim, else the
- *  provider whose host the bytes came from (which covers redirects), else (an old message, or
- *  one never fetched) the provider whose host the URL names. The app's own rule. */
-export function attributionOf(a: InboxMediaAttachment): "giphy" | "klipy" | null {
-  const host = (a.sourceHost || "").toLowerCase().replace(/\.$/, "");
-  const byHost = onDomain(host, "giphy.com")
-    ? "giphy"
-    : onDomain(host, "klipy.com")
-      ? "klipy"
-      : null;
-  const provider = a.provider ?? a.mediaProvider ?? byHost;
-  return provider === "giphy" || provider === "klipy" ? provider : null;
-}
-
-/** Why an image isn't shown, in the pane's words. */
-function mediaReason(a: InboxMediaAttachment, team: string): string {
-  if (a.state === "blocked" || a.reason === "off") {
-    return `GIF · media is off in ${team}'s team config`;
-  }
-  if (a.state === "failed") {
-    return (
-      (a.reason && FAILURE_REASONS[a.reason]) || `${a.sourceHost || "The source"} didn't answer.`
-    );
-  }
-  if (a.reason === "sender") return "GIF · from another person's machine";
-  if (a.reason === "ask") return `GIF · ${team} asks before loading`;
-  return "GIF · not on your auto-load list";
-}
-
-/** A message's image: inline when cached, else a card saying why, with Load or Retry. */
-function MessageMedia({ m, a }: { m: ConversationMessage; a: InboxMediaAttachment }) {
-  const sha256 = a.sha256 ?? "";
-  const media =
-    a.state === "cached" && /^[a-f0-9]{64}$/.test(sha256) ? (
-      <MediaImage key={sha256} m={m} a={a} sha256={sha256} />
-    ) : (
-      <MediaCard key={a.state} m={m} a={a} />
-    );
-  // GIPHY's terms ask for a conspicuous "Powered by GIPHY", in every state.
-  return (
-    <>
-      {media}
-      {attributionOf(a) === "giphy" && <div className="ibx-media-attr">Powered by GIPHY</div>}
-    </>
-  );
-}
-
-/** A cached image as an object URL, read through the app (the window can't reach
- *  `/media/v1`) and shared with every other view of the same image; `failed` when it
- *  can't be read. The view's hold is released on unmount. */
-function useInboxImage(m: ConversationMessage, sha256: string) {
-  const [image, setImage] = useState<{ url: string | null; failed: boolean }>({
-    url: null,
-    failed: false,
-  });
+/** The inbox's loader for message `m`'s image: read and load it by team and message id. */
+export function inboxMediaLoader(m: ConversationMessage): MediaLoader {
   const { org, team } = m.team;
-  useEffect(() => {
-    let live = true;
-    const hold = acquireMediaUrl(sha256, () => readInboxMedia({ org, team }, m.id, sha256));
-    hold.url.then(
-      (url) => {
-        if (live) setImage({ url, failed: false });
-      },
-      () => {
-        if (live) setImage({ url: null, failed: true });
-      },
-    );
-    return () => {
-      live = false;
-      hold.release();
-    };
-  }, [org, team, m.id, sha256]);
-  return image;
-}
-
-/** The pane's Reduce Motion rule for an animated image: with the OS setting on it shows a
- *  still first frame and a Play button, pressing Play is the only thing that starts it, and
- *  it pauses again once scrolled off-screen or when the setting turns on. With the setting
- *  off it plays on its own. */
-function useStillFrame(
-  animated: boolean,
-  loaded: boolean,
-  refs: {
-    figure: React.RefObject<HTMLElement | null>;
-    image: React.RefObject<HTMLImageElement | null>;
-    canvas: React.RefObject<HTMLCanvasElement | null>;
-  },
-) {
-  const reduced = usePrefersReducedMotion() && animated;
-  const [playing, setPlaying] = useState(false);
-  const [wasReduced, setWasReduced] = useState(reduced);
-  if (wasReduced !== reduced) {
-    setWasReduced(reduced);
-    setPlaying(false);
-  }
-  const { figure, image, canvas } = refs;
-  useEffect(() => {
-    const still = canvas.current;
-    if (!reduced || !loaded || !image.current || !still) return;
-    try {
-      still.getContext("2d")?.drawImage(image.current, 0, 0, still.width, still.height);
-    } catch {
-      // An undecodable frame leaves the canvas blank; Play still shows the image.
-    }
-  }, [reduced, loaded, image, canvas]);
-  useEffect(() => {
-    const node = figure.current;
-    if (!reduced || !playing || !node || typeof IntersectionObserver === "undefined") return;
-    const observer = new IntersectionObserver((entries) => {
-      if (entries.some((e) => !e.isIntersecting)) setPlaying(false);
-    });
-    observer.observe(node);
-    return () => observer.disconnect();
-  }, [reduced, playing, figure]);
   return {
-    /** Showing the still frame in place of the image. */
-    still: reduced && loaded && !playing,
-    /** The Play/Pause control, when the image has one. */
-    control: reduced && loaded ? { playing, toggle: () => setPlaying((p) => !p) } : null,
+    read: (sha256) => readInboxMedia({ org, team }, m.id, sha256),
+    load: () => loadInboxMedia(m.team, m.id),
+    teamLabel: team,
   };
-}
-
-/** A figure at the image's stored aspect ratio, so the thread never jumps while it loads. */
-function MediaFigure({
-  a,
-  url,
-  failed,
-  onOpen,
-}: {
-  a: InboxMediaAttachment;
-  url: string | null;
-  failed: boolean;
-  onOpen?: () => void;
-}) {
-  const [loaded, setLoaded] = useState(false);
-  const [broken, setBroken] = useState(false);
-  const unavailable = failed || broken;
-  const w = a.width || 480;
-  const h = a.height || 270;
-  const figure = useRef<HTMLElement>(null);
-  const image = useRef<HTMLImageElement>(null);
-  const canvas = useRef<HTMLCanvasElement>(null);
-  const motion = useStillFrame(isAnimated(a), loaded, { figure, image, canvas });
-  const scale = Math.min(1, 2048 / w, 2048 / h);
-  const content = (
-    <>
-      {url && (
-        <img
-          ref={image}
-          className="ibx-media-img"
-          src={url}
-          alt={a.alt}
-          width={w}
-          height={h}
-          onLoad={() => setLoaded(true)}
-          onError={() => setBroken(true)}
-        />
-      )}
-      {motion.control && (
-        <canvas
-          ref={canvas}
-          className="ibx-media-still"
-          width={Math.max(1, Math.floor(w * scale))}
-          height={Math.max(1, Math.floor(h * scale))}
-          aria-hidden="true"
-        />
-      )}
-      {!loaded && (
-        <span className="ibx-media-spin">
-          {unavailable ? `Couldn't load this image. ${a.alt}` : `Loading ${mediaKind(a)}…`}
-        </span>
-      )}
-    </>
-  );
-  return (
-    <figure
-      ref={figure}
-      className={`ibx-media${unavailable ? " unavailable" : loaded ? "" : " loading"}${motion.still ? " still" : ""}`}
-      style={{ "--w": w, "--h": h } as React.CSSProperties}
-      aria-busy={!loaded && !unavailable}
-    >
-      {onOpen ? (
-        <button
-          type="button"
-          className="ibx-media-open"
-          aria-label={`Open ${mediaKind(a)}: ${a.alt}`}
-          aria-haspopup="dialog"
-          onClick={onOpen}
-        >
-          {content}
-        </button>
-      ) : (
-        <div className="ibx-media-open">{content}</div>
-      )}
-      {motion.control && (
-        <button
-          type="button"
-          className="ibx-media-play"
-          aria-pressed={motion.control.playing}
-          aria-label={motion.control.playing ? "Pause GIF" : "Play GIF"}
-          onClick={motion.control.toggle}
-        >
-          <Ico icon={motion.control.playing ? Pause : Play} sm />
-        </button>
-      )}
-    </figure>
-  );
-}
-
-/** A link to the image's source page; nothing when it has no source. */
-function MediaSource({ a, children }: { a: InboxMediaAttachment; children: React.ReactNode }) {
-  if (!a.sourceUrl) return null;
-  return (
-    <a href={a.sourceUrl} target="_blank" rel="noreferrer noopener">
-      {children}
-    </a>
-  );
-}
-
-/** A cached image inline; clicking it opens the lightbox. */
-function MediaImage({
-  m,
-  a,
-  sha256,
-}: {
-  m: ConversationMessage;
-  a: InboxMediaAttachment;
-  sha256: string;
-}) {
-  const { url, failed } = useInboxImage(m, sha256);
-  const [open, setOpen] = useState(false);
-  return (
-    <>
-      <MediaFigure a={a} url={url} failed={failed} onOpen={() => setOpen(true)} />
-      <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent
-          className="ibx-lightbox gap-2 sm:max-w-[min(90vw,960px)]"
-          aria-describedby={undefined}
-          // The lightbox owns Esc; the inbox's own Esc handlers must not also act on it.
-          onKeyDown={(e) => {
-            if (e.key === "Escape") e.stopPropagation();
-          }}
-        >
-          <DialogTitle className="ibx-lb-head">
-            <b>{m.fromName}</b>
-            <time>{formatClock(m.createdAtMs)}</time>
-          </DialogTitle>
-          <MediaFigure a={a} url={url} failed={failed} />
-          <div className="ibx-lb-foot">
-            <figcaption>{a.alt}</figcaption>
-            <div className="row2">
-              <span>
-                {mediaKind(a)} · {a.width} × {a.height}
-                {attributionOf(a) === "klipy" && " · via KLIPY"}
-                {attributionOf(a) === "giphy" && " · Powered by GIPHY"}
-              </span>
-              <MediaSource a={a}>Open source page · {a.sourceHost} ↗</MediaSource>
-            </div>
-          </div>
-        </DialogContent>
-      </Dialog>
-    </>
-  );
-}
-
-/** An image not shown (pending, blocked or failed): its alt text, why, and Load, Retry or
- *  its source page. */
-function MediaCard({ m, a }: { m: ConversationMessage; a: InboxMediaAttachment }) {
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const icon = a.state === "failed" ? CircleAlert : a.state === "blocked" ? ImageOff : ImageIcon;
-  // Media that is off in the team's config can't be loaded from here.
-  const canLoad =
-    (a.state === "pending" && a.reason !== "off") || (a.state === "failed" && a.retryable);
-  const load = () => {
-    setLoading(true);
-    setError(null);
-    // Once loaded, the stored row changes and the inbox refetches it as cached.
-    loadInboxMedia(m.team, m.id).catch((e: unknown) => {
-      setError(e instanceof Error ? e.message : String(e));
-      setLoading(false);
-    });
-  };
-  const reason = mediaReason(a, m.team.team);
-  return (
-    <div
-      className={`ibx-media-card ${a.state}${loading ? " loading" : ""}`}
-      aria-live="polite"
-      data-testid="ibx-media-card"
-    >
-      <Ico icon={icon} sm />
-      <div className="alt">{a.alt}</div>
-      <div className="meta">
-        <span>
-          {loading ? (
-            "Loading GIF…"
-          ) : error ? (
-            error
-          ) : a.state === "failed" ? (
-            <>
-              <b>Couldn't load this {mediaKind(a) === "GIF" ? "GIF" : "image"}.</b> {reason}
-            </>
-          ) : (
-            reason
-          )}
-        </span>
-        {canLoad ? (
-          <button
-            type="button"
-            className="ibx-chip primary"
-            aria-label={a.state === "failed" ? "Retry" : `Load GIF from ${a.sourceHost}: ${a.alt}`}
-            disabled={loading}
-            onClick={load}
-          >
-            {a.state === "failed" ? "Retry" : `Load from ${a.sourceHost}`}
-          </button>
-        ) : (
-          a.state === "blocked" &&
-          a.sourceUrl && (
-            <span className="ibx-chip">
-              <MediaSource a={a}>{a.sourceHost} ↗</MediaSource>
-            </span>
-          )
-        )}
-      </div>
-    </div>
-  );
 }
 
 /** The file a message names (its primary file, else its open-file click) as a chip that opens

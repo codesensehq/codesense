@@ -143,17 +143,16 @@
   /* InboxMessageContent carries its own layout; keep this cell honest. */
   min-width: 0;
 }
-/* A media message's alt stand-in: wraps anywhere and stops at three lines; the full alt is
-   its title. */
-.wc-msg__media {
-  margin: 0;
-  min-width: 0;
-  overflow-wrap: anywhere;
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 3;
-  line-clamp: 3;
-  overflow: hidden;
+/* The inbox's media bubble in a chat row. The chat surface is already the card colour, so
+   cards sit on the page background; `.wc button` would otherwise clear the Play plate. */
+.wc .ibx-media-card {
+  background: var(--ibx-bg);
+}
+.wc .ibx-media-play {
+  background: color-mix(in srgb, var(--ibx-bg) 92%, transparent);
+}
+.wc .ibx-media-play:hover {
+  background: var(--ibx-bg);
 }
 
 /* "You" (human) row — accent sweep over the role chroma. */

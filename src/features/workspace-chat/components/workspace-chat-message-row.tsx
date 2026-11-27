@@ -1,9 +1,15 @@
 // SPDX-License-Identifier: MIT
+import { MessageMedia } from "@/features/inbox/components/message-media";
 import { InboxMessageContent } from "@/features/weft/components/inbox-message-content";
 import type { WorkspaceChatMessage } from "@/tauri/commands";
 
 import type { ChatIdentity } from "./workspace-chat-body";
+import { chatMediaAttachment, chatMediaLoader } from "../lib/chat-media-loader";
 import { formatMessageTime } from "../lib/format-time";
+
+/** How tall a media-only message's image may be; click it for the full size. A message with
+ *  text keeps the inbox's 280px box. */
+const BARE_MEDIA_MAX_HEIGHT = 160;
 
 export interface WorkspaceChatMessageRowProps {
   identity?: ChatIdentity;
@@ -45,7 +51,10 @@ export function WorkspaceChatMessageRow({
     ["--wc-handle" as string]: identity?.color ?? roleColour,
   };
 
-  const media = message.attachments?.[0];
+  const media = chatMediaAttachment(message);
+  const hasText = message.text.trim() !== "";
+  const name =
+    identity?.name ?? (isHuman ? message.fromName || "you" : message.fromName || message.from);
 
   const classes = ["wc-msg"];
   if (isLead) classes.push("wc-msg--lead");
@@ -67,10 +76,7 @@ export function WorkspaceChatMessageRow({
       </span>
       <div className="wc-msg__body">
         <div className="wc-msg__hdr">
-          <span className="wc-msg__handle">
-            {identity?.name ??
-              (isHuman ? message.fromName || "you" : message.fromName || message.from)}
-          </span>
+          <span className="wc-msg__handle">{name}</span>
           {identity ? (
             <>
               {identity.tag && <span className="wc-msg__tag">{identity.tag}</span>}
@@ -88,14 +94,16 @@ export function WorkspaceChatMessageRow({
           </time>
         </div>
         <div className="wc-msg__content">
-          {(message.text.trim() !== "" || !media) && (
+          {(hasText || !media) && (
             <InboxMessageContent text={message.text} contentType={message.contentType} />
           )}
           {media && (
-            // A stand-in until the row draws the image itself, so a bare GIF row is never empty.
-            <p className="wc-msg__media" data-testid="workspace-chat-media" title={media.alt}>
-              GIF: {media.alt}
-            </p>
+            <MessageMedia
+              a={media}
+              loader={chatMediaLoader(message, identity?.machine)}
+              sender={{ name, atMs: message.createdAtMs }}
+              maxHeight={hasText ? undefined : BARE_MEDIA_MAX_HEIGHT}
+            />
           )}
         </div>
       </div>

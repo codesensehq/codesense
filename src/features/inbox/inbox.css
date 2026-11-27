@@ -2331,13 +2331,14 @@
   font-size: 11px;
   color: var(--destructive);
 }
-/* Sized from the stored w/h: never wider than the bubble, 360px or the file; never taller than 280px. */
+/* Sized from the stored w/h: never wider than the bubble, 360px or the file; never taller than
+   280px, or `--max-h` where a view caps it lower. */
 .ibx-media {
   --w: 16;
   --h: 9;
   position: relative;
   margin: 4px 0 0;
-  width: min(calc(var(--w) * 1px), 360px, calc(280px * var(--w) / var(--h)));
+  width: min(calc(var(--w) * 1px), 360px, calc(var(--max-h, 280px) * var(--w) / var(--h)));
   max-width: 100%;
   aspect-ratio: var(--w) / var(--h);
   border-radius: 8px;
