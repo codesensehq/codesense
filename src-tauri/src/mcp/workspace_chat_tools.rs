@@ -101,7 +101,32 @@ pub struct WorkspaceChatMediaView {
     /// The GIF provider the image is attributed to, if any.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub provider: Option<crate::media::MediaProvider>,
-    pub state: ChatMediaState,
+    pub state: ChatMediaViewState,
+}
+
+/// Where a chat message's image stands, as a reader on this Mac sees it: the stored
+/// [`ChatMediaState`], or `blocked` while the team's media is off. `blocked` is only ever
+/// presented, never stored.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ChatMediaViewState {
+    Pending,
+    TapToLoad,
+    Cached,
+    Failed,
+    /// The image comes from a URL and this Mac's team config has media off.
+    Blocked,
+}
+
+impl From<ChatMediaState> for ChatMediaViewState {
+    fn from(state: ChatMediaState) -> Self {
+        match state {
+            ChatMediaState::Pending => Self::Pending,
+            ChatMediaState::TapToLoad => Self::TapToLoad,
+            ChatMediaState::Cached => Self::Cached,
+            ChatMediaState::Failed => Self::Failed,
+        }
+    }
 }
 
 impl From<WorkspaceChatMessage> for WorkspaceChatReadMessage {
@@ -112,10 +137,25 @@ impl From<WorkspaceChatMessage> for WorkspaceChatReadMessage {
         let media = attachments.first().map(|a| WorkspaceChatMediaView {
             alt: a.alt.clone(),
             provider: a.attribution(),
-            state: state.unwrap_or_else(|| ChatMediaState::of(a)),
+            state: if a.state == "blocked" {
+                ChatMediaViewState::Blocked
+            } else {
+                state.unwrap_or_else(|| ChatMediaState::of(a)).into()
+            },
         });
         Self { message, media }
     }
+}
+
+/// `messages` as `workspace_chat_read` returns them, each image presented against this
+/// Mac's team config first, so one from a URL reads `blocked` while media is off.
+pub(crate) async fn read_view(
+    host: &dyn InboxHost,
+    workspace: &str,
+    mut messages: Vec<WorkspaceChatMessage>,
+) -> Vec<WorkspaceChatReadMessage> {
+    crate::commands::workspace_chat::media::present(host, workspace, &mut messages).await;
+    messages.into_iter().map(Into::into).collect()
 }
 
 fn resolve_bound_workspace(
@@ -367,9 +407,11 @@ pub async fn workspace_chat_read(
     })?;
 
     let _ = app.emit("codesense:workspace-chat-updated", ());
+    let host = crate::commands::agent_inbox::AppInboxHost::port(app.clone());
+    let messages = read_view(&*host, &out.page.workspace_id, out.page.messages).await;
     Ok(WorkspaceChatReadResult {
         workspace_id: out.page.workspace_id,
-        messages: out.page.messages.into_iter().map(Into::into).collect(),
+        messages,
         head_id: out.page.head_id,
         unread_remaining: out.unread_remaining,
         archived,
