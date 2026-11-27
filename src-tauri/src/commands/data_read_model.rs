@@ -614,7 +614,7 @@ mod tests {
 }
 
 fn require_native_spend_window(label: &str) -> Result<(), String> {
-    if label != "main" {
+    if !crate::windows::is_main(label) {
         return Err("Spend caps and rates are accepted from the CodeSense window".into());
     }
     Ok(())

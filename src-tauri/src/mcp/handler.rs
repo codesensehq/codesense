@@ -10972,7 +10972,7 @@ fn dispatch_rendered_document_request<R: tauri::Runtime>(
     }
     commands::files::validate_context_path_for(path, app, scope)
         .map_err(|e| ErrorData::invalid_params(e, None))?;
-    if app.get_webview_window("main").is_none() {
+    if crate::windows::main_window(app).is_none() {
         return Err(ErrorData::invalid_params(
             "Open the CodeSense main window and select the current document",
             None,
@@ -10983,7 +10983,7 @@ fn dispatch_rendered_document_request<R: tauri::Runtime>(
     if !matches!(scope, crate::context_repo::caller_scope::CallerScope::Human) {
         payload["requiresAuthority"] = true.into();
     }
-    app.emit_to("main", "document:read-rendered-request", payload)
+    app.emit_to(crate::windows::MAIN_LABEL, "document:read-rendered-request", payload)
         .map_err(emit_err)
 }
 

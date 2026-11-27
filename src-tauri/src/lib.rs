@@ -121,6 +121,7 @@ mod test_logger;
 /// sanctioned write path (one writer per record, live-max/AUTOINCREMENT id
 /// minting, atomic audit trail). See [`weft`] for the load-bearing rules.
 mod weft;
+mod windows;
 /// Work items: minted once per lead launch, inherited by its workers.
 mod work_item;
 
@@ -431,7 +432,7 @@ pub fn run() {
         // Once per process: a reload or in-app navigation finishes loading again.
         static LOGGED: std::sync::Once = std::sync::Once::new();
         let loaded = payload.event() == tauri::webview::PageLoadEvent::Finished;
-        if loaded && webview.label() == "main" {
+        if loaded && windows::is_main(webview.label()) {
             LOGGED.call_once(|| log::info!(target: "system", "webview ready"));
         }
     });
@@ -469,7 +470,7 @@ pub fn run() {
         // with the "main"-targeted restore in the `Reopen` handler.
         #[cfg(cap_background_on_close)]
         if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-            if window.label() == "main" {
+            if windows::is_main(window.label()) {
                 use commands::background_mode::{close_action, quit_on_close, CloseAction, Restore};
                 let app = window.app_handle();
                 let tray_visible = commands::terminal_server_tray::tray_visible();
@@ -780,7 +781,7 @@ pub fn run() {
             // marks an occluded page hidden and stops rendering, which makes
             // every terminal capture blank or frozen.
             #[cfg(feature = "e2e-webdriver")]
-            if let Some(window) = app.get_webview_window("main") {
+            if let Some(window) = app.get_webview_window(windows::MAIN_LABEL) {
                 if let Err(e) = window.set_always_on_top(true) {
                     log::warn!(target: "system", "e2e: could not pin window on top: {e}");
                 }
@@ -1959,7 +1960,7 @@ pub fn run() {
                 // default unhide. Without this the dock click leaves the app stuck
                 // hidden (AC-2 restore fails).
                 let _ = app.show();
-                match app.get_webview_window("main") {
+                match app.get_webview_window(windows::MAIN_LABEL) {
                     Some(window) => {
                         let _ = window.show();
                         let _ = window.set_focus();

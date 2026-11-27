@@ -70,7 +70,7 @@ async fn post_reload(app: tauri::AppHandle, budget: Duration) -> Result<u64, Str
     blocking(budget, move || {
         let _release = release;
         let win = app
-            .get_webview_window("main")
+            .get_webview_window(crate::windows::MAIN_LABEL)
             .ok_or("no 'main' webview window to reload")?;
         if Instant::now() >= until {
             return Err("reload dispatch expired before posting".into());
