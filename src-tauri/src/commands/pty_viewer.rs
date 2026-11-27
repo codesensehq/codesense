@@ -425,4 +425,7 @@ mod detach_tests;
 mod caller_tests;
 
 #[cfg(test)]
+mod command_tests;
+
+#[cfg(test)]
 mod old_server_tests;
