@@ -3733,6 +3733,149 @@ mod tests {
         );
     }
 
+    // ---- The open reconcile reports a drift and writes nothing ---------------
+
+    /// A git repo at `dir` born on `branch`, with `files` in its one commit.
+    fn committed_repo(dir: &Path, branch: &str, files: &[(&str, &str)]) -> git2::Oid {
+        let mut opts = git2::RepositoryInitOptions::new();
+        opts.initial_head(branch);
+        let repo = git2::Repository::init_opts(dir, &opts).unwrap();
+        let mut index = repo.index().unwrap();
+        for (name, text) in files {
+            std::fs::write(dir.join(name), text).unwrap();
+            index.add_path(Path::new(name)).unwrap();
+        }
+        index.write().unwrap();
+        let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+        let sig = git2::Signature::now("t", "t@example.com").unwrap();
+        repo.commit(Some("HEAD"), &sig, &sig, "init", &tree, &[])
+            .unwrap()
+    }
+
+    /// What `git status --porcelain` would list at `dir`, untracked files included.
+    fn porcelain(dir: &Path) -> Vec<String> {
+        let repo = git2::Repository::open(dir).unwrap();
+        let mut opts = git2::StatusOptions::new();
+        opts.include_untracked(true);
+        let statuses = repo.statuses(Some(&mut opts)).unwrap();
+        statuses
+            .iter()
+            .filter_map(|s| s.path().map(str::to_string))
+            .collect()
+    }
+
+    /// The source of the function whose signature starts with `signature` in `source`.
+    fn fn_source<'a>(source: &'a str, signature: &str) -> &'a str {
+        let start = source.find(signature).unwrap();
+        &source[start..start + source[start..].find("\n}\n").unwrap()]
+    }
+
+    /// An open whose story records another branch than the worktree's HEAD reports the
+    /// drift, on that open and on every later one, and leaves the story doc in the
+    /// canonical clone byte for byte as it was.
+    #[test]
+    fn open_reconcile_leaves_the_canonical_clone_clean() {
+        const DOC: &str = "---\nstatus: todo\nbranch: feat/old\n---\n# Story\n";
+        let clone = tempfile::tempdir().unwrap();
+        committed_repo(clone.path(), "main", &[("story.md", DOC)]);
+        let story = clone.path().join("story.md");
+        let worktree = tempfile::tempdir().unwrap();
+        let oid = committed_repo(worktree.path(), "feat/new", &[]);
+        let drift = (
+            Some(BranchReconcile {
+                from: Some("feat/old".into()),
+                to: "feat/new".into(),
+            }),
+            Some("feat/new".to_string()),
+        );
+        // A repeat open reports the drift again: nothing wrote `branch:` in between.
+        for _ in 0..2 {
+            assert_eq!(
+                reconcile_on_open_core(&story, Some("feat/old".into()), worktree.path()),
+                drift
+            );
+        }
+        assert_eq!(porcelain(clone.path()), Vec::<String>::new());
+        assert_eq!(std::fs::read_to_string(&story).unwrap(), DOC);
+
+        // A story never stamped reports where the worktree is.
+        assert_eq!(
+            reconcile_on_open_core(&story, None, worktree.path()),
+            (
+                Some(BranchReconcile {
+                    from: None,
+                    to: "feat/new".into(),
+                }),
+                Some("feat/new".to_string()),
+            )
+        );
+        // In sync: nothing to report, and the launch's branch is the recorded one.
+        assert_eq!(
+            reconcile_on_open_core(&story, Some("feat/new".into()), worktree.path()),
+            (None, Some("feat/new".to_string()))
+        );
+        // A detached HEAD or an unreadable one reports nothing and falls back to `from`.
+        git2::Repository::open(worktree.path())
+            .unwrap()
+            .set_head_detached(oid)
+            .unwrap();
+        assert_eq!(
+            reconcile_on_open_core(&story, Some("feat/old".into()), worktree.path()),
+            (None, Some("feat/old".to_string()))
+        );
+        let not_a_repo = tempfile::tempdir().unwrap();
+        assert_eq!(
+            reconcile_on_open_core(&story, Some("feat/old".into()), not_a_repo.path()),
+            (None, Some("feat/old".to_string()))
+        );
+        assert_eq!(porcelain(clone.path()), Vec::<String>::new());
+        assert_eq!(std::fs::read_to_string(&story).unwrap(), DOC);
+    }
+
+    /// The open reconcile only reads: its body never reaches the story-doc writer.
+    #[test]
+    fn reconcile_branch_on_open_never_writes() {
+        let body = fn_source(include_str!("mcp_workspace.rs"), "fn reconcile_branch_on_open(");
+        assert!(!body.contains("write_story_branch"));
+        assert!(body.contains("reconcile_on_open_core("));
+    }
+
+    /// Every MCP-side registration (open, hydrate, seat) goes through
+    /// `establish_story_worktree`, which never stamps the story's `branch`. The Tauri
+    /// command the frontend calls still stamps, and both still record the link.
+    #[test]
+    fn mcp_open_establishes_without_the_branch_stamp() {
+        let squish = |s: &str| s.split_whitespace().collect::<String>();
+        let workspace = include_str!("mcp_workspace.rs");
+        let establish = fn_source(workspace, "async fn establish_story_worktree(");
+        assert!(establish.contains("establish_worktree_story_link_unstamped("));
+        assert!(!establish.contains("establish_worktree_story_link("));
+        let hydrate = fn_source(workspace, "pub(crate) async fn resolve_hydrated_story_worktree(");
+        assert!(hydrate.contains("resolve_hydrated_story_worktree_unlocked("));
+        let unlocked = fn_source(workspace, "async fn resolve_hydrated_story_worktree_unlocked(");
+        assert!(unlocked.contains("establish_story_worktree("));
+        assert!(!unlocked.contains("establish_worktree_story_link"));
+        let seat = fn_source(workspace, "async fn ensure_seat_worktree(");
+        assert!(!seat.contains("establish_worktree_story_link"));
+
+        let engine = include_str!("content_engine.rs");
+        let command = squish(fn_source(engine, "pub async fn establish_worktree_story_link("));
+        assert!(command.contains("establish_worktree_story_link_with("));
+        assert!(command.contains(",true") && !command.contains(",false"));
+        let unstamped = squish(fn_source(
+            engine,
+            "pub(crate) async fn establish_worktree_story_link_unstamped(",
+        ));
+        assert!(unstamped.contains("establish_worktree_story_link_with("));
+        assert!(unstamped.contains(",false") && !unstamped.contains(",true"));
+        let with = squish(fn_source(engine, "async fn establish_worktree_story_link_with("));
+        assert!(with.contains("establish_worktree_story_link_blocking("));
+        assert!(with.contains(",stamp"));
+        let blocking = squish(fn_source(engine, "fn establish_worktree_story_link_blocking("));
+        assert!(blocking.contains("register_story_workspace("));
+        assert!(blocking.contains("ifstamp&&stamps_story_branch("));
+    }
+
     /// A story index across orgs: `(org, story_id, team)` rows, looked up the way the app
     /// answers a miss: the active org's fallback scan with its multi-line not-found text,
     /// another org with `resolve_story_path_in`'s one line. `late` rows were
