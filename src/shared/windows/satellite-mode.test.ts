@@ -5,7 +5,7 @@
  * the real store, commands and listener helper over a recorded `invoke` and an
  * in-memory event bus, once as `main` (the control) and once as a satellite.
  */
-import { render } from "@testing-library/react";
+import { render, renderHook } from "@testing-library/react";
 import { ThemeProvider } from "next-themes";
 import { createElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -46,13 +46,19 @@ vi.mock("@tauri-apps/api/event", () => ({
   emit: vi.fn(async () => {}),
 }));
 
+import { useSyncWaveRescan } from "@/app/hooks/use-sync-wave-rescan";
+import { useMcpActions } from "@/shared/hooks/use-mcp-actions";
 import { connectPrefs } from "@/features/dashboard/lib/prefs-client";
 import { bindPrefsConsumers } from "@/features/dashboard/lib/prefs-live";
 import { LiveHub, type HubSnapshot } from "@/features/dashboard/lib/live-hub";
 import { subscribeContext } from "@/shared/lib/context-query/subscribe-context";
 import { useViewerStore } from "@/shared/stores/viewer-store";
 import { pushViewerState, saveAppState } from "@/tauri/commands";
-import { CONTEXT_FILE_CHANGE_EVENT, CONTEXT_INDEX_CHANGED_EVENT } from "@/tauri/events";
+import {
+  CONTEXT_FILE_CHANGE_EVENT,
+  CONTEXT_INDEX_CHANGED_EVENT,
+  SYNC_WAVE_COMPLETED_EVENT,
+} from "@/tauri/events";
 import { AppThemeProvider } from "@/themes/theme-provider";
 
 import { listenScoped } from "./listen-scoped";
@@ -118,19 +124,26 @@ describe("a satellite registers listeners by their inventory class", () => {
     host.main = false;
   });
 
-  it("registers no main-only row and every every-window and owning-window row", async () => {
-    const registered: string[] = [];
-    for (const row of LISTENER_INVENTORY) {
-      const key = `${row.file} ${row.event}`;
+  it("mounting the real hooks registers every-window listeners and no main-only one", async () => {
+    const mount = async (main: boolean) => {
+      host.main = main;
       bus.clear();
-      await listenScoped(key, row.scope, () => {});
-      if (bus.get(key)?.size) registered.push(key);
-    }
-    const expected = LISTENER_INVENTORY.filter((row) => row.scope !== "main-only").map(
-      (row) => `${row.file} ${row.event}`,
+      const { unmount } = renderHook(() => {
+        useMcpActions();
+        useSyncWaveRescan();
+      });
+      await vi.waitFor(() => expect(bus.has(SYNC_WAVE_COMPLETED_EVENT)).toBe(true));
+      const events = [...bus.keys()];
+      unmount();
+      return events;
+    };
+    expect(await mount(true)).toEqual(expect.arrayContaining(["mcp:set-viewer-state"]));
+    const satellite = await mount(false);
+    expect(satellite).toEqual([SYNC_WAVE_COMPLETED_EVENT]);
+    expect(rowScope("shared/hooks/use-mcp-actions.ts", "mcp:set-viewer-state")).toBe("main-only");
+    expect(rowScope("app/hooks/use-sync-wave-rescan.ts", "SYNC_WAVE_COMPLETED_EVENT")).toBe(
+      "every-window",
     );
-    expect(registered).toEqual(expected);
-    expect(LISTENER_INVENTORY.some((row) => row.scope === "main-only")).toBe(true);
   });
 
   it("sees context-index-changed live, and not context-file-change", async () => {
