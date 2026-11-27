@@ -3,6 +3,7 @@ import { useEffect, useEffectEvent, useRef, useState } from "react";
 import { CircleAlert, ImageIcon, ImageOff, Pause, Play } from "lucide-react";
 
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
+import { GIF_PROVIDERS } from "@/shared/lib/gif-providers";
 import { usePrefersReducedMotion } from "@/shared/lib/use-prefers-reduced-motion";
 import type { InboxMediaAttachment } from "@/tauri/commands";
 
@@ -141,14 +142,17 @@ export function MessageMedia({
   useEffect(() => {
     if (region.current) region.current.textContent = announcement;
   }, [afterCard, announcement]);
-  // GIPHY's terms ask for a conspicuous "Powered by GIPHY", in every state.
+  // GIPHY's terms ask for a conspicuous "Powered By GIPHY", in every state. KLIPY's line is in
+  // the lightbox only, as the pane places it.
   return (
     <>
       {media}
       {afterCard && (
         <div ref={region} className="sr-only" aria-live="polite" data-testid="ibx-media-live" />
       )}
-      {attributionOf(a) === "giphy" && <div className="ibx-media-attr">Powered by GIPHY</div>}
+      {attributionOf(a) === "giphy" && (
+        <div className="ibx-media-attr">{GIF_PROVIDERS.giphy.poweredBy}</div>
+      )}
     </>
   );
 }
@@ -368,6 +372,7 @@ function MediaImage({
   const trigger = useRef<HTMLButtonElement | null>(null);
   if (broken) return <MediaCard a={damaged(a)} loader={loader} />;
   const kind = mediaKind(a);
+  const provider = attributionOf(a);
   const time = sender ? formatClock(sender.atMs) : "";
   return (
     <>
@@ -414,8 +419,7 @@ function MediaImage({
             <div className="row2">
               <span>
                 {kind} · {a.width} × {a.height}
-                {attributionOf(a) === "klipy" && " · via KLIPY"}
-                {attributionOf(a) === "giphy" && " · Powered by GIPHY"}
+                {provider && ` · ${GIF_PROVIDERS[provider].poweredBy}`}
               </span>
               <MediaSource a={a}>Open source page · {a.sourceHost} ↗</MediaSource>
             </div>

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+import { GIF_PROVIDERS } from "@/shared/lib/gif-providers";
 import { join } from "@/shared/lib/path";
 import type { WorkspaceChatMessage } from "@/tauri/commands";
 import { writeContentFile } from "@/tauri/commands";
@@ -56,11 +57,11 @@ export function renderTranscript(options: ExportTranscriptOptions): string {
     const hasText = msg.text.trim().length > 0;
     if (hasText || !media) lines.push(hasText ? msg.text : "_(empty)_");
     if (media) {
-      // An image post is its kind and alt, with the provider it came through.
-      const via = attributionOf(media);
+      // An image post is its kind and alt, with the provider's line as the pane writes it.
+      const provider = attributionOf(media);
       if (hasText) lines.push("");
       lines.push(
-        `_${mediaKind(media)}:_ ${media.alt}${via ? ` (via ${via === "giphy" ? "GIPHY" : "KLIPY"})` : ""}`,
+        `_${mediaKind(media)}:_ ${media.alt}${provider ? ` (${GIF_PROVIDERS[provider].poweredBy})` : ""}`,
       );
     }
     if (msg.primaryFile) {

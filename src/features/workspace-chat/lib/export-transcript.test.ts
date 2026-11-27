@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 import { describe, expect, it, vi } from "vitest";
 
+import { GIF_PROVIDERS } from "@/shared/lib/gif-providers";
 import type { InboxMediaAttachment, WorkspaceChatMessage } from "@/tauri/commands";
 
 import { exportTranscript, renderTranscript, transcriptFilename } from "./export-transcript";
@@ -80,24 +81,24 @@ describe("renderTranscript media", () => {
 
   it("writes a media-only message's kind, alt and provider, not (empty)", () => {
     const out = render(msg(1, { text: "", attachments: [gif()] }));
-    expect(out).toContain("_GIF:_ A cat waves (via GIPHY)");
+    expect(out).toContain(`_GIF:_ A cat waves (${GIF_PROVIDERS.giphy.poweredBy})`);
     expect(out).not.toContain("_(empty)_");
   });
 
-  it("credits KLIPY, and leaves the credit out when there is none", () => {
+  it("credits KLIPY as the pane does, and leaves the credit out when there is none", () => {
     expect(
       render(msg(1, { text: "", attachments: [gif({ sourceHost: "static.klipy.com" })] })),
-    ).toContain("_GIF:_ A cat waves (via KLIPY)");
+    ).toContain(`_GIF:_ A cat waves (${GIF_PROVIDERS.klipy.poweredBy})`);
     const plain = render(
       msg(1, { text: "", attachments: [gif({ mime: "image/png", sourceHost: "cdn.example" })] }),
     );
     expect(plain).toContain("_Image:_ A cat waves\n");
-    expect(plain).not.toContain("(via");
+    expect(plain).not.toContain("Powered");
   });
 
   it("keeps a message's text, then its image line", () => {
     const out = render(msg(1, { text: "Tests pass", attachments: [gif()] }));
-    expect(out).toContain("Tests pass\n\n_GIF:_ A cat waves (via GIPHY)");
+    expect(out).toContain(`Tests pass\n\n_GIF:_ A cat waves (${GIF_PROVIDERS.giphy.poweredBy})`);
   });
 });
 
