@@ -14,6 +14,7 @@ mod inbox_gate_tests;
 #[cfg(test)]
 mod inbox_offlock_tests;
 pub(crate) mod machine_stats;
+pub mod needs_you;
 pub mod pane_sources;
 pub mod pins;
 pub mod projection;
