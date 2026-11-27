@@ -8,7 +8,9 @@
 //!
 //! - a call of `app_viewer`, or any `app_viewer` or `WEBVIEW_BOOT` name;
 //! - `ViewerId::new("app")` or `ViewportId::new("webview")`;
-//! - any of those inside a macro's tokens.
+//! - any of those inside a macro's tokens;
+//! - a call of `main_viewer` inside a function that takes a `WebviewWindow`: it acts as the
+//!   window it was called from (`window_viewer`, `window_viewport`), never as `main`.
 //!
 //! - **Skipped:** `commands/pty_viewer.rs`, test files (`tests.rs`, `*_tests.rs`, anything under a
 //!   `tests/` directory), and files and items under `#[cfg(test)]` or `#[test]`.
@@ -19,6 +21,7 @@
 use codesense_guards::guard_support::app_root;
 use std::fs;
 use std::path::{Path, PathBuf};
+use syn::punctuated::Punctuated;
 use syn::spanned::Spanned;
 use syn::visit::{self, Visit};
 
@@ -40,23 +43,29 @@ fn skipped(file: &str) -> bool {
         || file.split('/').any(|part| part == "tests")
 }
 
-/// Whether `attrs` hold `#[test]` or a `#[cfg(..)]` that names `test`.
+/// Whether a `cfg` predicate holds only in a test build: `test`, or `all(..)` with a test-only
+/// argument. `not(test)`, `any(.., test)` and every other shape also hold in production.
+fn test_predicate(meta: &syn::Meta) -> bool {
+    match meta {
+        syn::Meta::Path(path) => path.is_ident("test"),
+        syn::Meta::List(list) if list.path.is_ident("all") => list
+            .parse_args_with(Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated)
+            .is_ok_and(|args| args.iter().any(test_predicate)),
+        _ => false,
+    }
+}
+
+/// Whether `attrs` hold `#[test]` or a `#[cfg(..)]` that holds only in a test build.
 fn test_only(attrs: &[syn::Attribute]) -> bool {
     attrs.iter().any(|attr| {
         let path = attr.path();
         if path.is_ident("test") {
             return true;
         }
-        if !path.is_ident("cfg") {
-            return false;
-        }
-        let syn::Meta::List(list) = &attr.meta else {
-            return false;
-        };
-        list.tokens
-            .to_string()
-            .split(|c: char| !(c.is_alphanumeric() || c == '_'))
-            .any(|word| word == "test")
+        path.is_ident("cfg")
+            && attr
+                .parse_args::<syn::Meta>()
+                .is_ok_and(|predicate| test_predicate(&predicate))
     })
 }
 
@@ -139,6 +148,50 @@ fn macro_spellings(tokens: &str) -> Vec<String> {
     found
 }
 
+/// Whether a type names `WebviewWindow` anywhere in its path.
+fn names_window(ty: &syn::Type) -> bool {
+    struct Find(bool);
+    impl<'ast> Visit<'ast> for Find {
+        fn visit_path_segment(&mut self, segment: &'ast syn::PathSegment) {
+            self.0 |= segment.ident == "WebviewWindow";
+            visit::visit_path_segment(self, segment);
+        }
+    }
+    let mut find = Find(false);
+    find.visit_type(ty);
+    find.0
+}
+
+/// The lines of `main_viewer` in a function body, as call, path or macro token.
+fn main_viewer_lines(block: &syn::Block) -> Vec<usize> {
+    struct Find(Vec<usize>);
+    impl<'ast> Visit<'ast> for Find {
+        fn visit_ident(&mut self, ident: &'ast proc_macro2::Ident) {
+            if ident == "main_viewer" {
+                self.0.push(ident.span().start().line);
+            }
+        }
+        fn visit_macro(&mut self, mac: &'ast syn::Macro) {
+            self.tokens(mac.tokens.clone());
+            visit::visit_macro(self, mac);
+        }
+    }
+    impl Find {
+        fn tokens(&mut self, tokens: proc_macro2::TokenStream) {
+            for token in tokens {
+                match token {
+                    proc_macro2::TokenTree::Ident(ident) => self.visit_ident(&ident),
+                    proc_macro2::TokenTree::Group(group) => self.tokens(group.stream()),
+                    _ => {}
+                }
+            }
+        }
+    }
+    let mut find = Find(Vec::new());
+    find.visit_block(block);
+    find.0
+}
+
 struct Scan<'a> {
     file: &'a str,
     hits: Vec<String>,
@@ -151,6 +204,24 @@ impl Scan<'_> {
     }
 }
 
+impl Scan<'_> {
+    /// A function that takes a window and spells `main`'s viewer is a command that regressed.
+    fn window_fn(&mut self, sig: &syn::Signature, block: &syn::Block) {
+        let takes_window = sig.inputs.iter().any(|input| match input {
+            syn::FnArg::Typed(typed) => names_window(&typed.ty),
+            syn::FnArg::Receiver(_) => false,
+        });
+        if takes_window {
+            for line in main_viewer_lines(block) {
+                self.hits.push(format!(
+                    "{}:{line}: main_viewer in `{}` (it takes a window)",
+                    self.file, sig.ident
+                ));
+            }
+        }
+    }
+}
+
 impl<'ast> Visit<'ast> for Scan<'_> {
     fn visit_item(&mut self, item: &'ast syn::Item) {
         if !test_only(item_attrs(item)) {
@@ -158,8 +229,14 @@ impl<'ast> Visit<'ast> for Scan<'_> {
         }
     }
 
+    fn visit_item_fn(&mut self, item: &'ast syn::ItemFn) {
+        self.window_fn(&item.sig, &item.block);
+        visit::visit_item_fn(self, item);
+    }
+
     fn visit_impl_item_fn(&mut self, item: &'ast syn::ImplItemFn) {
         if !test_only(&item.attrs) {
+            self.window_fn(&item.sig, &item.block);
             visit::visit_impl_item_fn(self, item);
         }
     }
@@ -289,6 +366,26 @@ fn fails_each_spelling() {
             "fn a() { assert!(host.is_owner(&ViewerId :: new (\"app\"))); }",
             "planted.rs:1: ViewerId::new(\"app\")",
         ),
+        (
+            "#[cfg(not(test))]\nfn a() { host.focus(&app_viewer(), &key); }",
+            "planted.rs:2: app_viewer",
+        ),
+        (
+            "#[cfg(any(unix, test))]\nfn a() { host.focus(&app_viewer(), &key); }",
+            "planted.rs:2: app_viewer",
+        ),
+        (
+            "#[cfg(all(not(test), unix))]\nfn a() { host.focus(&app_viewer(), &key); }",
+            "planted.rs:2: app_viewer",
+        ),
+        (
+            "fn a(window: tauri::WebviewWindow) { let v = main_viewer(); }",
+            "planted.rs:1: main_viewer in `a` (it takes a window)",
+        ),
+        (
+            "impl S { fn a(&self, w: &WebviewWindow<R>) { host.focus(&crate::pty_viewer::main_viewer()); } }",
+            "planted.rs:1: main_viewer in `a` (it takes a window)",
+        ),
     ];
     for (source, expected) in planted {
         assert_eq!(
@@ -309,6 +406,8 @@ fn passes_test_code_the_helper_comments_and_strings() {
         "fn a() -> &'static str { \"ViewerId::new(\\\"app\\\") and WEBVIEW_BOOT\" }",
         "fn a() { let v = ViewerId::new(\"dashboard\"); let w = ViewportId::new(\"mcp\"); }",
         "fn a() { tracing::info!(viewer = %main_viewer(), \"read\"); }",
+        "fn a(app: AppHandle) { let v = main_viewer(); }",
+        "fn a(window: WebviewWindow) { let v = window_viewer(&window); }",
         "#![cfg(test)]\nfn a() { host.focus(&app_viewer(), &key); }",
     ];
     for source in negatives {
