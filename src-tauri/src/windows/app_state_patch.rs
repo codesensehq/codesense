@@ -85,9 +85,13 @@ mod tests {
         write_app_state(app.handle(), path, Some("41"), &state.to_string(), false).unwrap();
     }
 
+    fn file(path: &Path) -> Value {
+        serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap()
+    }
+
+    /// The profile's own keys; `shortcuts` is global and stays at the file's top level.
     fn saved(path: &Path) -> Value {
-        let file: Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
-        file["localProfileWorkspacesV1"]["41"].clone()
+        file(path)["localProfileWorkspacesV1"]["41"].clone()
     }
 
     #[test]
@@ -200,8 +204,8 @@ mod tests {
 
         assert_eq!(retire.join().unwrap(), Ok(2));
         assert_eq!(patch.join().unwrap(), Ok(()));
+        assert_eq!(file(&path)["shortcuts"]["shortcuts"]["open"], "Mod+O");
         let state = saved(&path);
-        assert_eq!(state["shortcuts"]["shortcuts"]["open"], "Mod+O");
         let viewer = &state["viewer"];
         assert_eq!(viewer["workspaces"]["acme:dev"], json!([{"id": "kept"}]));
         assert!(viewer["softClosedWorkspaces"]["acme:dev"].get("gone").is_none());
