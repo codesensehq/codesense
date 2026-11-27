@@ -10983,8 +10983,7 @@ fn dispatch_rendered_document_request<R: tauri::Runtime>(
     if !matches!(scope, crate::context_repo::caller_scope::CallerScope::Human) {
         payload["requiresAuthority"] = true.into();
     }
-    app.emit_to(crate::windows::MAIN_LABEL, "document:read-rendered-request", payload)
-        .map_err(emit_err)
+    crate::windows::emit_to_owner(app, "document:read-rendered-request", payload).map_err(emit_err)
 }
 
 /// Upper bound on how long `render_canvas` waits for the webview to
@@ -20969,7 +20968,7 @@ pub struct DismissAgentMarkParams {
     pub request_id: Option<String>,
 }
 
-/// Complete production boundary: capture admitted bytes before global webview dispatch.
+/// Complete production boundary: capture admitted bytes before dispatch to the owning window.
 async fn render_canvas_request<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     session: Option<&str>,
@@ -21003,16 +21002,16 @@ async fn render_canvas_request<R: tauri::Runtime>(
         .ok_or_else(|| ErrorData::internal_error("canvas render registry not registered", None))?;
     let (request_id, rx) = registry.register();
 
-    app
-            .emit(
-                "canvas:render-request",
-                serde_json::json!({ "requestId": request_id, "path": params.path, "sceneJson": scene_json }),
-            )
-            .map_err(|e| {
-                // Nothing will reply — reclaim the registry slot before bailing.
-                registry.take(&request_id);
-                emit_err(e)
-            })?;
+    crate::windows::emit_to_owner(
+        app,
+        "canvas:render-request",
+        serde_json::json!({ "requestId": request_id, "path": params.path, "sceneJson": scene_json }),
+    )
+    .map_err(|e| {
+        // Nothing will reply — reclaim the registry slot before bailing.
+        registry.take(&request_id);
+        emit_err(e)
+    })?;
 
     // Bound the wait so a missing webview (headless/cron, or app not
     // running) degrades to a clear error instead of hanging forever.
