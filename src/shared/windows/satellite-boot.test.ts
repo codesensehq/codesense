@@ -287,6 +287,7 @@ describe("the terminal rows in a satellite", () => {
 describe("what a satellite never calls", () => {
   const forbidden = [
     ...mainOnly.map((entry: { name: string }) => entry.name),
+    "rebuild_menu",
     "terminal_layout_snapshot",
     "set_active_team_for_wave",
     "remove_watch",

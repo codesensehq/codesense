@@ -2,6 +2,7 @@
 import { create } from "zustand";
 
 import { logger } from "@/shared/lib/logger";
+import { isMainWindow } from "@/shared/lib/current-window";
 import { createDebouncedAction } from "@/shared/lib/debounced-action";
 import {
   formatKeystroke,
@@ -376,7 +377,7 @@ export const useShortcutsStore = create<ShortcutsState>((set, get) => ({
         // migration never re-runs. Reuses the existing debounced path —
         // no extra synchronous write, no added startup blocking. Ordered
         // after the stateLoaded flip so the persist guard doesn't drop it.
-        if (didMigrate) get().persistState();
+        if (didMigrate && isMainWindow()) get().persistState();
       } else {
         set({
           shortcuts: Object.fromEntries(
@@ -394,8 +395,9 @@ export const useShortcutsStore = create<ShortcutsState>((set, get) => ({
     // Push the effective overrides to the Rust menu so accelerator
     // display reflects the user's rebinds on first paint. Fire-and-
     // forget — macOS-only, and the keyboard handler is already live
-    // regardless of whether the menu renders the hint.
-    triggerMenuRebuild();
+    // regardless of whether the menu renders the hint. The native menu is
+    // app-wide and main's, so a satellite's load leaves it alone.
+    if (isMainWindow()) triggerMenuRebuild();
   },
 }));
 

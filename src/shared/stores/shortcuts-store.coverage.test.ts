@@ -19,6 +19,9 @@ vi.mock("@/tauri/commands", () => ({
   rebuildMenu: (overrides: Record<string, string>) => mockRebuildMenu(overrides),
 }));
 
+const { windowState } = vi.hoisted(() => ({ windowState: { main: true } }));
+vi.mock("@/shared/lib/current-window", () => ({ isMainWindow: () => windowState.main }));
+
 const { mockWarn } = vi.hoisted(() => ({ mockWarn: vi.fn() }));
 vi.mock("@/shared/lib/logger", () => ({
   logger: { info: vi.fn(), error: vi.fn(), warn: mockWarn },
@@ -36,6 +39,7 @@ import {
 // ---------- Setup ----------
 
 beforeEach(async () => {
+  windowState.main = true;
   mockLoadAppState.mockReset();
   mockSaveAppState.mockReset();
   mockRebuildMenu.mockReset();
@@ -378,6 +382,32 @@ describe("useShortcutsStore — persist / load round-trip", () => {
         shortcuts: "oops" as unknown as Record<string, string>,
       });
       expect(didMigrate).toBe(false);
+    });
+  });
+
+  describe("loadPersistedState — native menu and migration persist by window", () => {
+    const legacy = JSON.stringify({
+      shortcuts: { shortcuts: { "nav.switch-workspace": "CmdOrCtrl+Shift+G" } },
+    });
+
+    it("main rebuilds the native menu after loading", async () => {
+      useShortcutsStore.setState({ shortcuts: {}, stateLoaded: false });
+      await useShortcutsStore.getState().loadPersistedState();
+      expect(mockRebuildMenu).toHaveBeenCalledTimes(1);
+    });
+
+    it("a satellite neither rebuilds the menu nor persists the migration", async () => {
+      vi.useFakeTimers();
+      windowState.main = false;
+      mockLoadAppState.mockResolvedValue(legacy);
+      useShortcutsStore.setState({ shortcuts: {}, stateLoaded: false });
+      await useShortcutsStore.getState().loadPersistedState();
+      await vi.advanceTimersByTimeAsync(500);
+      expect(useShortcutsStore.getState().shortcuts).toEqual({
+        "nav.switch-org": "CmdOrCtrl+Shift+G",
+      });
+      expect(mockRebuildMenu).not.toHaveBeenCalled();
+      expect(mockSaveAppState).not.toHaveBeenCalled();
     });
   });
 
