@@ -42,19 +42,31 @@ fn every_launch_path_records_its_launcher_and_work_item() {
     launch_agent(&state, "lead#worker", "s-worker", by(Some("s-lead")));
     // A plain shell the app opened, and one an agent opened through `open_terminal_tab`.
     state.register("shell", "s-shell", Some("codesense"));
-    state.register("lead-shell", "s-lead-shell", Some("codesense"));
-    state.set_launched_by_if_absent("lead-shell", "s-lead");
+    state.register_opened_tab("lead-shell", "s-lead-shell", Some("s-lead"));
+    // Tabs `open_terminal_tab` opened that then run a named agent: the lead's, a person's,
+    // and a tab registered again after a restart.
+    state.register_opened_tab("lead-tab", "s-lead-tab", Some("s-lead"));
+    state.set_agent_revision_if_absent("lead-tab", "acme/dev/worker@1".into());
+    state.register_opened_tab("your-tab", "s-your-tab", None);
+    state.set_agent_revision_if_absent("your-tab", "acme/dev/worker@1".into());
+    state.register("restored-tab", "s-restored-tab", Some("codesense"));
+    state.set_agent_revision_if_absent("restored-tab", "acme/dev/worker@1".into());
     // An agent launched from inside that shell, which belongs to no work item.
     launch_agent(&state, "shell#agent", "s-shell-agent", by(Some("s-shell")));
     // The Foreman's launch, the durable dispatch bridge and a routine's run: no launcher.
     launch_agent(&state, "foreman-story", "s-foreman", by(None));
     launch_agent(&state, "bridged", "s-bridged", by(None));
-    let routine = RunProvenance {
+    let command = crate::routines::command::CommandRequest {
+        home: "home".into(),
+        routine_key: "acme/ops/weekly".into(),
+        routine_id: "weekly".into(),
         run_id: "run-1".into(),
-        routine_key: Some("acme/ops/weekly".into()),
-        ..Default::default()
+        program: "true".into(),
+        argv: Vec::new(),
+        cwd: ".".into(),
+        max_runtime: std::time::Duration::from_secs(60),
     };
-    assert!(state.begin_with_provenance("routine:acme/ops/weekly@run-1", Some(routine), by(None)).unwrap());
+    crate::routines::command::register(&command, &state).unwrap();
 
     let minted = |handle: &str| {
         let id = state.work_item(handle).unwrap_or_else(|| panic!("{handle} minted nothing"));
@@ -70,21 +82,27 @@ fn every_launch_path_records_its_launcher_and_work_item() {
         Row { handle: "lead#worker", launched_by: Some("lead") },
         Row { handle: "shell", launched_by: None },
         Row { handle: "lead-shell", launched_by: Some("lead") },
+        Row { handle: "lead-tab", launched_by: Some("lead") },
+        Row { handle: "your-tab", launched_by: None },
         Row { handle: "shell#agent", launched_by: Some("shell") },
         Row { handle: "foreman-story", launched_by: None },
         Row { handle: "bridged", launched_by: None },
-        Row { handle: "routine:acme/ops/weekly@run-1", launched_by: None },
+        Row { handle: "routine:acme/ops/weekly@run-1", launched_by: Some("routine:acme/ops/weekly") },
     ] {
         assert_eq!(launched_by(&state, row.handle).as_deref(), row.launched_by, "{}", row.handle);
     }
     assert_eq!(state.work_item("lead#worker"), Some(lead.clone()), "a worker inherits");
     assert_eq!(state.work_item("shell"), None, "a plain shell never mints");
     assert_eq!(state.work_item("lead-shell"), None, "an agent's shell never mints");
+    assert_eq!(state.work_item("lead-tab"), Some(lead.clone()), "an agent in a tab the lead opened inherits");
+    assert_eq!(state.launcher_session("lead-tab").as_deref(), Some("s-lead"));
+    assert_eq!(state.work_item("restored-tab"), None, "a tab back from a restore never mints");
+    let yours = minted("your-tab");
     let outside = minted("shell#agent");
     let foreman = minted("foreman-story");
     let bridged = minted("bridged");
     let routine = minted("routine:acme/ops/weekly@run-1");
-    let all = [&lead, &outside, &foreman, &bridged, &routine];
+    let all = [&lead, &yours, &outside, &foreman, &bridged, &routine];
     let distinct: std::collections::HashSet<_> = all.iter().collect();
     assert_eq!(distinct.len(), all.len(), "each root launch mints its own");
 }
@@ -99,6 +117,7 @@ fn a_tab_opener_never_overwrites_a_recorded_launcher_or_names_itself() {
     state.set_launched_by_if_absent("tab", "s-lead");
     state.set_launched_by_if_absent("tab", "someone-else");
     assert_eq!(launched_by(&state, "tab").as_deref(), Some("lead"));
+    assert_eq!(state.launcher_session("tab").as_deref(), Some("s-lead"), "its launcher's tab too");
 }
 
 /// A remote shell never mints; a remote agent inherits its launcher's work item, mints
@@ -132,6 +151,18 @@ fn remote_launches_follow_the_same_rule() {
     restored.identity.work_item = Some(wi("wi_00000000000000b2"));
     state.reserve_remote_shell(restored).unwrap();
     assert_eq!(state.work_item("remote-restored"), Some(wi("wi_00000000000000b2")));
+
+    // A restore whose tab recorded no work item keeps none, and says who restored it.
+    let mut untagged = roster_remote_record("remote-untagged", "rs-5", "1", true);
+    untagged.request_id = uuid::Uuid::new_v4();
+    untagged.identity.launched_by = Some("lead".into());
+    untagged.identity.restored_by = Some("CodeSense restore".into());
+    untagged.identity.restoring = true;
+    state.reserve_remote_shell(untagged).unwrap();
+    assert_eq!(state.work_item("remote-untagged"), None, "a restore never mints or inherits");
+    let row = state.snapshot().into_iter().find(|s| s.handle == "remote-untagged").unwrap();
+    assert_eq!(row.meta.restored_by.as_deref(), Some("CodeSense restore"));
+    assert_eq!(row.meta.launched_by.as_deref(), Some("lead"));
 }
 
 #[test]

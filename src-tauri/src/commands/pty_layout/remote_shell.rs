@@ -212,8 +212,21 @@ pub(crate) struct RemoteLaunchIdentity {
     pub durable_workspace: bool,
     /// The work item the launch belongs to, settled by the app when it reserves the launch
     /// and kept by a restore. Not something a launcher says, so [`Self::is_empty`] ignores it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// A malformed one on a receipt reads as none.
+    #[serde(
+        default,
+        deserialize_with = "crate::work_item::deserialize_lenient",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub work_item: Option<crate::work_item::WorkItemId>,
+    /// Who restored the launch after a restart; `launched_by` stays the original. Only a
+    /// restore sets it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub restored_by: Option<String>,
+    /// The launch brings back a session that already ran (a restore or a recovery), so it
+    /// keeps the work item it had and never mints one. The app's own, never on a receipt.
+    #[serde(skip)]
+    pub restoring: bool,
 }
 
 /// Launch `agent` in the tab `record` opens: it runs the Agent's runtime, and the
@@ -249,6 +262,7 @@ impl RemoteLaunchIdentity {
     pub(crate) fn is_empty(&self) -> bool {
         Self {
             work_item: None,
+            restoring: false,
             ..self.clone()
         } == Self::default()
     }
@@ -1166,6 +1180,9 @@ async fn remote_shell_tab_unbounded(
                     return RemoteTabOutcome::refused("accessDenied", error);
                 }
             }
+            // Settled on this record, which `finish_launch` tags, so a restore keeps it.
+            app.state::<DashboardLaunchState>()
+                .settle_remote_work_item(&mut record);
             let reserved = await_blocking("reserve_remote_intent", {
                 let receipt_root = receipt_root.clone();
                 let app = app.clone();
@@ -2330,6 +2347,15 @@ pub(crate) const TAG_REMOTE_LAUNCHED_BY: &str = "remoteLaunchedBy";
 /// The layout tag naming a remote tab's work item, for a restore to keep.
 pub(crate) const TAG_REMOTE_WORK_ITEM: &str = "remoteWorkItem";
 
+/// Who launched a remote tab, as its layout tags recorded it; a blank tag is none.
+pub(crate) fn remote_tab_launcher(tags: &Tags) -> Option<String> {
+    tags.get(TAG_REMOTE_LAUNCHED_BY)
+        .map(String::as_str)
+        .map(str::trim)
+        .filter(|launcher| !str::is_empty(launcher))
+        .map(str::to_owned)
+}
+
 /// The work item a remote tab's layout tags recorded.
 pub(crate) fn remote_tab_work_item(tags: &Tags) -> Option<crate::work_item::WorkItemId> {
     tags.get(TAG_REMOTE_WORK_ITEM)
@@ -2545,8 +2571,9 @@ async fn recover(
                 identity: RemoteLaunchIdentity {
                     if_absent,
                     durable_workspace: durable,
-                    launched_by: tab.tags.get(TAG_REMOTE_LAUNCHED_BY).cloned(),
+                    launched_by: remote_tab_launcher(&tab.tags),
                     work_item: remote_tab_work_item(&tab.tags),
+                    restoring: true,
                     ..Default::default()
                 },
             });
@@ -2992,21 +3019,45 @@ mod tests {
         );
     }
 
-    /// A remote tab's layout keeps who launched it and its work item, for a restore.
+    /// A remote tab's layout keeps who launched it and the work item its registry entry
+    /// holds, for a restore: the launch settles it on the record it then reserves and tags.
     #[test]
     fn a_remote_tab_keeps_its_launcher_and_work_item_for_a_restore() {
-        let mut record = receipt_record();
-        let tags = remote_layout_tags(&record);
+        let tags = remote_layout_tags(&receipt_record());
         assert!(!tags.contains_key(TAG_REMOTE_LAUNCHED_BY));
         assert_eq!(remote_tab_work_item(&tags), None);
+
+        let state = DashboardLaunchState::new(4);
+        assert!(state.begin_with_provenance("lead", None, Default::default()).unwrap());
+        state.bind("lead", "s-lead", Some("codesense")).unwrap();
+        let lead = state.work_item("lead").expect("a person's agent launch mints");
+        let mut value = serde_json::to_value(receipt_record()).unwrap();
+        value["agent"] = serde_json::json!({
+            "workspace_handle": "ws-1", "name": "Worker",
+            "manifest": {
+                "agent": {"key": "acme/design/worker", "revision": 1, "definition_hash": "h"},
+                "runtime": "claude", "entries": [], "essentials": [], "generated": [],
+                "totals": {"files": 0, "bytes": 0}, "errors": [], "manifest_hash": ""
+            },
+            "runtime": "claude",
+            "startup": {"args": [], "settings": {}, "prompt": null},
+            "mcp_allow": []
+        });
+        let mut record: RemoteShellRecord = serde_json::from_value(value).unwrap();
         record.identity.launched_by = Some("lead".into());
-        record.identity.work_item = crate::work_item::WorkItemId::parse("wi_00000000000000a1");
+        state.settle_remote_work_item(&mut record);
+        state.reserve_remote_shell(record.clone()).unwrap();
         let tags = remote_layout_tags(&record);
         assert_eq!(tags.get(TAG_REMOTE_LAUNCHED_BY).map(String::as_str), Some("lead"));
-        assert_eq!(remote_tab_work_item(&tags), record.identity.work_item);
+        assert_eq!(remote_tab_work_item(&tags), Some(lead.clone()), "the one the registry holds");
+        assert_eq!(state.work_item(&record.handle), Some(lead));
         let mut forged = tags.clone();
         forged.insert(TAG_REMOTE_WORK_ITEM.into(), "not-an-id".into());
         assert_eq!(remote_tab_work_item(&forged), None);
+        forged.insert(TAG_REMOTE_LAUNCHED_BY.into(), " lead ".into());
+        assert_eq!(remote_tab_launcher(&forged).as_deref(), Some("lead"), "read back trimmed");
+        forged.insert(TAG_REMOTE_LAUNCHED_BY.into(), "  ".into());
+        assert_eq!(remote_tab_launcher(&forged), None, "a blank launcher is none");
     }
 
     /// SW-AGR-12: the durable mark is the app's own: never over the wire, and

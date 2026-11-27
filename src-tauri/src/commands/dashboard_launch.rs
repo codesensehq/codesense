@@ -1051,6 +1051,10 @@ struct LaunchEntry {
     restored_overdue: bool,
     /// The agent launch's per-launch settings file, removed when the entry goes.
     launch_settings: Option<crate::agents::launch::LaunchSettingsFile>,
+    /// A tab opened for its caller now ([`DashboardLaunchState::register_opened_tab`]),
+    /// not a session coming back: once it names an agent it is an agent launch, and its
+    /// work item is settled then.
+    opened_tab: bool,
 }
 
 fn entry_for_session_mut<'a>(inner: &'a mut Inner, session: &str) -> Option<&'a mut LaunchEntry> {
@@ -1143,6 +1147,17 @@ impl LaunchEntry {
         self.agent_revision.is_some() || self.kind == KIND_DASHBOARD_LAUNCHED
     }
 
+    /// The tab of the launch this entry is, as a launcher: a local launch's session, or a
+    /// remote tab's session on its machine (the one its authority verifies a remote caller
+    /// as).
+    fn launcher_session_of(&self) -> Option<String> {
+        self.session_id.clone().or_else(|| {
+            self.remote_shell
+                .as_ref()
+                .map(|remote| codesense_pty_core::domain::PtySessionId::as_str(&remote.target.session).to_owned())
+        })
+    }
+
     /// A cap-free entry for a session the app did not reserve a launch for: an app-opened
     /// terminal, or a launch restored from its tab after an app restart.
     fn registered(
@@ -1185,6 +1200,7 @@ impl LaunchEntry {
             exit_sent_at_ms: None,
             restored_overdue: false,
             launch_settings: None,
+            opened_tab: false,
         }
     }
 }
@@ -1918,6 +1934,9 @@ impl DashboardLaunchState {
         task_store_path(Some(self))
             .and_then(|path| crate::session_usage::UsageStore::open(&path))
             .and_then(|store| store.read_session_record(session_id))
+            .inspect_err(|e| {
+                log::warn!(target: "work_item", "reading the work item of continued session {session_id}: {e}");
+            })
             .ok()
             .flatten()
             .and_then(|record| record.work_item)
@@ -2183,14 +2202,7 @@ impl DashboardLaunchState {
         }
         // The launcher's tab: a local launch's session, or a remote tab's session on its machine
         // (the one its authority verifies a remote caller as).
-        let launcher_session = launcher_entry.and_then(|launcher| {
-            launcher.session_id.clone().or_else(|| {
-                launcher
-                    .remote_shell
-                    .as_ref()
-                    .map(|remote| codesense_pty_core::domain::PtySessionId::as_str(&remote.target.session).to_owned())
-            })
-        });
+        let launcher_session = launcher_entry.and_then(LaunchEntry::launcher_session_of);
         let launcher = launcher_entry.and_then(|launcher| {
             let session = launcher.session_id.as_ref()?;
             let fallback = launcher.provenance.as_ref()
@@ -2284,6 +2296,7 @@ impl DashboardLaunchState {
                 exit_sent_at_ms: None,
                 restored_overdue: false,
                 launch_settings: None,
+                opened_tab: false,
             },
         );
         // SW-FX-launcher-persistence (step 1): mirror the just-committed launcher
@@ -2777,10 +2790,18 @@ impl DashboardLaunchState {
     /// Record the named agent (`<key>@<revision>`) `handle`'s session runs — fill-gap only,
     /// like the profile id.
     pub fn set_agent_revision_if_absent(&self, handle: &str, agent_revision: String) {
-        if let Some(entry) = self.lock().by_handle.get_mut(handle) {
-            if entry.agent_revision.is_none() {
-                entry.agent_revision = Some(agent_revision);
-            }
+        let mut inner = self.lock();
+        let Some(entry) = inner.by_handle.get_mut(handle) else {
+            return;
+        };
+        if entry.agent_revision.is_some() {
+            return;
+        }
+        entry.agent_revision = Some(agent_revision);
+        // A tab opened for its caller becomes an agent launch now.
+        if settle_opened_tab_work_item(&mut inner, handle) {
+            drop(inner);
+            self.queue_persist(handle);
         }
     }
 
@@ -3408,15 +3429,47 @@ impl DashboardLaunchState {
     pub(crate) fn set_launched_by_if_absent(&self, handle: &str, caller: &str) {
         let mut inner = self.lock();
         let launched_by = normalize_launcher(&inner, caller);
+        if launched_by == handle
+            || inner
+                .by_handle
+                .get(handle)
+                .is_none_or(|entry| entry.meta.launched_by.is_some())
+        {
+            return;
+        }
+        // The caller is a verified session, so it is the launcher's tab when no entry says
+        // otherwise.
+        let launcher_session = inner
+            .by_handle
+            .get(&launched_by)
+            .and_then(LaunchEntry::launcher_session_of)
+            .unwrap_or_else(|| caller.to_owned());
         let Some(entry) = inner.by_handle.get_mut(handle) else {
             return;
         };
-        if entry.meta.launched_by.is_some() || launched_by == handle {
-            return;
-        }
         entry.meta.launched_by = Some(launched_by);
+        entry.launcher_session = Some(launcher_session);
+        settle_opened_tab_work_item(&mut inner, handle);
         drop(inner);
         self.queue_persist(handle);
+    }
+
+    /// Register a tab a verified caller (or a person, with none) opened now, as
+    /// [`register`](Self::register) does, then record its caller as its launcher. Once the tab
+    /// names an agent it is that agent's launch, and its work item is settled then: the
+    /// launcher's, else a new one.
+    pub(crate) fn register_opened_tab(&self, handle: &str, session_id: &str, caller: Option<&str>) {
+        self.register(handle, session_id, Some("codesense"));
+        let mut inner = self.lock();
+        let Some(entry) = inner.by_handle.get_mut(handle) else {
+            return;
+        };
+        entry.opened_tab = true;
+        settle_opened_tab_work_item(&mut inner, handle);
+        drop(inner);
+        if let Some(caller) = caller {
+            self.set_launched_by_if_absent(handle, caller);
+        }
     }
 
     /// What the layout last said about `handle`'s team: `Some(Some(team))` kept,
@@ -4733,7 +4786,22 @@ pub(crate) async fn launch_headless_session(
     // Reserve the supervisory slot BEFORE any spawn work (fail-fast `busy`). A handle
     // already launching returns `false` — a headless run has nothing to focus, so refuse
     // rather than fork a second run onto the same handle (we don't own that permit).
-    if !launch.begin(&handle).map_err(|e| e.to_string())? {
+    // A routine's run is launched by its routine, as `routine:<org>/<team>/<id>`; `launcher`
+    // stays the surface that started it.
+    let record = LaunchRecord {
+        meta: LaunchMeta {
+            launched_by: provenance
+                .as_ref()
+                .and_then(|provenance| provenance.routine_key.as_deref())
+                .map(routine_launcher),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    if !launch
+        .begin_with_provenance(&handle, None, record)
+        .map_err(|e| e.to_string())?
+    {
         return Err(format!(
             "busy: a session is already active for handle '{handle}'"
         ));
@@ -6748,6 +6816,7 @@ impl DashboardLaunchState {
                 exit_sent_at_ms: None,
                 restored_overdue: false,
                 launch_settings: None,
+                opened_tab: false,
             },
         );
         Ok(())
@@ -6879,13 +6948,13 @@ fn remote_launch_meta(record: &super::pty_layout::RemoteShellRecord) -> LaunchMe
         avatar: identity.avatar.clone(),
         continues: None,
         reviews: None,
-        restored_by: None,
+        restored_by: identity.restored_by.clone(),
     }
 }
 
 /// The work item a remote launch records: the one its record carries (a restore, or a
 /// receipt written after it was settled), else [`crate::work_item::resolve_for_launch`]
-/// with its launcher's.
+/// with its launcher's. A restore whose tab recorded none keeps none, like a local one.
 fn remote_work_item(
     inner: &Inner,
     record: &super::pty_layout::RemoteShellRecord,
@@ -6899,11 +6968,49 @@ fn remote_work_item(
     crate::work_item::resolve_for_launch(
         launcher,
         record.agent.is_some(),
-        match &record.identity.work_item {
-            Some(kept) => crate::work_item::LaunchKind::Restoring(Some(kept)),
-            None => crate::work_item::LaunchKind::Fresh,
+        match (&record.identity.work_item, record.identity.restoring) {
+            (Some(kept), _) => crate::work_item::LaunchKind::Restoring(Some(kept)),
+            (None, true) => crate::work_item::LaunchKind::Restoring(None),
+            (None, false) => crate::work_item::LaunchKind::Fresh,
         },
     )
+}
+
+/// Settle the work item of `handle`'s tab, opened for its caller now, once it names an
+/// agent: its launcher's, else a new one. A tab that names none, already has one, or came
+/// back from a restore is left alone. True when the work item was set.
+fn settle_opened_tab_work_item(inner: &mut Inner, handle: &str) -> bool {
+    let Some(entry) = inner.by_handle.get(handle) else {
+        return false;
+    };
+    if !entry.opened_tab || entry.work_item.is_some() || !LaunchEntry::names_an_agent(entry) {
+        return false;
+    }
+    let launcher = entry
+        .meta
+        .launched_by
+        .as_deref()
+        .and_then(|launcher| inner.by_handle.get(launcher))
+        .and_then(|launcher| launcher.work_item.clone());
+    let work_item = crate::work_item::resolve_for_launch(
+        launcher.as_ref(),
+        true,
+        crate::work_item::LaunchKind::Fresh,
+    );
+    let Some(entry) = inner.by_handle.get_mut(handle) else {
+        return false;
+    };
+    entry.work_item = work_item;
+    entry.work_item.is_some()
+}
+
+impl DashboardLaunchState {
+    /// Settle the work item remote launch `record` records, on `record` itself, so its
+    /// receipt, its layout tags and its registry entry all carry the same one. Settling
+    /// again keeps it.
+    pub(crate) fn settle_remote_work_item(&self, record: &mut super::pty_layout::RemoteShellRecord) {
+        record.identity.work_item = remote_work_item(&self.lock(), record);
+    }
 }
 
 /// Identifies one remote launch's settlement: `(owner, team, machine, request id)`.
@@ -7269,7 +7376,7 @@ impl DashboardLaunchState {
     ) -> Result<RemoteShellReservation, String> {
         use std::io::Write;
         // Settled before the receipt is written, so a restore from it keeps the same one.
-        record.identity.work_item = remote_work_item(&self.lock(), &record);
+        self.settle_remote_work_item(&mut record);
         let path = remote_intent_path(root, &record)?;
         std::fs::create_dir_all(root).map_err(|e| format!("cannot reserve remote intent: {e}"))?;
         let bytes = serde_json::to_vec(&record).map_err(|e| e.to_string())?;

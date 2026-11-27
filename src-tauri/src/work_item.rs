@@ -60,6 +60,18 @@ impl From<WorkItemId> for String {
     }
 }
 
+/// Read a record's optional work item, as none when it is malformed, so one bad id never
+/// fails the whole record it sits in. For `#[serde(deserialize_with)]`, with `default`.
+pub fn deserialize_lenient<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<WorkItemId>, D::Error> {
+    let raw = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(raw
+        .as_ref()
+        .and_then(serde_json::Value::as_str)
+        .and_then(WorkItemId::parse))
+}
+
 /// What a work item records: its team, the lead that started it, the sprint it belongs to
 /// and the context worktree it works in. Written on the context worktree's record and on
 /// the session record of every session in it.
@@ -126,6 +138,30 @@ mod tests {
         assert_eq!(WorkItemId::parse(a.as_str()), Some(a.clone()));
         assert_eq!(a.as_str().len(), PREFIX.len() + DIGITS);
         assert_ne!(a, b);
+    }
+
+    #[test]
+    fn a_malformed_work_item_reads_as_none_and_keeps_its_record() {
+        #[derive(Deserialize)]
+        struct Record {
+            #[serde(default, deserialize_with = "deserialize_lenient")]
+            work_item: Option<WorkItemId>,
+            name: String,
+        }
+        for (raw, expected) in [
+            (
+                serde_json::json!({"work_item": "wi_00000000000000a1", "name": "a"}),
+                Some(id("wi_00000000000000a1")),
+            ),
+            (serde_json::json!({"work_item": "not-an-id", "name": "a"}), None),
+            (serde_json::json!({"work_item": 7, "name": "a"}), None),
+            (serde_json::json!({"work_item": null, "name": "a"}), None),
+            (serde_json::json!({"name": "a"}), None),
+        ] {
+            let record: Record = serde_json::from_value(raw.clone()).unwrap();
+            assert_eq!(record.work_item, expected, "{raw}");
+            assert_eq!(record.name, "a");
+        }
     }
 
     #[test]

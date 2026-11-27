@@ -17,7 +17,12 @@ describe("the 14:02 sample day", () => {
   it("records every launcher as a handle, a routine or a person", () => {
     for (const agent of day.agents) {
       const by = agent.launchedBy;
-      if (by === null || by.startsWith("routine:")) continue;
+      if (by === null) continue;
+      if (by.startsWith("routine:")) {
+        // The routine's full key, as `routine_launcher` records it.
+        expect(by, agent.name).toMatch(/^routine:[^/\s]+\/[^/\s]+\/[^/\s]+$/);
+        continue;
+      }
       expect(handles, `${agent.name} launched by ${by}`).toContain(by);
     }
   });

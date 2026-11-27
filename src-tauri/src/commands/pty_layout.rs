@@ -1743,10 +1743,10 @@ pub async fn terminal_remote_shell_tab(
 pub(crate) use remote_shell::remote_shell_group_in;
 pub(crate) use remote_shell::{
     arm_tab_home, authorize_human_terminal, host_home, remote_shell_tab_bound,
-    remote_shell_tab_bound_for, restore_on_machine, validate_remote_shell_group, LaunchSettlement,
-    LiveRemoteTab, McpInventoryEntry, RemoteLaunchIdentity, RemoteShellRecord,
-    LAUNCH_SETTLED_EVENT, LAUNCH_SETTLEMENT_TTL, TAG_REMOTE_DURABLE, TAG_REMOTE_LAUNCHED_BY,
-    remote_tab_work_item,
+    remote_shell_tab_bound_for, remote_tab_launcher, remote_tab_work_item, restore_on_machine,
+    validate_remote_shell_group, LaunchSettlement, LiveRemoteTab, McpInventoryEntry,
+    RemoteLaunchIdentity, RemoteShellRecord, LAUNCH_SETTLED_EVENT, LAUNCH_SETTLEMENT_TTL,
+    TAG_REMOTE_DURABLE, TAG_REMOTE_LAUNCHED_BY,
 };
 
 async fn open_remote_layout_tab(

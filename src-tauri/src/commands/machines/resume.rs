@@ -161,8 +161,10 @@ pub fn resume_request(
         initial_prompt: Some(brief.to_string()),
         identity: Box::new(crate::commands::pty_layout::RemoteLaunchIdentity {
             // A restore keeps its launcher and its work item.
-            launched_by: original_launcher(tab, crate::commands::pty_layout::TAG_REMOTE_LAUNCHED_BY),
+            launched_by: crate::commands::pty_layout::remote_tab_launcher(&tab.tags),
             work_item: crate::commands::pty_layout::remote_tab_work_item(&tab.tags),
+            restored_by: Some(RESTORED_BY.to_string()),
+            restoring: true,
             role: tab.role.clone(),
             // A restore keeps its story (SV-CDE-83 I1).
             story: story_of(tab),
@@ -780,6 +782,37 @@ mod tests {
         let alone = resumed_launch_home(&bare, "acme", "default", "SW-1", seat);
         assert_eq!(alone.descriptor.worktree_path.as_deref(), Some(seat));
         assert_eq!(alone.tab_cwd, None);
+    }
+
+    /// A remote restore keeps who launched it (trimmed, a blank tag none) and its work
+    /// item, names who restored it, and is marked a restore so it never mints.
+    #[test]
+    fn a_remote_restore_keeps_its_launcher_and_work_item_and_says_who_restored_it() {
+        let identity = |tags: &[(&str, &str)]| {
+            let mut all = vec![
+                ("remoteAgentKey", "acme:default/triage"),
+                ("remotePreparedWorkspace", "prep-7"),
+            ];
+            all.extend_from_slice(tags);
+            let crate::commands::pty_layout::RemoteShellTabRequest::Create { identity, .. } =
+                resume_request("box", &tab(&all), "the brief").unwrap()
+            else {
+                panic!("a create")
+            };
+            identity
+        };
+        let tagged = identity(&[
+            ("remoteLaunchedBy", " lead "),
+            ("remoteWorkItem", "wi_00000000000000a1"),
+        ]);
+        assert_eq!(tagged.launched_by.as_deref(), Some("lead"));
+        assert_eq!(tagged.work_item, crate::work_item::WorkItemId::parse("wi_00000000000000a1"));
+        assert_eq!(tagged.restored_by.as_deref(), Some(RESTORED_BY));
+        assert!(tagged.restoring);
+        let untagged = identity(&[("remoteLaunchedBy", "  ")]);
+        assert_eq!(untagged.launched_by, None, "a blank launcher is none");
+        assert_eq!(untagged.work_item, None);
+        assert!(untagged.restoring, "a restore without the tag still never mints");
     }
 
     #[test]

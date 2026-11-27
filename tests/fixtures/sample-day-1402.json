@@ -34,6 +34,15 @@
       "leadSession": "tab-quick-fix-lead",
       "sprintId": null,
       "contextWorktree": "ctx/fix-auth"
+    },
+    {
+      "id": "wi_00000000000000d4",
+      "org": "acme",
+      "team": null,
+      "leadAgent": "foreman",
+      "leadSession": "tab-foreman",
+      "sprintId": null,
+      "contextWorktree": null
     }
   ],
   "agents": [
@@ -45,7 +54,7 @@
       "org": "acme",
       "team": null,
       "launchedBy": null,
-      "workItem": null,
+      "workItem": "wi_00000000000000d4",
       "registered": true,
       "state": "busy",
       "doing": "reading the Inbox",
@@ -61,7 +70,7 @@
       "agent": "sprint-lead",
       "org": "acme",
       "team": "delivery",
-      "launchedBy": "foreman",
+      "launchedBy": null,
       "workItem": "wi_00000000000000a1",
       "registered": true,
       "state": "busy",
@@ -164,7 +173,7 @@
       "agent": "steward-lead",
       "org": "acme",
       "team": "steward",
-      "launchedBy": "routine:steward-weekly",
+      "launchedBy": "routine:acme/steward/steward-weekly",
       "workItem": "wi_00000000000000b2",
       "registered": true,
       "state": "idle",

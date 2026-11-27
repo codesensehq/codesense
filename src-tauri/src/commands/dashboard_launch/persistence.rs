@@ -77,8 +77,12 @@ pub(crate) struct PersistedLaunch {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worktree_dir: Option<PathBuf>,
     /// The work item `session_id` belongs to, so a restore keeps it when the
-    /// session-server tag `launchWorkItem` is lost.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// session-server tag `launchWorkItem` is lost. A malformed one reads as none.
+    #[serde(
+        default,
+        deserialize_with = "crate::work_item::deserialize_lenient",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub work_item: Option<crate::work_item::WorkItemId>,
 }
 

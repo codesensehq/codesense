@@ -11,11 +11,12 @@ export type SampleDayTeam = { org: string; team: string; name: string };
 export type SampleDayWorkItem = {
   id: string;
   org: string;
-  team: string;
+  /** `null` for a cross-team lead, such as the Foreman. */
+  team: string | null;
   leadAgent: string;
   leadSession: string;
   sprintId: string | null;
-  contextWorktree: string;
+  contextWorktree: string | null;
 };
 
 export type SampleDayAgent = {
@@ -25,7 +26,7 @@ export type SampleDayAgent = {
   agent: string | null;
   org: string;
   team: string | null;
-  /** The launcher's handle, `routine:<id>`, or `null` when a person launched it. */
+  /** The launcher's handle, `routine:<org>/<team>/<id>`, or `null` when a person launched it. */
   launchedBy: string | null;
   workItem: string | null;
   /** Registered agents appear in the list arrangements; hand-started ones never do. */
