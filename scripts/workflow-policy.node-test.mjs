@@ -8,7 +8,12 @@ import path from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { parse } from "yaml";
-import { smokeImagesPolicy, topLevelConjuncts, workflowPolicy } from "./workflow-policy.mjs";
+import {
+  MAIN_WRITERS,
+  smokeImagesPolicy,
+  topLevelConjuncts,
+  workflowPolicy,
+} from "./workflow-policy.mjs";
 
 // The workflow set under test: .github/workflows, or CODESENSE_WORKFLOWS_DIR (from the repo root).
 const directory = path.resolve(
@@ -1349,14 +1354,16 @@ test("Scorecard grants are confined to the exact file and job", () => {
   );
 });
 for (const trigger of ["schedule", "branch_protection_rule"]) {
-  test(`${trigger} is confined to scorecard.yml${trigger === "schedule" ? " and rust.yml" : ""}`, () => {
+  test(`${trigger} is confined to scorecard.yml${trigger === "schedule" ? ", rust.yml and nightly.yml" : ""}`, () => {
     const fixture = scorecard.replace("workflow_dispatch", trigger);
     assert.deepEqual(workflowPolicy(fixture, "scorecard.yml"), []);
     assert.match(workflowPolicy(fixture, "ci.yml").join("\n"), /triggers/);
-    assert.equal(
-      /triggers/.test(workflowPolicy(fixture, "rust.yml").join("\n")),
-      trigger !== "schedule",
-    );
+    for (const file of ["rust.yml", "nightly.yml"])
+      assert.equal(
+        /triggers/.test(workflowPolicy(fixture, file).join("\n")),
+        trigger !== "schedule",
+        file,
+      );
   });
 }
 
@@ -1671,32 +1678,45 @@ test("Rust jobs preserve package coverage for nextest and doctests and always up
 });
 
 // The build script's generators that write into directories it watches run before cargo; the
-// step finds them in build.rs, so a new one is picked up and none is missed.
-test("rust.yml generates every docs file build.rs writes before the first cargo command", (t) => {
-  const workflow = parse(fs.readFileSync(path.join(directory, "rust.yml"), "utf8"));
-  const step = workflow.jobs["rust-macos-build"].steps.find((s) => s.name === "Generate docs data");
-  const root = path.join(directory, "..", "..");
-  const buildRs = fs.readFileSync(path.join(root, "src-tauri/build.rs"), "utf8");
-  const calls = [
-    ...buildRs.matchAll(/^\s*run_docs_generator\("\.\.\/(scripts\/[^"]+\.mjs)"\);$/gm),
-  ].map((m) => m[1]);
-  assert.ok(calls.length > 0);
-  // Every single-script call in build.rs has that exact shape (the _with_args calls write
-  // archives dated to their inputs, so they need no head start).
-  assert.equal(buildRs.match(/^\s*run_docs_generator\(/gm).length, calls.length);
-  // Run the step with node replaced by a recorder, so it lists what it would run.
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "docs-data-step-"));
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  fs.writeFileSync(path.join(dir, "node"), '#!/bin/sh\necho "$1" >> "$RAN"\n', { mode: 0o755 });
-  const ran = path.join(dir, "ran");
-  const result = spawnSync("bash", ["-e", "-c", step.run], {
-    cwd: root,
-    encoding: "utf8",
-    env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, RAN: ran },
+// step finds them in build.rs, so a new one is picked up and none is missed. nightly.yml's load
+// lane copies rust-macos-build's prep, this step with it.
+for (const [file, job] of [
+  ["rust.yml", "rust-macos-build"],
+  ["nightly.yml", "load"],
+])
+  test(`${file} generates every docs file build.rs writes before the first cargo command`, (t) => {
+    const workflow = parse(fs.readFileSync(path.join(directory, file), "utf8"));
+    const steps = workflow.jobs[job].steps;
+    const index = steps.findIndex((s) => s.name === "Generate docs data");
+    const step = steps[index];
+    assert.ok(step, `${job} has no Generate docs data step`);
+    const firstCargo = steps.findIndex((s) => /\bcargo /.test(s.run ?? ""));
+    assert.ok(
+      firstCargo < 0 || index < firstCargo,
+      "the docs step runs before the first cargo command",
+    );
+    const root = path.join(directory, "..", "..");
+    const buildRs = fs.readFileSync(path.join(root, "src-tauri/build.rs"), "utf8");
+    const calls = [
+      ...buildRs.matchAll(/^\s*run_docs_generator\("\.\.\/(scripts\/[^"]+\.mjs)"\);$/gm),
+    ].map((m) => m[1]);
+    assert.ok(calls.length > 0);
+    // Every single-script call in build.rs has that exact shape (the _with_args calls write
+    // archives dated to their inputs, so they need no head start).
+    assert.equal(buildRs.match(/^\s*run_docs_generator\(/gm).length, calls.length);
+    // Run the step with node replaced by a recorder, so it lists what it would run.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "docs-data-step-"));
+    t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+    fs.writeFileSync(path.join(dir, "node"), '#!/bin/sh\necho "$1" >> "$RAN"\n', { mode: 0o755 });
+    const ran = path.join(dir, "ran");
+    const result = spawnSync("bash", ["-e", "-c", step.run], {
+      cwd: root,
+      encoding: "utf8",
+      env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, RAN: ran },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(fs.readFileSync(ran, "utf8").trim().split("\n"), calls);
   });
-  assert.equal(result.status, 0, result.stderr);
-  assert.deepEqual(fs.readFileSync(ran, "utf8").trim().split("\n"), calls);
-});
 
 // The nightly deletes its older macOS build caches: only that job may write actions, and only on
 // the nightly on main in the base repository.
@@ -1798,7 +1818,7 @@ const flakyIssues = good
   )
   .replace(
     "  static:\n",
-    "  flaky-issues:\n    if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && !github.event.repository.fork }}\n",
+    "  flaky-issues:\n    if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && !github.event.repository.fork }}\n    concurrency:\n      group: flaky-issues\n      cancel-in-progress: false\n",
   )
   .replace("      contents: read", "      contents: read\n      issues: write");
 test("issues write is limited to the flaky-issues job in rust.yml", () => {
@@ -1838,6 +1858,140 @@ test("flaky-issues runs only for pushes to main outside forks", () => {
   assert.match(
     workflowPolicy(flakyIssues.replace(/^ {4}if: .*\n/m, ""), "rust.yml").join("\n"),
     /if must require/,
+  );
+});
+// nightly.yml runs on a schedule or by hand only, so none of its jobs can be a required check or
+// run pull request code; its issue job alone writes, on the scheduled run on main.
+const nightly = good
+  .replace("on: [pull_request, workflow_dispatch]", "on: [schedule, workflow_dispatch]")
+  .replace(
+    "  static:\n",
+    "  nightly-issue:\n    if: ${{ !cancelled() && contains(needs.*.result, 'failure') && github.event_name == 'schedule' && github.ref == 'refs/heads/main' && !github.event.repository.fork }}\n    concurrency:\n      group: nightly-issue\n      cancel-in-progress: false\n",
+  )
+  .replace("      contents: read", "      contents: read\n      issues: write");
+test("nightly.yml alone may run on schedule and workflow_dispatch", () => {
+  assert.deepEqual(workflowPolicy(nightly, "nightly.yml"), []);
+  const lanes = good.replace(
+    "on: [pull_request, workflow_dispatch]",
+    "on: [schedule, workflow_dispatch]",
+  );
+  assert.deepEqual(workflowPolicy(lanes, "nightly.yml"), []);
+  for (const file of ["ci.yml", "tiles-release.yml", "nightly.yaml", "nested/nightly.yml", ""])
+    assert.match(workflowPolicy(lanes, file).join("\n"), /triggers/, file);
+});
+for (const trigger of ["pull_request", "merge_group", "push", "pull_request_target"]) {
+  test(`nightly.yml rejects ${trigger}`, () => {
+    const fixture = nightly.replace("on: [schedule,", `on: [schedule, ${trigger},`);
+    assert.match(workflowPolicy(fixture, "nightly.yml").join("\n"), /triggers/);
+  });
+}
+test("issues write in nightly.yml is limited to the nightly-issue job", () => {
+  for (const file of ["ci.yml", "rust.yml", "nightly.yaml", "tiles-release.yml", ""])
+    assert.match(
+      workflowPolicy(nightly, file).join("\n"),
+      /permissions must grant exactly|triggers/,
+      file,
+    );
+  assert.match(
+    workflowPolicy(nightly.replace("  nightly-issue:", "  flaky-issues:"), "nightly.yml").join(
+      "\n",
+    ),
+    /permissions must grant exactly contents: read$/m,
+  );
+  assert.match(
+    workflowPolicy(nightly.replace("  nightly-issue:", "  load:"), "nightly.yml").join("\n"),
+    /permissions must grant exactly contents: read$/m,
+  );
+  // And the nightly writer gets nothing in rust.yml.
+  assert.match(
+    workflowPolicy(
+      nightly.replace("on: [schedule, workflow_dispatch]", "on: [schedule]"),
+      "rust.yml",
+    ).join("\n"),
+    /nightly-issue: permissions must grant exactly contents: read$/m,
+  );
+  for (const [from, to] of [
+    ["      issues: write\n", ""],
+    ["issues: write", "issues: read"],
+    ["      contents: read\n", "      actions: read\n      contents: read\n"],
+    ["      contents: read\n", "      contents: read\n      pull-requests: write\n"],
+    ["      contents: read\n", ""],
+  ])
+    assert.match(
+      workflowPolicy(nightly.replace(from, to), "nightly.yml").join("\n"),
+      /permissions must grant exactly contents: read, issues: write/,
+      `${from} -> ${to}`,
+    );
+});
+test("nightly-issue runs only for the scheduled run on main outside forks", () => {
+  // nightly.yml has no push trigger, so the push-or-schedule rule leaves only the schedule.
+  for (const [term, replacement, message] of [
+    [
+      "github.event_name == 'schedule'",
+      "github.event_name != 'pull_request'",
+      /or github\.event_name == 'schedule' at the top level/,
+    ],
+    [
+      "github.ref == 'refs/heads/main'",
+      "true",
+      /if must require github\.ref == 'refs\/heads\/main'/,
+    ],
+    ["!github.event.repository.fork", "true", /if must require !github\.event\.repository\.fork/],
+  ])
+    assert.match(
+      workflowPolicy(nightly.replace(term, replacement), "nightly.yml").join("\n"),
+      message,
+      term,
+    );
+  for (const term of [
+    "github.event_name == 'schedule'",
+    "github.ref == 'refs/heads/main'",
+    "!github.event.repository.fork",
+  ])
+    assert.match(
+      workflowPolicy(
+        nightly.replace(`&& ${term}`, `&& (${term} || github.event_name == 'workflow_dispatch')`),
+        "nightly.yml",
+      ).join("\n"),
+      /if must require/,
+      term,
+    );
+  const or = nightly.replace(
+    "${{ !cancelled() &&",
+    "${{ github.event_name == 'workflow_dispatch' || !cancelled() &&",
+  );
+  assert.match(workflowPolicy(or, "nightly.yml").join("\n"), /if must require/);
+  assert.match(
+    workflowPolicy(nightly.replace(/^ {4}if: .*\n/m, ""), "nightly.yml").join("\n"),
+    /if must require/,
+  );
+});
+test("an issue-writing main writer holds one fixed, non-cancelling job concurrency", () => {
+  for (const [fixture, file, job] of [
+    [nightly, "nightly.yml", "nightly-issue"],
+    [flakyIssues, "rust.yml", "flaky-issues"],
+  ]) {
+    const message = new RegExp(
+      `${job}: concurrency must be one fixed group with cancel-in-progress: false`,
+    );
+    for (const [from, to] of [
+      [/^ {4}concurrency:\n.*\n.*\n/m, ""],
+      ["cancel-in-progress: false", "cancel-in-progress: true"],
+      ["      cancel-in-progress: false\n", ""],
+      [`group: ${job}`, "group: ${{ github.run_id }}"],
+      [`group: ${job}`, "group: ''"],
+    ])
+      assert.match(
+        workflowPolicy(fixture.replace(from, to), file).join("\n"),
+        message,
+        `${file}: ${from} -> ${to}`,
+      );
+  }
+});
+test("the main writers are exactly flaky-issues, the cache prune and nightly-issue", () => {
+  assert.deepEqual(
+    MAIN_WRITERS.map((writer) => `${writer.file}:${writer.job}`),
+    ["rust.yml:flaky-issues", "rust.yml:rust-macos-cache-prune", "nightly.yml:nightly-issue"],
   );
 });
 test("Rust test jobs list flaky tests after nextest and only flaky-issues writes issues", () => {

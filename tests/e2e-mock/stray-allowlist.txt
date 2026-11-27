@@ -1,0 +1,34 @@
+# Mock specs that predate tests/e2e-mock/tiles/ and are in no hand list. New specs go under
+# tiles/ (tests/e2e-mock/README.md); this list may only shrink. A line may name a spec that
+# does not exist yet.
+tests/e2e-mock/agent-list-live.spec.ts
+tests/e2e-mock/agent-list-qa-live.spec.ts
+tests/e2e-mock/agent-list-stability-live.spec.ts
+tests/e2e-mock/agents-pane-review.spec.ts
+tests/e2e-mock/agents-pane-status-word.spec.ts
+tests/e2e-mock/agents-tab.spec.ts
+tests/e2e-mock/chat-cli-switch.spec.ts
+tests/e2e-mock/chat-hand-started-cover.spec.ts
+tests/e2e-mock/chat-overlay-open-time.spec.ts
+tests/e2e-mock/chat-overlay-reopen.spec.ts
+tests/e2e-mock/dock-source.spec.ts
+tests/e2e-mock/file-diff-dispatch.spec.ts
+tests/e2e-mock/first-launch-setup.spec.ts
+tests/e2e-mock/foreman-open-on-start.spec.ts
+tests/e2e-mock/fullscreen-workspace-tray.spec.ts
+tests/e2e-mock/guide-page.spec.ts
+tests/e2e-mock/identity-menu-ink.spec.ts
+tests/e2e-mock/live-hub-coalesce.spec.ts
+tests/e2e-mock/overlay-pin-cap.spec.ts
+tests/e2e-mock/pane-save.spec.ts
+tests/e2e-mock/perf-baseline.spec.ts
+tests/e2e-mock/quick-view-popover.spec.ts
+tests/e2e-mock/slot-fallback.spec.ts
+tests/e2e-mock/story-opens-dashboard.spec.ts
+tests/e2e-mock/team-context-without-source.spec.ts
+tests/e2e-mock/tile-chrome-popovers.spec.ts
+tests/e2e-mock/tray-pills-review.spec.ts
+tests/e2e-mock/unsaved-team-edits.spec.ts
+tests/e2e-mock/virtual-list-stability.spec.ts
+tests/e2e-mock/workspace-bar-size.spec.ts
+tests/e2e-mock/workspace-reorder-review.spec.ts

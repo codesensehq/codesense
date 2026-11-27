@@ -10,9 +10,13 @@ import {
   loadEntries,
   validate,
   validEntries,
+  quarantineApplies,
   quarantineReason,
 } from "./lib/quarantine.mjs";
-import { unexecutedTests } from "../tests/frame-security/support/fixture-guard.mjs";
+import {
+  LINUX_WEBKIT_MEDIA_SKIP,
+  unexecutedTests,
+} from "../tests/frame-security/support/fixture-guard.mjs";
 import { validateInventory } from "./lib/quarantine-inventory.mjs";
 
 test("quarantines have issue URLs and expire after 30 days", () => {
@@ -119,4 +123,70 @@ test("gate and runners agree under the default and overridden issue repository",
       }
     }
   }
+});
+
+test("the guard lets through only the named Linux WebKit media skip", () => {
+  const now = Date.parse("2026-11-27T00:00:00Z");
+  const skipped = ({
+    file = "tests/frame-security/hostile.spec.ts",
+    project = "webkit",
+    title = "native audio loads baseline media without shim credentials",
+    annotation = { type: "skip", description: LINUX_WEBKIT_MEDIA_SKIP },
+  } = {}) => ({
+    outcome: () => "skipped",
+    location: { file: resolve(file) },
+    titlePath: () => ["", project, file.split("/").pop(), title],
+    annotations: annotation ? [annotation] : [],
+  });
+  const missed = (test, platform = "linux") => unexecutedTests([test], [], now, platform).length;
+  for (const title of [
+    "native audio loads default-open live media without shim credentials",
+    "native video loads default-open live media without shim credentials",
+    "native audio loads baseline media without shim credentials",
+    "native video loads baseline media without shim credentials",
+  ])
+    assert.equal(missed(skipped({ title })), 0, title);
+  // Anything else still fails the run: another OS, engine, spec, file or reason, or no reason.
+  assert.equal(missed(skipped(), "darwin"), 1);
+  assert.equal(missed(skipped({ project: "chromium" })), 1);
+  assert.equal(missed(skipped({ title: "native audio loads baseline media" })), 1);
+  assert.equal(missed(skipped({ title: "a: sibling private DOM is isolated" })), 1);
+  assert.equal(missed(skipped({ file: "tests/frame-security/lifecycle.spec.ts" })), 1);
+  assert.equal(missed(skipped({ annotation: { type: "skip", description: "no codecs" } })), 1);
+  assert.equal(
+    missed(skipped({ annotation: { type: "fixme", description: LINUX_WEBKIT_MEDIA_SKIP } })),
+    1,
+  );
+  assert.equal(missed(skipped({ annotation: null })), 1);
+});
+
+test("a Playwright quarantine can name the projects it covers, and the guard holds it to them", () => {
+  const now = Date.parse("2026-11-27T00:00:00Z");
+  const title = "focusOut returns to the previous host control";
+  const entry = {
+    id: `playwright:tests/frame-security/lifecycle.spec.ts#${title}`,
+    reason: "Chromium refocuses the frame after focusOut",
+    issue: "https://github.com/codesensehq/codesense/issues/463",
+    added: "2026-11-27",
+    projects: ["chromium"],
+  };
+  assert.doesNotThrow(() => validate([entry], now));
+  for (const projects of [[], ["chromium", 1], "chromium"])
+    assert.throws(() => validate([{ ...entry, projects }], now), /projects/);
+  assert.throws(
+    () => validate([{ ...entry, id: "vitest:src/a.test.ts#x", projects: ["chromium"] }], now),
+    /projects/,
+  );
+  const skipped = (project) => ({
+    outcome: () => "skipped",
+    location: { file: resolve("tests/frame-security/lifecycle.spec.ts") },
+    titlePath: () => ["", project, "lifecycle.spec.ts", title],
+    annotations: [{ type: "fixme", description: quarantineReason(entry) }],
+  });
+  assert.equal(unexecutedTests([skipped("chromium")], [entry], now).length, 0);
+  // The same title skipped on WebKit still fails the run.
+  assert.equal(unexecutedTests([skipped("webkit")], [entry], now).length, 1);
+  assert.equal(quarantineApplies(entry, "chromium"), true);
+  assert.equal(quarantineApplies(entry, "webkit"), false);
+  assert.equal(quarantineApplies({ ...entry, projects: undefined }, "webkit"), true);
 });

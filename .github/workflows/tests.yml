@@ -100,6 +100,147 @@ jobs:
           retention-days: 7
           if-no-files-found: ignore
 
+  tiles:
+    name: Tile specs
+    # The tile specs (tests/e2e-mock/tiles/, see its README) on both engines, in their own job so
+    # the @p0 gate can be a required check without pulling in mock-layout's hand list.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up pnpm
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: ${{ github.event_name != 'merge_group' && 'pnpm' || '' }}
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Install Chromium and WebKit
+        run: pnpm exec playwright install --with-deps chromium webkit
+      # Over the full list, not the grep runs below, which never see an untagged or @nightly spec:
+      # every tile spec runs on both engines and carries exactly one gate tag.
+      - name: Check the tile specs' tags and engines
+        run: |
+          pnpm exec playwright test -c playwright.mock.config.ts --list --reporter=json \
+            --project=tiles-webkit --project=tiles-chromium > "$RUNNER_TEMP/tiles-list.json"
+          node scripts/tile-tags.mjs "$RUNNER_TEMP/tiles-list.json"
+      - name: Run the @p0 tile specs
+        run: >-
+          pnpm exec playwright test -c playwright.mock.config.ts
+          --project=tiles-webkit --project=tiles-chromium --grep @p0
+      - name: Upload failure traces
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: tiles-${{ github.run_id }}-${{ github.run_attempt }}
+          path: test-results
+          retention-days: 7
+          if-no-files-found: ignore
+      # @p1 blocks a release (tiles-release.yml), not a merge: its report is kept for triage.
+      - name: Run the @p1 tile specs
+        continue-on-error: true
+        env:
+          PLAYWRIGHT_JSON_OUTPUT_NAME: tiles-p1-report.json
+        run: >-
+          pnpm exec playwright test -c playwright.mock.config.ts
+          --project=tiles-webkit --project=tiles-chromium --grep @p1 --pass-with-no-tests
+          --reporter=list,json
+      - name: Upload the @p1 report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: tiles-p1-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            tiles-p1-report.json
+            test-results
+          retention-days: 7
+          if-no-files-found: ignore
+
+  frame-security:
+    name: Frame security specs
+    # Both projects, with the config's reporter that fails a run which skipped any spec. The
+    # hostile-frame specs serve their fixtures from the app's own viewer routes through a test of
+    # the app's library (hostile_fixture_server), so the job compiles the library's tests first,
+    # with rust-linux-app's system libraries and sidecars. It restores that job's dependency
+    # cache, which rust.yml's scheduled run saves, and saves none of its own. rust-cache hashes
+    # every CARGO* and RUST* variable into the key, so the env below must stay rust-linux-app's
+    # exactly (rust.yml's workflow-level CARGO_PROFILE_DEV_DEBUG plus its job env), or the
+    # restore misses and the library builds cold.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash
+    env:
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_INCREMENTAL: "0"
+      RUST_BACKTRACE: "1"
+      CARGO_TERM_COLOR: always
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install system libraries
+        run: bash scripts/install-linux-app-libs.sh
+      - name: Set up pnpm
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: ${{ github.event_name != 'merge_group' && 'pnpm' || '' }}
+      - name: Install dependencies
+        # build.rs runs the docs generators, which import packages.
+        run: pnpm install --frozen-lockfile
+      - name: Install Chromium and WebKit
+        run: pnpm exec playwright install --with-deps chromium webkit
+      - name: Set up Rust
+        # Matches ci.yml; rustup's proxies read the channel in rust-toolchain.toml.
+        run: rustup toolchain install stable --profile minimal
+      - name: Restore Rust dependencies
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: rust-linux-app
+          # This workflow has no schedule, so it never saves; rust.yml's nightly run does.
+          save-if: ${{ github.event_name == 'schedule' && github.ref == 'refs/heads/main' }}
+      - name: Fetch bundled binaries
+        # The Linux bundle's pinned git-ai and starship, which tauri-build needs in place.
+        run: bash scripts/fetch-bundled.sh
+      - name: Build sidecars
+        # The app's build script needs the bundled sidecars to exist.
+        run: bash scripts/build-session-server.sh
+      - name: Compile the frame fixture server
+        # The codesense_lib test binary; cargo names its path, which the specs read from
+        # CODESENSE_FRAME_TEST_BINARY rather than searching target/debug/deps.
+        id: fixture
+        run: |
+          binary=$(cargo test --locked --manifest-path src-tauri/Cargo.toml --lib --no-run --message-format=json \
+            | jq -r 'select(.reason == "compiler-artifact" and .target.name == "codesense_lib" and .executable != null) | .executable')
+          [[ -x "$binary" ]] || { echo "::error::cargo named no codesense_lib test binary"; exit 1; }
+          echo "binary=$binary" >> "$GITHUB_OUTPUT"
+      - name: Run the frame security specs
+        env:
+          CODESENSE_FRAME_TEST_BINARY: ${{ steps.fixture.outputs.binary }}
+        run: pnpm run test:frame-security
+      - name: Upload failure traces
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: frame-security-${{ github.run_id }}-${{ github.run_attempt }}
+          path: test-results
+          retention-days: 7
+          if-no-files-found: ignore
+
   node-scripts:
     name: Node scripts
     runs-on: ubuntu-latest
@@ -123,6 +264,12 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Run Node script tests
         run: pnpm test:node-scripts
+      # A new mock spec belongs in tests/e2e-mock/tiles/; the allowlist of older ones only shrinks
+      # against the base's copy. Push and dispatch runs without a base check the tree alone.
+      - name: Check for mock specs outside tiles/
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
+        run: node scripts/stray-specs.mjs --base "$BASE_SHA"
       - name: Run dev-worktree tests
         run: pnpm test:dev-worktree
       - name: Run sidecar naming tests

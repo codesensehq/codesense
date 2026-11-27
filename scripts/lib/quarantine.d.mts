@@ -1,5 +1,11 @@
 // SPDX-License-Identifier: MIT
-export type QuarantineEntry = { id: string; reason: string; issue: string; added: string };
+export type QuarantineEntry = {
+  id: string;
+  reason: string;
+  issue: string;
+  added: string;
+  projects?: string[];
+};
 export const LEDGERS: readonly [string, string];
 export function loadEntries(root?: string): QuarantineEntry[];
 export function quarantineId(
@@ -17,4 +23,5 @@ export function validEntries(
   now?: number,
   repository?: string,
 ): QuarantineEntry[];
+export function quarantineApplies(entry: QuarantineEntry, project: string): boolean;
 export function quarantineReason(entry: QuarantineEntry): string;

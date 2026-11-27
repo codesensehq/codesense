@@ -1,0 +1,72 @@
+// SPDX-License-Identifier: MIT
+// The @p1 release gate (tiles-release.yml): at least 95% of the tile specs must pass, on both
+// engines together; a skipped spec counts as not passed. No test at all fails, so an empty or
+// broken run never reads as green.
+//   node scripts/tiles-release-gate.mjs <playwright-report.json>
+// Writes the result and every failure to the job summary ($GITHUB_STEP_SUMMARY, else stdout).
+import fs from "node:fs";
+import { fileURLToPath } from "node:url";
+import { reportRuns } from "./lib/playwright-report.mjs";
+
+export const BAR = 0.95;
+const firstLine = (text) =>
+  String(text ?? "")
+    .split("\n")[0]
+    .trim();
+
+const outcomes = (report) =>
+  reportRuns(report).map(({ title, run }) => ({
+    title,
+    project: run.projectName,
+    status: run.status,
+    error: firstLine(run.results?.findLast((result) => result.error)?.error?.message),
+  }));
+
+export function releaseGate(report, bar = BAR) {
+  const runs = outcomes(report);
+  // A skip counts as not passed, so a mostly skipped run can't clear the bar.
+  const skipped = runs.filter((run) => run.status === "skipped").length;
+  const passed = runs.filter((run) => ["expected", "flaky"].includes(run.status)).length;
+  const failures = runs.filter((run) => !["expected", "flaky"].includes(run.status));
+  const errors = (report.errors ?? []).map((error) => firstLine(error.message ?? error));
+  const total = runs.length;
+  const ok = total > 0 && passed / total >= bar && !errors.length;
+  const lines = ["## Tile release gate (@p1)", ""];
+  if (!total) lines.push("No @p1 test ran, so the gate fails closed.");
+  else
+    lines.push(
+      `${passed} of ${total} passed (${((100 * passed) / total).toFixed(1)}%)${
+        ok ? "." : `; the release needs ${Math.round(bar * 100)}%.`
+      }${skipped ? ` ${skipped} skipped.` : ""}`,
+    );
+  for (const error of errors) lines.push("", `Run error: ${error}`);
+  if (failures.length) {
+    lines.push("", "| Spec | Engine | First error line |", "|---|---|---|");
+    for (const failure of failures)
+      lines.push(
+        `| ${failure.title} | ${failure.project} | ${failure.error.replaceAll("|", "\\|") || failure.status} |`,
+      );
+  }
+  return { ok, passed, total, skipped, failures, markdown: `${lines.join("\n")}\n` };
+}
+
+// A realpath guard keeps imports inert, including when /tmp is a symlink on macOS.
+if (
+  process.argv[1] &&
+  fs.realpathSync(process.argv[1]) === fs.realpathSync(fileURLToPath(import.meta.url))
+) {
+  try {
+    if (process.argv.length !== 3)
+      throw new Error("usage: node scripts/tiles-release-gate.mjs <playwright-report.json>");
+    const gate = releaseGate(JSON.parse(fs.readFileSync(process.argv[2], "utf8")));
+    for (const failure of gate.failures)
+      console.log(`::error title=Release gate::${failure.title} (${failure.project})`);
+    if (process.env.GITHUB_STEP_SUMMARY)
+      fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, gate.markdown);
+    process.stdout.write(gate.markdown);
+    process.exitCode = gate.ok ? 0 : 1;
+  } catch (error) {
+    console.error(error.message);
+    process.exitCode = 1;
+  }
+}

@@ -10,6 +10,7 @@ export const test = base.extend<{ quarantine: void }>({
     async ({ browserName: _browserName }, use, info) => {
       const reason = quarantineReason(
         quarantineId("playwright", info.file, info.titlePath.slice(1)),
+        info.project.name,
       );
       if (reason) {
         console.warn(reason);

@@ -2,10 +2,11 @@
 // Security specs must fail, never skip, when their fixture is missing.
 import console from "node:console";
 import { existsSync, readdirSync } from "node:fs";
-import { resolve } from "node:path";
+import { relative, resolve } from "node:path";
 import process from "node:process";
 import {
   loadEntries,
+  quarantineApplies,
   quarantineId,
   validEntries,
   quarantineReason,
@@ -39,15 +40,46 @@ export function resolveFrameFixtureBinary({ env = process.env } = {}) {
 
 const quarantines = loadEntries();
 
-// Only an explicit fixme from the quarantine adapter may bypass the skip guard.
+// Playwright's Linux WebKit build doesn't have Safari's media codecs (Playwright's browser docs
+// send media playback to WebKit on macOS); on ubuntu-24.04 its native audio and video loads end
+// with status 0. These four hostile specs skip there under this exact reason, and nightly.yml's
+// "Frame media specs (WebKit)" job runs them on macOS WebKit every night. Hostile specs can't be
+// quarantined; this is the one skip the guard lets through.
+export const LINUX_WEBKIT_MEDIA_SKIP =
+  "Linux WebKit lacks Safari's media codecs; nightly.yml runs these on macOS WebKit";
+const LINUX_WEBKIT_MEDIA_FILE = "tests/frame-security/hostile.spec.ts";
+const LINUX_WEBKIT_MEDIA_TITLE =
+  /^native (audio|video) loads (default-open live|baseline) media without shim credentials$/;
+
+function linuxWebkitMediaSkip(t, platform) {
+  const [, project, , ...titles] = t.titlePath();
+  return (
+    platform === "linux" &&
+    project === "webkit" &&
+    relative(process.cwd(), t.location.file).replaceAll("\\", "/") === LINUX_WEBKIT_MEDIA_FILE &&
+    titles.length === 1 &&
+    LINUX_WEBKIT_MEDIA_TITLE.test(titles[0]) &&
+    t.annotations?.some((a) => a.type === "skip" && a.description === LINUX_WEBKIT_MEDIA_SKIP)
+  );
+}
+
+// Only an explicit fixme from the quarantine adapter, or the Linux WebKit media skip above, may
+// bypass the skip guard.
 // Setup failures and missing fixtures never acquire that annotation.
-export function unexecutedTests(tests, entries = quarantines, now = Date.now()) {
+export function unexecutedTests(
+  tests,
+  entries = quarantines,
+  now = Date.now(),
+  platform = process.platform,
+) {
   const valid = validEntries(entries, now);
   return tests.filter((t) => {
     if (t.outcome() !== "skipped") return false;
     if (!t.location?.file) return true;
+    if (linuxWebkitMediaSkip(t, platform)) return false;
     const id = quarantineId("playwright", t.location.file, t.titlePath().slice(3));
-    const entry = valid.find((entry) => entry.id === id);
+    const project = t.titlePath()[1];
+    const entry = valid.find((entry) => entry.id === id && quarantineApplies(entry, project));
     if (!entry) return true;
     const reason = quarantineReason(entry);
     return !t.annotations?.some((a) => a.type === "fixme" && a.description === reason);

@@ -59,6 +59,14 @@ export function validate(entries, now = Date.now(), repository = issueRepository
       !/^playwright:tests\/frame-security\/hostile\.spec\.ts#/.test(entry.id),
       "hostile frame security tests cannot be quarantined",
     );
+    if (entry.projects !== undefined)
+      assert.ok(
+        entry.id.startsWith("playwright:") &&
+          Array.isArray(entry.projects) &&
+          entry.projects.length > 0 &&
+          entry.projects.every((project) => typeof project === "string" && project),
+        `${entry.id}: projects must be a non-empty list of Playwright project names`,
+      );
     assert.match(entry.added, /^\d{4}-\d{2}-\d{2}$/);
     const added = Date.parse(`${entry.added}T00:00:00Z`);
     assert.ok(
@@ -83,6 +91,10 @@ export function validEntries(entries, now = Date.now(), repository = issueReposi
     }
   });
 }
+
+// A Playwright entry may name the projects it covers; with none named it covers every project.
+export const quarantineApplies = (entry, project) =>
+  entry.projects === undefined || entry.projects.includes(project);
 
 export function quarantineReason(entry) {
   return `quarantine: ${entry.reason} (${entry.issue}; added ${entry.added})`;

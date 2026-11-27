@@ -180,8 +180,10 @@ test("light tinted viewer ink stays neutral, dark theme and Geist follow the hos
 test("selection hooks report geometry and refreshed marks", async ({ page }) => {
   const frame = await mount(page);
   await frame.locator("h1").click();
-  await page.keyboard.press("Meta+ArrowLeft");
-  await page.keyboard.press("Meta+Shift+ArrowRight");
+  // To the line's start, then select to its end: Cmd+arrows on macOS, Home and Shift+End elsewhere.
+  const mac = process.platform === "darwin";
+  await page.keyboard.press(mac ? "Meta+ArrowLeft" : "Home");
+  await page.keyboard.press(mac ? "Meta+Shift+ArrowRight" : "Shift+End");
   await expect.poll(() => frame.evaluate(() => (window as any).lastSelection?.text)).toBe("Notes");
   expect(await frame.evaluate(() => (window as any).lastSelection.rect.width)).toBeGreaterThan(0);
   await frame.evaluate(() => (window as any).api.commands.toggleBold());

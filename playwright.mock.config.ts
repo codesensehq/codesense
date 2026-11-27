@@ -35,12 +35,25 @@ export default defineConfig({
   // A cold boot on a CI runner can take longer than the 5 s default to draw its first view:
   // assertions wait as long as actions do there.
   expect: { timeout: process.env.CI ? 15_000 : 5_000 },
+  // Tile specs (tests/e2e-mock/tiles/, see its README) run on both engines in their own projects;
+  // the older projects leave them alone. Only `.spec.ts` files are specs, not the probe's fixtures.
   projects: [
-    { name: "chromium", use: { ...devices["Desktop Chrome"] } },
+    { name: "chromium", testIgnore: /tiles\//, use: { ...devices["Desktop Chrome"] } },
     {
       name: "webkit",
       testMatch: /(?:agent-list-qa-live|pane-save)\.spec\.ts/,
+      testIgnore: /tiles\//,
       use: { ...devices["Desktop Safari"] },
+    },
+    {
+      name: "tiles-webkit",
+      testMatch: /tiles\/.*\.spec\.ts$/,
+      use: { ...devices["Desktop Safari"] },
+    },
+    {
+      name: "tiles-chromium",
+      testMatch: /tiles\/.*\.spec\.ts$/,
+      use: { ...devices["Desktop Chrome"] },
     },
   ],
   webServer: process.env.BASE_URL
