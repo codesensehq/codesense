@@ -302,6 +302,22 @@ describe("useWorkspaceChat media events", () => {
     expect(rows()).toEqual(["1:pending"]);
   });
 
+  it("ignores an older re-read of a message that resolves after a newer one", async () => {
+    workspaceChatRead.mockResolvedValueOnce(buildResult("story:ws-1", [pendingGif(1)]));
+    render(<MediaHost workspaceId="story:ws-1" />);
+    await waitFor(() => expect(rows()).toEqual(["1:pending"]));
+    const older = deferred<WorkspaceChatReadResult>();
+    const newer = deferred<WorkspaceChatReadResult>();
+    workspaceChatRead.mockReturnValueOnce(older.promise).mockReturnValueOnce(newer.promise);
+    await act(async () => emit(MEDIA_EVENT, { workspaceId: "story:ws-1", messageId: 1 }));
+    await act(async () => emit(MEDIA_EVENT, { workspaceId: "story:ws-1", messageId: 1 }));
+    await waitFor(() => expect(workspaceChatRead).toHaveBeenCalledTimes(3));
+    await act(async () => newer.resolve(buildResult("story:ws-1", [cachedGif(1)])));
+    await waitFor(() => expect(rows()).toEqual(["1:cached"]));
+    await act(async () => older.resolve(buildResult("story:ws-1", [pendingGif(1)])));
+    expect(rows()).toEqual(["1:cached"]);
+  });
+
   it("keeps the patch when the first read lands after the event with a stale copy", async () => {
     const first = deferred<WorkspaceChatReadResult>();
     workspaceChatRead.mockReturnValueOnce(first.promise);
