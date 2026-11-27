@@ -2190,6 +2190,11 @@ pub(crate) fn settle_owned_app_event<R: tauri::Runtime>(
         event,
         !exact_scope,
     );
+    // The released row leaves the roster and the hub whatever the legacy presentation
+    // gate decides, so the release itself announces it, once, after the registry lock.
+    if released.is_some() {
+        super::dashboard_launch::emit_session_state_changed(app);
+    }
     Ok(released)
 }
 
@@ -6045,6 +6050,51 @@ mod tests {
             )
             .unwrap();
         creation
+    }
+
+    #[test]
+    fn an_owned_release_announces_itself_once_and_a_miss_announces_nothing() {
+        use std::time::Duration;
+        let _home_env = crate::routines::test_support::TempHome::new();
+        let fixture =
+            EffectFixture::with_session(format!("owned-release-{}", rand::random::<u64>()));
+        let claim = fixture.reserve(false);
+        let launch = fixture.app.state::<DashboardLaunchState>();
+        assert!(launch.begin("owned-release").unwrap());
+        launch
+            .bind_owned(
+                "owned-release",
+                &fixture.session,
+                None,
+                None,
+                Some(claim.clone()),
+            )
+            .unwrap();
+        let (send, changed) = std::sync::mpsc::channel();
+        fixture.app.listen(
+            super::super::dashboard_launch::SESSION_STATE_CHANGED,
+            move |_| {
+                let _ = send.send(());
+            },
+        );
+        let event = TerminalDomainEvent::SessionRemoved {
+            session: PtySessionId::new(&fixture.session),
+            reason: TeardownReason::Kill,
+        };
+        // The legacy presentation gate never runs here: the release alone announces.
+        let released = settle_owned_app_event(fixture.app.handle(), &claim, &event, false)
+            .unwrap()
+            .expect("the owned entry is released");
+        assert_eq!(released.handle, "owned-release");
+        assert!(changed.recv_timeout(Duration::from_secs(3)).is_ok());
+        assert!(changed.recv_timeout(Duration::from_millis(50)).is_err());
+        // Nothing left to release: no announcement.
+        assert!(
+            settle_owned_app_event(fixture.app.handle(), &claim, &event, false)
+                .unwrap()
+                .is_none()
+        );
+        assert!(changed.recv_timeout(Duration::from_millis(50)).is_err());
     }
 
     #[test]

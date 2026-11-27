@@ -3688,6 +3688,21 @@ pub(crate) fn abort_and_notify<R: tauri::Runtime>(
     removed
 }
 
+/// [`DashboardLaunchState::release_for_session`], announcing a dropped entry: the roster
+/// and the hub hear a release that changes what they list. A session the registry did
+/// not hold changes nothing, so it announces nothing.
+pub(crate) fn release_for_session_and_notify<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    state: &DashboardLaunchState,
+    session_id: &str,
+) -> Option<ReleasedSession> {
+    let released = state.release_for_session(session_id);
+    if released.is_some() {
+        emit_session_state_changed(app);
+    }
+    released
+}
+
 fn chat_workspace_for_entry(entry: &LaunchEntry) -> Option<String> {
     if let Some(remote) = &entry.remote_shell {
         return super::workspace_chat::resolve::remote_workspace_id(
@@ -10873,6 +10888,34 @@ mod tests {
         st.release_for_session("sess-1");
         assert_eq!(st.available(), 1, "explicit release frees the slot");
         assert!(st.resolve("SW-A").is_none());
+    }
+
+    #[test]
+    fn a_notifying_release_announces_only_a_dropped_entry() {
+        use std::time::Duration;
+        use tauri::Listener;
+        let app = tauri::test::mock_builder()
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .unwrap();
+        let (send, changed) = std::sync::mpsc::channel();
+        app.listen(SESSION_STATE_CHANGED, move |_| {
+            let _ = send.send(());
+        });
+        let st = DashboardLaunchState::new(1);
+        st.begin("SW-A").unwrap();
+        st.bind("SW-A", "sess-1", None).unwrap();
+
+        let released = release_for_session_and_notify(app.handle(), &st, "sess-1")
+            .expect("the bound entry is released");
+        assert_eq!(released.handle, "SW-A");
+        assert!(changed.recv_timeout(Duration::from_secs(3)).is_ok());
+        assert!(changed.recv_timeout(Duration::from_millis(50)).is_err());
+        assert_eq!(st.available(), 1);
+
+        // A session the registry does not hold: nothing released, nothing announced.
+        assert!(release_for_session_and_notify(app.handle(), &st, "sess-1").is_none());
+        assert!(release_for_session_and_notify(app.handle(), &st, "plain-tab").is_none());
+        assert!(changed.recv_timeout(Duration::from_millis(50)).is_err());
     }
 
     #[test]

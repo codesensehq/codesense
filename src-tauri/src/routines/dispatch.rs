@@ -1031,8 +1031,11 @@ impl Launcher for AppLauncher {
             let done = session.clone();
             tauri::async_runtime::spawn(async move {
                 super::command::capture(request, pid, cancel).await;
-                app.state::<crate::commands::dashboard_launch::DashboardLaunchState>()
-                    .release_for_session(&done);
+                crate::commands::dashboard_launch::release_for_session_and_notify(
+                    &app,
+                    &app.state::<crate::commands::dashboard_launch::DashboardLaunchState>(),
+                    &done,
+                );
             });
             Ok(session)
         })
