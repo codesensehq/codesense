@@ -269,7 +269,7 @@ export function getTauriMockInitScript(overrides?: Record<string, unknown>): str
         return MOCK_LOCAL_PROFILE_STATUS;
       case "routine_scheduler_status":
         return { missed_count: 0 };
-      case "routine_needs_you_count":
+      case "routine_runs_awaiting_count":
         return 0;
       case "wv_list_attention_board":
         return { youOwe: [], owedToYou: [], onAgent: [], parked: [], doneUnacked: [] };

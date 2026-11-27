@@ -280,8 +280,8 @@ pub(crate) fn run_detail(caller: &Caller, run_id: &str) -> Result<RunDetail, Str
     service::run_detail(&caller.home, &caller.principal, run_id).map_err(|e| e.to_string())
 }
 
-pub(crate) fn needs_you_count(caller: &Caller) -> Result<usize, String> {
-    service::needs_you_count(&caller.home, &caller.principal).map_err(|e| e.to_string())
+pub(crate) fn runs_awaiting_count(caller: &Caller) -> Result<usize, String> {
+    service::runs_awaiting_count(&caller.home, &caller.principal).map_err(|e| e.to_string())
 }
 
 pub(crate) fn scheduler_status(caller: &Caller) -> Result<SchedulerStatus, String> {
@@ -928,11 +928,15 @@ pub async fn routine_run_detail(app: AppHandle, run_id: String) -> Result<RunDet
     await_blocking("routine_run_detail", move || run_detail(&caller, &run_id)).await
 }
 
-/// How many of the caller's routines ended their latest run needing them.
+/// How many of the caller's routines ended their latest run needing them. These are
+/// runs, not the needs-you set: a run that waits has posted an Inbox card, which is.
 #[tauri::command]
-pub async fn routine_needs_you_count(app: AppHandle) -> Result<usize, String> {
+pub async fn routine_runs_awaiting_count(app: AppHandle) -> Result<usize, String> {
     let caller = caller(&app).await?;
-    await_blocking("routine_needs_you_count", move || needs_you_count(&caller)).await
+    await_blocking("routine_runs_awaiting_count", move || {
+        runs_awaiting_count(&caller)
+    })
+    .await
 }
 
 /// Occurrences missed while the app was closed or asleep, since last

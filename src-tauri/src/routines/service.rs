@@ -20,7 +20,7 @@
 //!
 //! Reads: [`list_summaries`] (each routine with its next and last run),
 //! [`runs`] (paged history, skips and merges included), [`run_detail`],
-//! [`needs_you_count`], [`preview_schedule`], [`scheduler_status`] and
+//! [`runs_awaiting_count`], [`preview_schedule`], [`scheduler_status`] and
 //! [`context_for_session`]. A run's result lives on its row; a routine needs
 //! you while its latest terminal run is `needs_you`, so the next run that ends
 //! any other way clears it with no acknowledgement and no separate store. A run
@@ -1422,7 +1422,7 @@ pub(crate) fn run_detail_for(
 
 /// How many visible routines need an answer on this Mac: the latest of their
 /// runs here that started and ended, ended `needs_you`.
-pub fn needs_you_count(
+pub fn runs_awaiting_count(
     codesense_home: &Path,
     principal: &Principal,
 ) -> Result<usize, RoutineError> {

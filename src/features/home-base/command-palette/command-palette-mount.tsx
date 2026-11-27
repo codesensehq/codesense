@@ -143,8 +143,8 @@ export function CommandPaletteMount() {
     [dashboardActions, shortcuts, platformCaps],
   );
 
-  // The Routines row carries the needs-you count the title-bar entry keeps live.
-  const routinesNeedingYou = useRoutinesStore((s) => s.needsYouCount);
+  // The Routines row carries the waiting-runs count the title-bar entry keeps live.
+  const routineRunsWaiting = useRoutinesStore((s) => s.runsAwaitingCount);
   const foremanMailWaiting = useForemanMailWaiting(open);
 
   const profiles = useLocalProfileStore((s) => s.status);
@@ -193,7 +193,7 @@ export function CommandPaletteMount() {
         recentEpics,
         canAttach: teams.length > 0,
         canAddMachine,
-        routinesNeedingYou,
+        routineRunsWaiting,
         foremanMailWaiting,
         panes,
         commands,
@@ -204,7 +204,7 @@ export function CommandPaletteMount() {
       accounts,
       recentEpics,
       canAddMachine,
-      routinesNeedingYou,
+      routineRunsWaiting,
       foremanMailWaiting,
       panes,
       commands,

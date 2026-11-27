@@ -9813,7 +9813,7 @@ export const runReadEvidence = (runId: string, storyId?: string) =>
 export const runReadWorkProduct = (runId: string) =>
   invoke<RunWorkProduct | null>("run_read_work_product", { runId });
 
-export const routineNeedsYouCount = () => invoke<number>("routine_needs_you_count");
+export const routineRunsAwaitingCount = () => invoke<number>("routine_runs_awaiting_count");
 
 export const routineSchedulerStatus = () =>
   invoke<RoutineSchedulerStatus>("routine_scheduler_status");

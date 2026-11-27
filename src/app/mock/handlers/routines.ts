@@ -1273,7 +1273,7 @@ export function createMockRoutines(
     read_run_work_product: () => null,
     has_raw_terminal_snapshot: () => false,
 
-    routine_needs_you_count: () => routines.map(toRow).filter((row) => row.needs_you).length,
+    routine_runs_awaiting_count: () => routines.map(toRow).filter((row) => row.needs_you).length,
 
     routine_scheduler_status: () => ({ missed_count: missed }),
 

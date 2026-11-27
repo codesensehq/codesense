@@ -157,7 +157,7 @@ async fn a_needs_you_run_counts_until_a_later_run_ends_another_way() {
             .find(|s| s.key == key(id))
             .unwrap()
     };
-    assert_eq!(service::needs_you_count(&home, &alice()).unwrap(), 0);
+    assert_eq!(service::runs_awaiting_count(&home, &alice()).unwrap(), 0);
 
     let first = manual(&home, "triage").run_id;
     drain_claim_loop(&home, launcher.clone()).await;
@@ -166,7 +166,7 @@ async fn a_needs_you_run_counts_until_a_later_run_ends_another_way() {
         .signal_done(&session, "needs-attention", "which repo?")
         .await;
     assert_eq!(run(&home, &first).phase, "needs_you");
-    assert_eq!(service::needs_you_count(&home, &alice()).unwrap(), 1);
+    assert_eq!(service::runs_awaiting_count(&home, &alice()).unwrap(), 1);
     let summary = needs_you("triage");
     assert!(summary.needs_you);
     let last = summary.last_run.unwrap();
@@ -184,13 +184,13 @@ async fn a_needs_you_run_counts_until_a_later_run_ends_another_way() {
         }
     );
     service::set_enabled(&home, &alice(), &key("triage"), true).unwrap();
-    assert_eq!(service::needs_you_count(&home, &alice()).unwrap(), 1);
+    assert_eq!(service::runs_awaiting_count(&home, &alice()).unwrap(), 1);
 
     // So does a run stopped before it started: it never ran.
     let stopped = manual(&home, "triage").run_id;
     assert!(service::stop_run(&home, &alice(), &stopped, launcher.as_ref()).unwrap());
     assert_eq!(run(&home, &stopped).phase, "cancelled");
-    assert_eq!(service::needs_you_count(&home, &alice()).unwrap(), 1);
+    assert_eq!(service::runs_awaiting_count(&home, &alice()).unwrap(), 1);
     let summary = needs_you("triage");
     assert!(summary.needs_you);
     assert_eq!(summary.last_run.unwrap().run_id, first);
@@ -210,7 +210,7 @@ async fn a_needs_you_run_counts_until_a_later_run_ends_another_way() {
     );
     launcher.signal_done(&session, "success", "done").await;
     assert_eq!(run(&home, &second).phase, "succeeded");
-    assert_eq!(service::needs_you_count(&home, &alice()).unwrap(), 0);
+    assert_eq!(service::runs_awaiting_count(&home, &alice()).unwrap(), 0);
     let summary = needs_you("triage");
     assert!(!summary.needs_you);
     assert_eq!(summary.needs_you_run, None);
@@ -360,7 +360,7 @@ fn a_team_routines_question_is_for_the_mac_that_ran_it() {
             Ok(())
         })
         .unwrap();
-    assert_eq!(service::needs_you_count(home, &alice()).unwrap(), 1);
+    assert_eq!(service::runs_awaiting_count(home, &alice()).unwrap(), 1);
 
     let bob = crate::domain::Principal::from(2u64);
     let seen = service::list_summaries(home, &bob).unwrap();
@@ -371,7 +371,7 @@ fn a_team_routines_question_is_for_the_mac_that_ran_it() {
         seen[0].needs_you_run.as_ref().map(|r| r.run_id.as_str()),
         Some(asked.as_str())
     );
-    assert_eq!(service::needs_you_count(home, &bob).unwrap(), 1);
+    assert_eq!(service::runs_awaiting_count(home, &bob).unwrap(), 1);
     let history = service::runs(home, &bob, &key("triage"), RunsPage::default()).unwrap();
     assert_eq!(history.runs.len(), 1);
     assert_eq!(
@@ -398,7 +398,7 @@ fn a_team_routines_question_is_for_the_mac_that_ran_it() {
         let seen = service::list_summaries(home, &who).unwrap();
         assert!(!seen[0].armed_here);
         assert!(seen[0].needs_you);
-        assert_eq!(service::needs_you_count(home, &who).unwrap(), 1);
+        assert_eq!(service::runs_awaiting_count(home, &who).unwrap(), 1);
     }
 }
 
@@ -840,7 +840,7 @@ async fn same_named_personal_routines_of_two_accounts_share_nothing() {
             listed[0].needs_you_run.as_ref().unwrap().result_text,
             Some(format!("{name} asks"))
         );
-        assert_eq!(service::needs_you_count(&home, who).unwrap(), 1);
+        assert_eq!(service::runs_awaiting_count(&home, who).unwrap(), 1);
         let history = service::runs(&home, who, mine, RunsPage::default()).unwrap();
         let ids: Vec<_> = history.runs.iter().map(|r| r.run_id.clone()).collect();
         assert_eq!(ids, vec![by_hand.clone(), scheduled.clone()], "{name}");

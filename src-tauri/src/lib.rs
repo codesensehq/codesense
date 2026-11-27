@@ -1350,7 +1350,7 @@ pub fn run() {
             commands::routines::routine_handover_release,
             commands::routines::routine_refresh_on_machine,
             commands::routines::routine_run_detail,
-            commands::routines::routine_needs_you_count,
+            commands::routines::routine_runs_awaiting_count,
             commands::routines::routine_scheduler_status,
             commands::routines::routine_acknowledge_missed,
             commands::routines::routine_save,

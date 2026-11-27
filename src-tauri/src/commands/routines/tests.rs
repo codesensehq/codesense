@@ -150,7 +150,7 @@ fn every_tab_command_round_trips_through_the_service() {
         "an ended run is not stopped twice"
     );
 
-    assert_eq!(needs_you_count(&me).unwrap(), 0);
+    assert_eq!(runs_awaiting_count(&me).unwrap(), 0);
     assert_eq!(scheduler_status(&me).unwrap().missed_count, 0);
     acknowledge_missed(&me).unwrap();
 
@@ -231,7 +231,7 @@ fn a_teammate_drives_a_team_routine_from_the_tab_like_its_creator() {
             .and_then(|r| r.result_text.as_deref()),
         Some("which repo?")
     );
-    assert_eq!(needs_you_count(&alice).unwrap(), 1);
+    assert_eq!(runs_awaiting_count(&alice).unwrap(), 1);
 
     // Bob is at the Mac that ran it, so its question is his too; `mine` only
     // says who created it.
@@ -239,7 +239,7 @@ fn a_teammate_drives_a_team_routine_from_the_tab_like_its_creator() {
     let theirs = row(&theirs, &key);
     assert!(!theirs.mine);
     assert!(theirs.summary.needs_you);
-    assert_eq!(needs_you_count(&bob).unwrap(), 1);
+    assert_eq!(runs_awaiting_count(&bob).unwrap(), 1);
 
     set_enabled(&bob, &key, false).unwrap();
     assert!(!row(&list(&bob).unwrap(), &key).summary.enabled);

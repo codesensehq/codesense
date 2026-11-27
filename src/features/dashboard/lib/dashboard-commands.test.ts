@@ -1218,7 +1218,7 @@ describe("a slot showing a fallback body", () => {
         recentEpics: [],
         canAttach: false,
         canAddMachine: false,
-        routinesNeedingYou: 0,
+        routineRunsWaiting: 0,
         commands: registered()
           .filter((a) => a.command!.active)
           .map((a) => ({

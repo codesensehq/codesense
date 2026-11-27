@@ -20,7 +20,7 @@ import {
   routineCopyToMine,
   routineGet,
   routineList,
-  routineNeedsYouCount,
+  routineRunsAwaitingCount,
   routineOpenAuthoringAgent,
   routineRestoreRevision,
   routineRunDetail,
@@ -65,7 +65,7 @@ interface RoutinesState {
   /** `null` until the first list read lands. */
   rows: RoutineRow[] | null;
   listError: string | null;
-  needsYouCount: number;
+  runsAwaitingCount: number;
   missedCount: number;
   selectedKey: string | null;
   /** The New routine form is open in place of a selected routine. */
@@ -281,7 +281,7 @@ export const useRoutinesStore = create<RoutinesState>((set, get) => {
   return {
     rows: null,
     listError: null,
-    needsYouCount: 0,
+    runsAwaitingCount: 0,
     missedCount: 0,
     selectedKey: null,
     creating: false,
@@ -340,7 +340,7 @@ export const useRoutinesStore = create<RoutinesState>((set, get) => {
         set({
           rows,
           listError: null,
-          needsYouCount: rows.filter((r) => r.needs_you).length,
+          runsAwaitingCount: rows.filter((r) => r.needs_you).length,
         });
       } catch (e) {
         set({ listError: errorText(e) });
@@ -352,13 +352,13 @@ export const useRoutinesStore = create<RoutinesState>((set, get) => {
       const needsRead =
         listWatchers > 0
           ? Promise.reject(new Error("read from the list"))
-          : Promise.resolve().then(() => routineNeedsYouCount());
+          : Promise.resolve().then(() => routineRunsAwaitingCount());
       const [needs, status] = await Promise.allSettled([
         needsRead,
         Promise.resolve().then(() => routineSchedulerStatus()),
       ]);
       set({
-        ...(needs.status === "fulfilled" ? { needsYouCount: needs.value } : {}),
+        ...(needs.status === "fulfilled" ? { runsAwaitingCount: needs.value } : {}),
         ...(status.status === "fulfilled" ? { missedCount: status.value.missed_count } : {}),
       });
     },
@@ -791,7 +791,7 @@ export function resetRoutinesStoreForTests(): void {
   useRoutinesStore.setState({
     rows: null,
     listError: null,
-    needsYouCount: 0,
+    runsAwaitingCount: 0,
     missedCount: 0,
     selectedKey: null,
     creating: false,
