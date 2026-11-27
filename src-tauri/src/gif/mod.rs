@@ -696,7 +696,8 @@ impl GifService {
         requested: Option<Provider>,
         rating: Option<&str>,
     ) -> Result<(Provider, Vec<Candidate>), Failed> {
-        let epoch = install::install_epoch(&self.data_dir);
+        // The provider isn't known until the settings are read: both epochs are read first.
+        let epochs = install::install_epochs(&self.data_dir);
         let dir = self.data_dir.clone();
         let current = tokio::task::spawn_blocking(move || settings::load(&dir))
             .await
@@ -705,6 +706,7 @@ impl GifService {
             return Err(GifError::NoProvider.into());
         }
         let provider = current.provider;
+        let epoch = epochs.of(provider);
         let named = |error: GifError| Failed {
             provider: Some(provider),
             error,
@@ -727,7 +729,7 @@ impl GifService {
         let request = match request {
             Request::Lookup { ids } if !Provider::rates_lookup(provider) => {
                 let now = (self.clock)();
-                analytics::Analytics::start_epoch(&self.analytics, epoch);
+                analytics::Analytics::start_epoch(&self.analytics, provider, epoch);
                 let held: Vec<String> = ids
                     .iter()
                     .filter(|id| {
@@ -791,8 +793,8 @@ impl GifService {
                     Request::Lookup { .. } => None,
                 };
                 let holds = query.is_some() || Provider::rates_lookup(provider);
-                if holds && install::install_epoch(&self.data_dir) == epoch {
-                    analytics::Analytics::start_epoch(&self.analytics, epoch);
+                if holds && install::install_epoch(&self.data_dir, provider) == epoch {
+                    analytics::Analytics::start_epoch(&self.analytics, provider, epoch);
                     let now = (self.clock)();
                     self.analytics.record(provider, &found, rating, query, now);
                 }

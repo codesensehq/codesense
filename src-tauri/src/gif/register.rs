@@ -14,7 +14,7 @@
 //! every call.
 #[cfg(test)]
 use super::install::{forget_install, FILE};
-use super::install::{install_epoch, read_install, write_install};
+use super::install::{install_epoch, install_epochs, read_install, write_install, Epochs};
 use super::{analytics, bucket, settings, transport, GifError, GifService, Provider};
 use crate::commands::credential_store::Secret;
 use crate::media::{index::Owner, MediaProvider};
@@ -294,8 +294,8 @@ pub(crate) struct Registration {
     random_retry_at: Mutex<i64>,
     /// No keychain read for a serve before this (ms): set by a read that failed.
     key_retry_at: Mutex<i64>,
-    /// The install epoch what is held here belongs to.
-    epoch: Mutex<u64>,
+    /// Each provider's install epoch what is held here belongs to.
+    epoch: Mutex<Epochs>,
 }
 
 impl Registration {
@@ -316,7 +316,7 @@ impl Registration {
             creating: tokio::sync::Mutex::new(()),
             random_retry_at: std::sync::Mutex::new(0),
             key_retry_at: std::sync::Mutex::new(0),
-            epoch: std::sync::Mutex::new(0),
+            epoch: std::sync::Mutex::new(Epochs::default()),
         }
     }
 
@@ -328,28 +328,35 @@ impl Registration {
         }
     }
 
-    /// Let go of the pending onloads, sent GIFs and search entries held for an earlier install
-    /// epoch, so nothing sent with an old id is sent again with a new one.
-    /// Returns the epoch now followed. A new epoch (a new key, or search back On) also ends
-    /// the waits a failed random id call or keychain read set.
-    fn follow_epoch(&self) -> u64 {
-        let now = install_epoch(self.service.data_dir());
+    /// Let go of what is held for a provider's earlier install epoch, so nothing sent with an
+    /// old id is sent again with a new one: its sent GIFs and search entries, and for GIPHY its
+    /// pending onloads and the waits a failed random id call or keychain read set. The other
+    /// provider's stay. Returns the epochs now followed.
+    fn follow_epoch(&self) -> Epochs {
         let mut seen = lock(&self.epoch);
-        if *seen != now {
-            *seen = now;
-            lock(&self.onloads).clear();
-            lock(&self.sent).clear();
-            *lock(&self.random_retry_at) = 0;
-            *lock(&self.key_retry_at) = 0;
+        let now = install_epochs(self.service.data_dir());
+        for provider in [Provider::Giphy, Provider::Klipy] {
+            if seen.of(provider) == now.of(provider) {
+                continue;
+            }
+            HashMap::retain(&mut lock(&self.sent), |(sent, ..), _| *sent != provider);
+            if provider == ONLOAD_PROVIDER {
+                lock(&self.onloads).clear();
+                *lock(&self.random_retry_at) = 0;
+                *lock(&self.key_retry_at) = 0;
+            }
         }
-        analytics::Analytics::start_epoch(&self.service.analytics, now);
+        *seen = now;
+        for provider in [Provider::Giphy, Provider::Klipy] {
+            analytics::Analytics::start_epoch(&self.service.analytics, provider, now.of(provider));
+        }
         now
     }
 
-    /// Whether the install epoch is still `epoch`: nothing turned search Off, or removed or
-    /// replaced the key, since work that began under it.
-    fn still_in(&self, epoch: u64) -> bool {
-        install_epoch(self.service.data_dir()) == epoch
+    /// Whether `provider`'s install epoch is still `epoch`: nothing turned search Off, or
+    /// removed or replaced its key, since work that began under it.
+    fn still_in(&self, provider: Provider, epoch: u64) -> bool {
+        install_epoch(self.service.data_dir(), provider) == epoch
     }
 
     /// Whether the provider has no backoff running for `key`.
@@ -372,7 +379,7 @@ impl Registration {
     /// provider and a key; else `None`, logged. Search switched to another provider is Off.
     async fn active_key(&self, provider: Provider) -> Result<(Keyed, u64), NoKey> {
         let dir = self.service.data_dir().to_path_buf();
-        let epoch = install_epoch(&dir);
+        let epoch = install_epoch(&dir, provider);
         let current = match tokio::task::spawn_blocking(move || settings::load(&dir)).await {
             Ok(current) => current,
             Err(e) => {
@@ -613,7 +620,7 @@ impl Registration {
     }
 
     /// The key checks, after [`Self::admit`]: GIF search is On with `provider` and a key, and
-    /// the install epoch is still `epoch`, the one the work began in. A moved epoch (search
+    /// `provider`'s install epoch is still `epoch`, the one the work began in. A moved epoch (search
     /// turned Off and On, or the key replaced, while the key was read) is [`NoKey::Off`]: what
     /// was held belongs to the old install id.
     async fn authorize(
@@ -623,7 +630,7 @@ impl Registration {
         epoch: u64,
     ) -> Result<Keyed, NoKey> {
         let (keyed, read_in) = self.active_key(provider).await?;
-        if read_in != epoch || !self.still_in(epoch) {
+        if read_in != epoch || !self.still_in(provider, epoch) {
             let name = Event::label(event, provider);
             log::info!(target: "gif", "gif registration: the install id changed before the {name}; not registered");
             return Err(NoKey::Off);
@@ -703,7 +710,7 @@ impl Registration {
             log::info!(target: "gif", "gif registration: {:?} sends are not registered", sent.provider);
             return;
         };
-        let epoch = self.follow_epoch();
+        let epoch = self.follow_epoch().of(provider);
         let now = (self.clock)();
         let gif = Some((sent.provider_id.as_str(), Some(sent.url.as_str())));
         let Some(Admitted { entry: Some(entry) }) = self.admit(provider, Event::Sent, gif, now)
@@ -742,7 +749,7 @@ impl Registration {
         else {
             return;
         };
-        if self.still_in(epoch) {
+        if self.still_in(provider, epoch) {
             let ping = Ping {
                 key: &keyed.key,
                 gif_id: &sent.provider_id,
@@ -761,7 +768,7 @@ impl Registration {
     /// logged: not GIPHY, no search entry, no onclick URL, search Off or no key, the install id
     /// changed meanwhile, no install id.
     pub(crate) async fn register_click(&self, provider: Provider, id: &str) {
-        let epoch = self.follow_epoch();
+        let epoch = self.follow_epoch().of(provider);
         let now = (self.clock)();
         let gif = Some((id, None));
         let Some(Admitted { entry: Some(entry) }) = self.admit(provider, Event::Click, gif, now)
@@ -781,7 +788,7 @@ impl Registration {
         else {
             return;
         };
-        if self.still_in(epoch) {
+        if self.still_in(provider, epoch) {
             let ping = Ping {
                 key: &keyed.key,
                 gif_id: id,
@@ -836,7 +843,7 @@ impl Registration {
         mut taken: Vec<(Slot, Pending)>,
     ) -> Settled {
         // The epoch the taken entries belong to, read before any work.
-        let started = *lock(&self.epoch);
+        let started = lock(&self.epoch).of(ONLOAD_PROVIDER);
         let now = (self.clock)();
         let mut settled = Settled {
             marks: Vec::new(),
@@ -896,7 +903,7 @@ impl Registration {
                 Ok(keyed) => {
                     let (key, fp) = (&keyed.key, &keyed.fp);
                     if let Some(id) = self.install_id(provider, key, fp, started).await {
-                        let current = self.still_in(started);
+                        let current = self.still_in(provider, started);
                         for (slot, p) in Vec::drain(&mut due, ..) {
                             match &p.onload {
                                 Some(onload) if current => {

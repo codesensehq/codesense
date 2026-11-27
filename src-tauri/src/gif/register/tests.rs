@@ -198,8 +198,12 @@ impl Harness {
             auto_loads: true,
         };
         // As a search does: entries from before an epoch change go first.
-        let epoch = install_epoch(self.dir.path());
-        crate::gif::analytics::Analytics::start_epoch(&self.service.analytics, epoch);
+        let epoch = install_epoch(self.dir.path(), Provider::Giphy);
+        crate::gif::analytics::Analytics::start_epoch(
+            &self.service.analytics,
+            Provider::Giphy,
+            epoch,
+        );
         self.service.analytics.record(
             Provider::Giphy,
             &[Found {
@@ -257,8 +261,12 @@ impl Harness {
             height: 280,
             auto_loads: true,
         };
-        let epoch = install_epoch(self.dir.path());
-        crate::gif::analytics::Analytics::start_epoch(&self.service.analytics, epoch);
+        let epoch = install_epoch(self.dir.path(), Provider::Klipy);
+        crate::gif::analytics::Analytics::start_epoch(
+            &self.service.analytics,
+            Provider::Klipy,
+            epoch,
+        );
         self.service.analytics.record(
             Provider::Klipy,
             &[Found {
@@ -1617,7 +1625,7 @@ async fn one_providers_key_change_leaves_the_other_providers_state() {
 async fn search_off_still_resets_klipy() {
     let h = Harness::klipy();
     h.found_klipy(KLIPY_KEY, SLUG, Some("ship it"));
-    let epoch = install_epoch(h.dir.path());
+    let epoch = install_epoch(h.dir.path(), Provider::Klipy);
     assert!(h.install_file().exists());
     let change = |enabled| SettingsUpdate {
         enabled: Some(enabled),

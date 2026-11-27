@@ -14,10 +14,38 @@ use std::{
 /// The install id file's name in the app data dir.
 pub(crate) const FILE: &str = "gif-install.json";
 /// Held while `gif-install.json` is read to be changed, written or deleted, with each data
-/// dir's install epoch: it moves on every forget (search Off, a key removed or replaced), so an
-/// id made before one is never saved after it, and what was held for the old id is let go.
-static INSTALL_FILE: Mutex<BTreeMap<PathBuf, u64>> =
+/// dir's install epochs: a provider's moves when its key is removed or replaced, and both move
+/// when search is turned Off, so an id made before one is never saved after it, and what was
+/// held for the old id is let go.
+static INSTALL_FILE: Mutex<BTreeMap<PathBuf, Epochs>> =
     std::sync::Mutex::new(std::collections::BTreeMap::new());
+
+/// Each provider's install epoch (see [`INSTALL_FILE`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Epochs {
+    pub giphy: u64,
+    pub klipy: u64,
+}
+impl Epochs {
+    /// `provider`'s epoch.
+    pub(crate) fn of(self, provider: Provider) -> u64 {
+        match provider {
+            Provider::Giphy => self.giphy,
+            Provider::Klipy => self.klipy,
+        }
+    }
+    fn bump(&mut self, provider: Provider) {
+        match provider {
+            Provider::Giphy => self.giphy += 1,
+            Provider::Klipy => self.klipy += 1,
+        }
+    }
+}
+
+/// `dir`'s epochs in the held map.
+fn epochs_in(held: &BTreeMap<PathBuf, Epochs>, dir: &Path) -> Epochs {
+    held.get(dir).copied().unwrap_or_default()
+}
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
@@ -84,7 +112,7 @@ fn replace(
 }
 
 /// Save `id` as `provider`'s id for the key `fp`, keeping the other provider's entry. `false`,
-/// with nothing written, when the epoch moved on from `epoch`.
+/// with nothing written, when `provider`'s epoch moved on from `epoch`.
 pub(crate) fn write_install(
     dir: &Path,
     provider: Provider,
@@ -93,7 +121,7 @@ pub(crate) fn write_install(
     epoch: u64,
 ) -> std::io::Result<bool> {
     let epochs = lock(&INSTALL_FILE);
-    if epochs.get(dir).copied().unwrap_or(0) != epoch {
+    if epochs_in(&epochs, dir).of(provider) != epoch {
         return Ok(false);
     }
     let mut entries = entries(dir);
@@ -108,11 +136,11 @@ pub(crate) fn write_install(
 
 /// KLIPY's `customer_id` for this install and the key `fp`: the saved one, else a random UUID
 /// made here and saved, both under one hold of the file. An id that can't be saved, or one made
-/// after the epoch moved on from `epoch`, is an error, so no search sends an id a later share
+/// after KLIPY's epoch moved on from `epoch`, is an error, so no search sends an id a later share
 /// would not.
 pub(crate) fn customer_id(dir: &Path, fp: &str, epoch: u64) -> std::io::Result<String> {
     let epochs = lock(&INSTALL_FILE);
-    if epochs.get(dir).copied().unwrap_or(0) != epoch {
+    if epochs_in(&epochs, dir).of(Provider::Klipy) != epoch {
         return Err(std::io::Error::other("the install epoch moved"));
     }
     if let Some(id) = read_install(dir, Provider::Klipy, fp) {
@@ -129,16 +157,23 @@ pub(crate) fn customer_id(dir: &Path, fp: &str, epoch: u64) -> std::io::Result<S
     Ok(id)
 }
 
-/// The install epoch of `dir` (see [`INSTALL_FILE`]).
-pub(crate) fn install_epoch(dir: &Path) -> u64 {
-    lock(&INSTALL_FILE).get(dir).copied().unwrap_or(0)
+/// `provider`'s install epoch in `dir` (see [`INSTALL_FILE`]).
+pub(crate) fn install_epoch(dir: &Path, provider: Provider) -> u64 {
+    install_epochs(dir).of(provider)
+}
+
+/// Both providers' install epochs in `dir`.
+pub(crate) fn install_epochs(dir: &Path) -> Epochs {
+    epochs_in(&lock(&INSTALL_FILE), dir)
 }
 
 /// Delete `gif-install.json`, so nothing that identifies the install stays: GIF search was
-/// turned Off. A failure is logged.
+/// turned Off. Both providers' epochs move. A failure is logged.
 pub(crate) fn forget_install(dir: &Path) {
     let mut epochs = lock(&INSTALL_FILE);
-    *epochs.entry(dir.to_path_buf()).or_insert(0) += 1;
+    let held = epochs.entry(dir.to_path_buf()).or_default();
+    held.bump(Provider::Giphy);
+    held.bump(Provider::Klipy);
     match std::fs::remove_file(dir.join(FILE)) {
         Err(e) if std::io::Error::kind(&e) != std::io::ErrorKind::NotFound => {
             log::warn!(target: "gif", "gif registration: the install id could not be deleted: {e}");
@@ -148,10 +183,10 @@ pub(crate) fn forget_install(dir: &Path) {
 }
 
 /// Drop `provider`'s entry, whose key was removed or replaced, keeping the other's; the file
-/// goes when no entry is left. The epoch moves as with [`forget_install`]. A failure is logged.
+/// goes when no entry is left. Only `provider`'s epoch moves. A failure is logged.
 pub(crate) fn forget_install_for(dir: &Path, provider: Provider) {
     let mut epochs = lock(&INSTALL_FILE);
-    *epochs.entry(dir.to_path_buf()).or_insert(0) += 1;
+    epochs.entry(dir.to_path_buf()).or_default().bump(provider);
     let mut entries = entries(dir);
     entries.remove(Provider::as_str(provider));
     if let Err(e) = replace(dir, &entries) {
