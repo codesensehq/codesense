@@ -21,7 +21,8 @@
  * 1 on any regression, 2 on an input error (a bad file, a missing key, fewer than 3 samples, an
  * engine mismatch, a bad argument).
  *
- * record: replaces (or adds) only that runner's set; every other set keeps its bytes. Prints each
+ * record: replaces (or adds) only that runner's set; every other set keeps its bytes. A runner
+ * other than m1 never records the `M1_ONLY_KEYS` (`team_switch`): they are dropped. Prints each
  * key's spread over its samples: a key can join `compare.keys` when the spread is ≤ 10% of the
  * median or the range is within floor.ms. `compare.keys` itself is edited by hand.
  */
@@ -33,6 +34,9 @@ const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 export const DEFAULT_BASELINE = path.join(REPO, "tests/fixtures/perf-baseline.json");
 const MIN_SAMPLES = 3;
 const SPREAD_LIMIT = 0.1;
+const M1_RUNNER = "m1";
+/** Keys only the M1 set holds: `team_switch` records today's switch and is never compared. */
+export const M1_ONLY_KEYS = ["team_switch"];
 
 export class InputError extends Error {
   exitCode = 2;
@@ -100,12 +104,26 @@ function checkBaseline(file) {
   }
 }
 
+/** Whether `runner`'s set may hold `key`: every key for m1, all but the M1-only keys elsewhere. */
+const keepsKey = (runner, key) => runner === M1_RUNNER || !M1_ONLY_KEYS.includes(key);
+
+/** The measured keys `runner`'s set takes, and the M1-only ones it drops. */
+export function recordedKeys(measured, runner) {
+  const all = Object.keys(measured.keys);
+  return {
+    kept: all.filter((key) => keepsKey(runner, key)),
+    dropped: all.filter((key) => !keepsKey(runner, key)),
+  };
+}
+
 /** The baseline with `runner`'s set replaced by (or added from) the measured file. */
 export function upsertSet(baseline, measured, runner) {
   checkMeasured(measured);
   const previous = baseline.sets.find((set) => set.runner === runner);
-  const keys = { ...previous?.keys };
-  for (const key of Object.keys(measured.keys)) {
+  const keys = Object.fromEntries(
+    Object.entries(previous?.keys ?? {}).filter(([key]) => keepsKey(runner, key)),
+  );
+  for (const key of recordedKeys(measured, runner).kept) {
     const { unit, values, endState } = measuredKey(measured, key);
     keys[key] = { ...summarize({ unit, samples: values }), samples: values, endState };
   }
@@ -242,10 +260,12 @@ export function run(argv, io = { log: console.log, error: console.error, env: pr
     const next = upsertSet(baseline, measured, opts.runner);
     fs.writeFileSync(opts.baseline, formatBaseline(next));
     const floorMs = baseline.compare.floor.ms;
+    const { kept, dropped } = recordedKeys(measured, opts.runner);
     io.log(
-      `recorded ${opts.runner}: ${Object.keys(measured.keys).length} keys, ${measured.runs} runs, commit ${measured.commit}`,
+      `recorded ${opts.runner}: ${kept.length} keys, ${measured.runs} runs, commit ${measured.commit}`,
     );
-    for (const key of Object.keys(measured.keys)) {
+    for (const key of dropped) io.log(`dropped ${key}: only the ${M1_RUNNER} set records it`);
+    for (const key of kept) {
       const { unit, values } = measuredKey(measured, key);
       const { ratio, range } = spread(values);
       const ok = ratio <= SPREAD_LIMIT || (unit === "ms" && range <= floorMs);

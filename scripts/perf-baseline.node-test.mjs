@@ -350,6 +350,40 @@ test("upsertSet keeps the extra fields a hand-measured key carries in that runne
   assert.equal(after.sets[0].keys.open_cold.p50, 100);
 });
 
+test("only the m1 set records team_switch: another runner drops it, even from its previous set", () => {
+  const measured = current({
+    open_cold: ms([310, 290, 300]),
+    team_switch: ms([400, 410, 420], "team-view"),
+  });
+  const before = baseline();
+  before.sets[1].keys.team_switch = setKey(500);
+  const ci = upsertSet(before, measured, "macos-15");
+  assert.deepEqual(Object.keys(ci.sets[1].keys), ["open_cold"]);
+  const m1 = upsertSet(baseline(), measured, "m1");
+  assert.equal(m1.sets[0].keys.team_switch.p50, 410);
+  assert.equal(m1.sets[0].keys.team_switch.endState, "team-view");
+});
+
+test("record on another runner says it dropped team_switch", (t) => {
+  const { write } = tmp(t);
+  const base = write("base.json", formatBaseline(baseline({ sets: [baseline().sets[0]] })));
+  const cur = write(
+    "cur.json",
+    current({ open_cold: ms([310, 290, 300, 305, 295]), team_switch: ms([400, 410, 420]) }),
+  );
+  const c = capture();
+  assert.equal(
+    run(["record", "--current", cur, "--runner", "macos-15", "--baseline", base], c.io),
+    0,
+  );
+  assert.deepEqual(c.out, [
+    "recorded macos-15: 1 keys, 5 runs, commit abc1234",
+    "dropped team_switch: only the m1 set records it",
+    "spread open_cold 7% (20 ms): can be compared",
+  ]);
+  assert.equal(JSON.parse(fs.readFileSync(base, "utf8")).sets[1].keys.team_switch, undefined);
+});
+
 test("record writes the file, leaves the M1 set byte-identical and reports each key's spread", (t) => {
   const { write } = tmp(t);
   const startText = formatBaseline(baseline({ sets: [baseline().sets[0]] }));
