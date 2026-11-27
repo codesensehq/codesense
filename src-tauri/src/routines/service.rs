@@ -21,10 +21,10 @@
 //! Reads: [`list_summaries`] (each routine with its next and last run),
 //! [`runs`] (paged history, skips and merges included), [`run_detail`],
 //! [`runs_awaiting_count`], [`preview_schedule`], [`scheduler_status`] and
-//! [`context_for_session`]. A run's result lives on its row; a routine's run is
+//! [`context_for_session`]. A run's result lives on its row; a routine has a run
 //! awaiting the person while its latest terminal run is `needs_you`, so the next
-//! run that ends any other way clears it with no acknowledgement and no separate
-//! store. A run that simply `ended` reported nothing and leaves it as it was.
+//! run that ends any other way clears that with no acknowledgement and no separate
+//! store. A run that simply `ended` reported nothing and leaves that as it was.
 //!
 //! Every write emits `routines:changed`, so whatever shows these reads knows
 //! to re-read.
