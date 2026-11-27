@@ -99,6 +99,69 @@ jobs:
           retention-days: 7
           if-no-files-found: ignore
 
+  tiles:
+    name: Tile specs
+    # The tile specs (tests/e2e-mock/tiles/, see its README) on both engines, in their own job so
+    # the @p0 gate can be a required check without pulling in mock-layout's hand list.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up pnpm
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: ${{ github.event_name != 'merge_group' && 'pnpm' || '' }}
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Install Chromium and WebKit
+        run: pnpm exec playwright install --with-deps chromium webkit
+      # Over the full list, not the grep runs below, which never see an untagged or @nightly spec:
+      # every tile spec runs on both engines and carries exactly one gate tag.
+      - name: Check the tile specs' tags and engines
+        run: |
+          pnpm exec playwright test -c playwright.mock.config.ts --list --reporter=json \
+            --project=tiles-webkit --project=tiles-chromium > "$RUNNER_TEMP/tiles-list.json"
+          node scripts/tile-tags.mjs "$RUNNER_TEMP/tiles-list.json"
+      - name: Run the @p0 tile specs
+        run: >-
+          pnpm exec playwright test -c playwright.mock.config.ts
+          --project=tiles-webkit --project=tiles-chromium --grep @p0
+      - name: Upload failure traces
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: tiles-${{ github.run_id }}-${{ github.run_attempt }}
+          path: test-results
+          retention-days: 7
+          if-no-files-found: ignore
+      # @p1 blocks a release (tiles-release.yml), not a merge: its report is kept for triage.
+      - name: Run the @p1 tile specs
+        continue-on-error: true
+        env:
+          PLAYWRIGHT_JSON_OUTPUT_NAME: tiles-p1-report.json
+        run: >-
+          pnpm exec playwright test -c playwright.mock.config.ts
+          --project=tiles-webkit --project=tiles-chromium --grep @p1 --pass-with-no-tests
+          --reporter=list,json
+      - name: Upload the @p1 report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: tiles-p1-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            tiles-p1-report.json
+            test-results
+          retention-days: 7
+          if-no-files-found: ignore
+
   node-scripts:
     name: Node scripts
     runs-on: ubuntu-latest
