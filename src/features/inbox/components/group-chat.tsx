@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from "r
 import { ChevronLeft, MessagesSquare } from "lucide-react";
 import { useViewerStore } from "@/shared/stores/viewer-store";
 import { useCurrentUser } from "@/shared/lib/get-current-user";
-import type { SessionListRow } from "@/tauri/commands";
+import type { SessionListRow, WorkspaceChatMessage } from "@/tauri/commands";
 import {
   WorkspaceChatBody,
   type ChatIdentity,
@@ -18,6 +18,7 @@ import { useChatHumanView } from "@/features/workspace-chat/hooks/use-chat-human
 import { useInboxSessions } from "../hooks/use-inbox-sessions";
 import { roomName } from "../lib/room-label";
 import { initials, middleTruncate, participant } from "../model";
+import { mediaKind } from "./message-media";
 import { inboxDrafts, useInboxView, type InboxView } from "./inbox-view-context";
 import { Ico, navRow } from "./primitives";
 import "@/features/workspace-chat/workspace-chat.css";
@@ -117,6 +118,12 @@ export function GroupChip({
     </button>
   );
 }
+/** A post's preview text: its text, or for a post that is only an image, "<kind> · <alt>". */
+function preview(m: WorkspaceChatMessage): string {
+  const a = m.attachments?.[0];
+  return m.text.trim() || !a ? m.text : `${mediaKind(a)} · ${a.alt}`;
+}
+
 export function GroupRow({
   room,
   selected,
@@ -154,7 +161,7 @@ export function GroupRow({
           {aggregate
             ? `${room.sessions.length} session${room.sessions.length === 1 ? "" : "s"} here`
             : last
-              ? `${last.fromName}: ${last.text}`
+              ? `${last.fromName}: ${preview(last)}`
               : "New chat"}
         </div>
       </div>

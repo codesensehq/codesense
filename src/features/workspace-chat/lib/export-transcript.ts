@@ -2,6 +2,7 @@
 import { join } from "@/shared/lib/path";
 import type { WorkspaceChatMessage } from "@/tauri/commands";
 import { writeContentFile } from "@/tauri/commands";
+import { attributionOf, mediaKind } from "@/features/inbox/components/message-media";
 
 /**
  * SW-WC-3 (AC-8) — write a workspace chat's transcript to a markdown file in
@@ -51,7 +52,17 @@ export function renderTranscript(options: ExportTranscriptOptions): string {
     lines.push("");
     // Body is already markdown (default) or plain/html — preserve as-is; the
     // transcript is a text artifact, not a sanitized render surface.
-    lines.push(msg.text.trim().length === 0 ? "_(empty)_" : msg.text);
+    const media = msg.attachments?.[0];
+    const hasText = msg.text.trim().length > 0;
+    if (hasText || !media) lines.push(hasText ? msg.text : "_(empty)_");
+    if (media) {
+      // An image post is its kind and alt, with the provider it came through.
+      const via = attributionOf(media);
+      if (hasText) lines.push("");
+      lines.push(
+        `_${mediaKind(media)}:_ ${media.alt}${via ? ` (via ${via === "giphy" ? "GIPHY" : "KLIPY"})` : ""}`,
+      );
+    }
     if (msg.primaryFile) {
       lines.push("");
       lines.push(`_attachment:_ \`${msg.primaryFile}\``);
