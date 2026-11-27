@@ -16,7 +16,7 @@ use tauri::{AppHandle, Emitter, Manager};
 
 use crate::commands::agent_inbox::InboxHost;
 use crate::commands::dashboard_launch::DashboardLaunchState;
-use crate::commands::workspace_chat::media::ChatSender;
+use crate::commands::workspace_chat::media::{ChatSender, MediaRefusal};
 use crate::commands::workspace_chat::send::{self, ChatPost, SendRefusal};
 use crate::commands::workspace_chat::{
     fire_fanout, ChatMediaState, ChatStoreError, WorkspaceChatMessage, WorkspaceChatStore,
@@ -266,7 +266,7 @@ pub(crate) async fn send_core(
     .await
     .map_err(|e| match e {
         SendRefusal::Store(e) => store_error(e),
-        SendRefusal::Media(e) => ErrorData::invalid_params(e.reason(), None),
+        SendRefusal::Media(e) => ErrorData::invalid_params(MediaRefusal::reason(&e), None),
         SendRefusal::Join(e) => ErrorData::internal_error(format!("join: {e}"), None),
     })
 }

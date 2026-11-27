@@ -63,7 +63,7 @@ impl ChatSender {
     /// The `from` a post by this sender is stored with.
     pub(crate) fn from(&self) -> &str {
         match self {
-            Self::Session { handle, .. } => handle.as_str(),
+            Self::Session { handle, .. } => String::as_str(handle),
             Self::Human { .. } => super::model::HUMAN,
         }
     }
