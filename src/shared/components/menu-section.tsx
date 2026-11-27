@@ -124,12 +124,6 @@ export function needsYouText(n: number): string {
   return `${n > 99 ? "99+" : n} ${n === 1 ? "needs" : "need"} you`;
 }
 
-/** "1 run waiting" / "3 runs waiting": routine runs that ended needing the person. They
- *  are not the needs-you set (a run that waits has posted an Inbox card, which is). */
-export function runsWaitingText(n: number): string {
-  return `${n > 99 ? "99+" : n} ${n === 1 ? "run" : "runs"} waiting`;
-}
-
 /** The needs-you hue (the agents list's "Needs you"), pulled toward the text
  *  colour so an 11px count keeps its contrast in light and dark. */
 export const NEEDS_TEXT = "text-[color-mix(in_oklab,var(--cs-status-needs)_80%,var(--foreground))]";

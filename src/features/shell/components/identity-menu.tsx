@@ -32,8 +32,8 @@ import {
   MenuSeparator,
   MenuShortcut,
   needsYouText,
-  runsWaitingText,
 } from "@/shared/components/menu-section";
+import { runsWaitingText } from "@/shared/lib/runs-waiting-text";
 import { menuItems, useMenuRoving } from "@/shared/hooks/use-menu-roving";
 import { formatKeystrokeDisplay } from "@/shared/lib/shortcuts/keystroke";
 import { useCurrentUser } from "@/shared/lib/get-current-user";
@@ -152,8 +152,6 @@ function IdentityMenuBody({ machinesNeedYou }: { machinesNeedYou: number }) {
 
   useEffect(() => watchRoutineCounts(), []);
   const routineRunsWaiting = useRoutinesStore((s) => s.runsAwaitingCount);
-  // Routine runs stay out of the total: a run that waits on you has posted an Inbox card.
-  const needsYou = machinesNeedYou;
 
   // Clear the flags on unmount so the menu doesn't reopen unbidden on remount.
   useEffect(() => () => useUiStore.getState().closeIdentityMenu(), []);
@@ -170,7 +168,8 @@ function IdentityMenuBody({ machinesNeedYou }: { machinesNeedYou: number }) {
   const where = activeOrg
     ? [activeOrg.display_name, activeTeam?.name].filter(Boolean).join(" / ")
     : "No context repo";
-  const triggerLabel = needsYou > 0 ? `${where} — ${needsYouText(needsYou)}` : where;
+  // Routine runs stay out of the total: a run that waits on you has posted an Inbox card.
+  const triggerLabel = machinesNeedYou > 0 ? `${where} — ${needsYouText(machinesNeedYou)}` : where;
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -232,7 +231,7 @@ function IdentityMenuBody({ machinesNeedYou }: { machinesNeedYou: number }) {
               <span className="truncate">No context repo</span>
             </>
           )}
-          {needsYou > 0 && (
+          {machinesNeedYou > 0 && (
             // The shared needs-you aggregate glyph (the `question` mark
             // stands in for the three distinct needs kinds — question / permission /
             // blocked — at the aggregate level, where one count rolls them up). Amber,
