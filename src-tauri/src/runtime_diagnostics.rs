@@ -96,43 +96,55 @@ fn marker(path: &Path, message: &str) {
     }
 }
 
+/// `program args…` under a `ulimit -f` of `cap_bytes`, through `/bin/sh`.
+///
+/// Architecture: no `pre_exec`, `uid`, `gid` or `groups`, so std spawns with
+/// `posix_spawn`. A `pre_exec` hook would `fork()` this multi-gigabyte app and
+/// hold the malloc lock process-wide while it copies. `cap_bytes / 1024` blocks
+/// keeps the cap within `cap_bytes` whether the shell counts 512- or 1024-byte
+/// blocks.
+fn capped_command(
+    program: &str,
+    args: impl IntoIterator<Item = impl AsRef<std::ffi::OsStr>>,
+    cap_bytes: u64,
+) -> std::process::Command {
+    let mut command = std::process::Command::new("/bin/sh");
+    command
+        .arg("-c")
+        // A cap the shell cannot set ends the shell; the program never runs uncapped.
+        .arg(format!("ulimit -f {} && exec \"$0\" \"$@\"", cap_bytes / 1024))
+        .arg(program)
+        .args(args);
+    command
+}
+
+/// Sample `pid` for 5 s into `path`, capped at [`CAPTURE_BYTES`].
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn sample_command(pid: u32, path: &Path) -> std::process::Command {
+    let args: [std::ffi::OsString; 4] = [
+        pid.to_string().into(),
+        "5".into(),
+        "-file".into(),
+        path.as_os_str().to_owned(),
+    ];
+    capped_command("/usr/bin/sample", args, CAPTURE_BYTES)
+}
+
 #[cfg(target_os = "macos")]
 fn capture(dir: &Path, log: &Path) {
-    use std::{
-        os::unix::process::CommandExt,
-        process::{Command, Stdio},
-    };
+    use std::process::Stdio;
     let output = dir.join("runtime-stall.sample.txt");
     if let Err(e) = File::create(&output) {
         marker(log, &format!("cannot create sample: {e}"));
         return;
     }
     // Architecture: this pid is obtained here, never selected from a process name.
-    let mut command = Command::new("/usr/bin/sample");
+    // The cap is in force before `sample` can write: the shell sets it, then execs.
+    let mut command = sample_command(std::process::id(), &output);
     command
-        .args([
-            std::process::id().to_string(),
-            "5".into(),
-            "-file".into(),
-            output.to_string_lossy().into_owned(),
-        ])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
-    // Architecture: enforce the output cap in the child before it can write.
-    unsafe {
-        command.pre_exec(|| {
-            let limit = libc::rlimit {
-                rlim_cur: CAPTURE_BYTES,
-                rlim_max: CAPTURE_BYTES,
-            };
-            if libc::setrlimit(libc::RLIMIT_FSIZE, &limit) == 0 {
-                Ok(())
-            } else {
-                Err(std::io::Error::last_os_error())
-            }
-        });
-    }
     match command.spawn() {
         Err(e) => marker(log, &format!("sample spawn failed: {e}")),
         Ok(mut child) => {

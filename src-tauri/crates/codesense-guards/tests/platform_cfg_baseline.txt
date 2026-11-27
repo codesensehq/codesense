@@ -117,7 +117,7 @@ src/packs/validate.rs 3
 src/renderer_recovery.rs 10
 src/renderer_watchdog.rs 4
 src/routines/command.rs 2
-src/runtime_diagnostics.rs 6
+src/runtime_diagnostics.rs 3
 src/shared/proc_capture.rs 7
 src/terminal/session_server.rs 7
 src/terminal/session_server/strays.rs 14
