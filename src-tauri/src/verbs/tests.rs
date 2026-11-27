@@ -1129,12 +1129,17 @@ fn pin_verbs_are_team_bound_inbox_verbs_under_the_inbox_grants() {
         page.required_capability(&caller("team"), &json!({"topic":"pins"})),
         "inbox:read:team"
     );
-    // Delivery of the human's messages takes the inbox topic's read grant.
+    // Delivery of the human's messages, and the needs-you set, take the inbox topic's read grant.
     for (scope, grant) in [("team", "inbox:read:team"), ("private", "inbox:read:all-teams")] {
-        assert_eq!(
-            subscribe.required_capability(&caller(scope), &json!({"topic":"messageDelivery"})),
-            grant
-        );
+        for topic in ["messageDelivery", "needsYou"] {
+            for verb in [subscribe, page] {
+                assert_eq!(
+                    verb.required_capability(&caller(scope), &json!({ "topic": topic })),
+                    grant,
+                    "{topic} {scope}"
+                );
+            }
+        }
     }
     assert_eq!(
         super::dispatcher::action_target(
@@ -1420,6 +1425,34 @@ fn a_subscription_topic_must_be_a_string() {
             "{verb} sessions"
         );
     }
+}
+
+/// The needs-you set carries Inbox cards' question text: a page without the inbox read grant
+/// is refused it, as it is the inbox.
+#[test]
+fn the_needs_you_topic_needs_the_inbox_read_grant() {
+    let mut page = review_media_frame(
+        crate::dashboard_stream::frame::FrameCallerKind::Builtin,
+        false,
+    );
+    page.effective_grant.push("sessions:read".into());
+    let subscribe = |page: &crate::dashboard_stream::frame::FrameRecord| {
+        Dispatcher::default().dispatch_frame(
+            page,
+            "subscribe",
+            json!({"topic":"needsYou","cursor":"c1"}),
+            &Policy::default(),
+            0,
+        )
+    };
+    assert_eq!(
+        subscribe(&page),
+        Decision::Deny {
+            reason: "denied: grant".into()
+        }
+    );
+    page.effective_grant.push("inbox:read:all-teams".into());
+    assert!(matches!(subscribe(&page), Decision::Admit { .. }));
 }
 
 #[test]
