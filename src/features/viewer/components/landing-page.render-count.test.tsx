@@ -14,6 +14,7 @@ vi.mock("@/tauri/commands", () => ({
   pushViewerState: vi.fn().mockResolvedValue(undefined),
   checkPathExists: vi.fn().mockResolvedValue(true),
   listAttachmentsByRemote: vi.fn().mockResolvedValue(new Map()),
+  dashboardRegisterSession: vi.fn().mockResolvedValue(undefined),
   resolveTeamLandingPage: vi
     .fn()
     .mockResolvedValue({ kind: "found", path: "/orgs/acme/web/content/README.md" }),
@@ -43,6 +44,7 @@ import type { Org } from "@/shared/types/domain";
 import { StarterPageMenuItems } from "./starter-page-menu-items";
 
 const README = "/orgs/acme/web/content/README.md";
+const DOC = "/orgs/acme/platform/content/guide/a.md";
 const ORG: Org = {
   slug: "acme",
   display_name: "Acme",
@@ -131,16 +133,17 @@ describe("the team landing page's copy", () => {
 
     await act(async () => {
       seedTerminalTabs("acme:platform", "w1", ["agent", "shell"], { paned: ["agent", "shell"] });
-      useViewerStore
-        .getState()
-        .openFile(
-          "acme:platform",
-          "/orgs/acme/platform/content",
-          "/orgs/acme/platform/content/a.md",
-        );
+      const viewer = useViewerStore.getState();
+      viewer.openFile("acme:platform", "/orgs/acme/platform/content", DOC);
+      // Tile the doc: its folder opens as a workspace tile beside the agent's,
+      // with the doc's tab pinned.
+      viewer.openOrFocusGenericWorkspace("acme:platform", "/orgs/acme/platform/content/guide");
+      viewer.pinTab("acme:platform", DOC);
     });
 
-    expect(useViewerStore.getState()).not.toBe(before);
+    const after = useViewerStore.getState();
+    expect(after).not.toBe(before);
+    expect(after.workspaces["acme:platform"]?.length).toBeGreaterThan(0);
     expect(renders).toEqual(settled);
   });
 });
