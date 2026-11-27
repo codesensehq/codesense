@@ -4,6 +4,7 @@ import { createMockBackend, recordInvokes } from "./mock-backend";
 import { resolveScenario } from "./scenario";
 import { MockEventBus } from "./mock-events";
 import { isAgentTeamWorld, launchedAgentSessions } from "./handlers/agents-team";
+import { installStatusLineMockHook } from "./handlers/status-line";
 import { markOpenedAsAgent } from "@/features/viewer/stores/agent-inbox-rail-store";
 
 /**
@@ -45,4 +46,5 @@ export function installMockBackend(): void {
   (
     window as unknown as { __TAURI_EVENT_PLUGIN_INTERNALS__: unknown }
   ).__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: () => {} };
+  installStatusLineMockHook();
 }
