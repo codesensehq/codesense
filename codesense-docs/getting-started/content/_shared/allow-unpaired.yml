@@ -74,6 +74,25 @@ ui_only:
       Beta channels only. The Settings "check now" button for the update
       check. Not an agent action.
 
+  - name: window_get_slice
+    rationale: >-
+      A window reads its own registry entry (Layout, items, owner map). Window
+      plumbing that only a window can use.
+
+  - name: window_ready
+    rationale: >-
+      A window reports its listeners have mounted. Window plumbing with no
+      meaning over MCP.
+
+  - name: window_set_layout
+    rationale: >-
+      Sets a window's Layout from the UI. No agent Layout action exists yet.
+
+  - name: window_focus_owner
+    rationale: >-
+      Focuses the window that already shows an item the person tried to open
+      in main.
+
 mcp_only:
   - name: codesense_overview
     rationale: >-

@@ -10822,3 +10822,25 @@ export const openDiffRead = (
     ...(frameId ? { frameId } : {}),
     ...(page ? { page } : {}),
   });
+
+// === Window registry (src-tauri/src/windows) ===
+
+/** `label`'s registry slice. A window reads its own; `main` reads any. */
+export const windowGetSlice = (label: string) =>
+  invoke<import("@/shared/windows/window-slice").WindowSlice>("window_get_slice", { label });
+
+/** Tells the registry this window's listeners have mounted and it holds its slice. */
+export const windowReady = () => invoke<void>("window_ready");
+
+/** Sets `label`'s Layout (a window sets its own; `main` any), or focuses the window
+ *  that already holds `layoutRef`. */
+export const windowSetLayout = (label: string, layoutRef: string | null) =>
+  invoke<import("@/shared/windows/window-slice").SetLayoutOutcome>("window_set_layout", {
+    label,
+    layoutRef,
+  });
+
+/** Focuses the satellite that owns `key`; resolves to its label, or `null` when `main`
+ *  owns it. */
+export const windowFocusOwner = (key: import("@/shared/windows/item-key").ItemKey) =>
+  invoke<string | null>("window_focus_owner", { key });

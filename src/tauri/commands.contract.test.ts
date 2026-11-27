@@ -68,8 +68,9 @@ function extractRustHandlers(): string[] {
   // `license::commands` hosts the SW-PB-9 beta license commands (registered under the beta cfg).
   // `gif::settings` hosts the GIF search settings and key commands.
   // `flags` hosts the release flags' boot-value commands.
+  // `windows::commands` hosts the window registry's commands.
   const handlerPattern =
-    /(?:commands|license::commands|dashboard_publish|verbs::commands|records::commands|mcp|mcp_registration|menu|renderer_watchdog|live_hub|weft|gif|flags)(?:::\w+)*::(\w+)/g;
+    /(?:commands|license::commands|dashboard_publish|verbs::commands|records::commands|mcp|mcp_registration|menu|renderer_watchdog|live_hub|weft|gif|flags|windows)(?:::\w+)*::(\w+)/g;
   const commands: string[] = [];
   let match;
   while ((match = handlerPattern.exec(handlerBlock[1])) !== null) {
@@ -1350,8 +1351,10 @@ describe("Tauri IPC Contract", () => {
     // bridge's count-only needs-you read), so 550/569.
     // +1 on both sides for getTilesEnabled/tiles_enabled (the tiles release flag's boot
     // value), so 551/570.
-    const EXPECTED_TS_COMMAND_COUNT = 551;
-    const EXPECTED_RUST_COMMAND_COUNT = 570;
+    // Window registry: +4 on both sides (window_get_slice, window_ready,
+    // window_set_layout, window_focus_owner), so 555/574.
+    const EXPECTED_TS_COMMAND_COUNT = 555;
+    const EXPECTED_RUST_COMMAND_COUNT = 574;
     // The Rust count runs ahead of the TS count by the RUST_ONLY_COMMANDS that have no
     // renderer IPC wrapper (the access revocation and two session watchers plus the WV-B5/C6
     // scope-layer and harvest-norm Tauri commands whose FE wrappers land in later WV stories):
