@@ -318,3 +318,217 @@ fn every_gated_rust_site_is_listed_and_returns_first() {
         found.join("\n")
     );
 }
+
+/// The planted file's path in the list.
+const PLANTED: &str = "src-tauri/src/site.rs";
+
+/// The problems of `list` against `sources` given as `(file, text)`.
+fn check(list: serde_json::Value, sources: &[(&str, &str)]) -> Vec<String> {
+    let sources: Vec<(String, String)> = sources
+        .iter()
+        .map(|(file, text)| ((*file).to_owned(), (*text).to_owned()))
+        .collect();
+    problems(&list, &sources)
+}
+
+/// A list of one entry per `fn` name, each in the planted file.
+fn listed(funcs: &[&str]) -> serde_json::Value {
+    funcs
+        .iter()
+        .map(|func| serde_json::json!({ "file": PLANTED, "fn": func, "what": "writes a file" }))
+        .collect()
+}
+
+fn not_first(func: &str) -> String {
+    format!(
+        "{PLANTED} {func}: its first statement isn't the flag-off early return \
+         (`if !tiles {{ return; }}`)"
+    )
+}
+
+fn unlisted(func: &str) -> String {
+    format!("{PLANTED} {func}: returns when the tiles flag is off but isn't listed; {FIX}")
+}
+
+#[test]
+fn planted_unlisted_and_misplaced_checks_fail() {
+    let gated = "fn write(tiles: bool) { if !tiles { return; } save(); }";
+    assert_eq!(check(listed(&[]), &[(PLANTED, gated)]), [unlisted("write")]);
+    let nested_mod = "mod inner { pub fn write(tiles: bool) { if !tiles { return; } } }";
+    assert_eq!(
+        check(listed(&[]), &[(PLANTED, nested_mod)]),
+        [unlisted("write")]
+    );
+    let nested_fn = "impl S { fn m(&self) { fn inner(tiles: bool) { if !tiles { return; } } } }";
+    assert_eq!(
+        check(listed(&[]), &[(PLANTED, nested_fn)]),
+        [unlisted("inner")]
+    );
+    let in_production = "#[cfg(not(test))] fn write(tiles: bool) { if !tiles { return; } }";
+    assert_eq!(
+        check(listed(&[]), &[(PLANTED, in_production)]),
+        [unlisted("write")]
+    );
+    let late = "fn write(tiles: bool) { save(); if !tiles { return; } }";
+    assert_eq!(
+        check(listed(&["write"]), &[(PLANTED, late)]),
+        [not_first("write")]
+    );
+    assert_eq!(check(listed(&[]), &[(PLANTED, late)]), [unlisted("write")]);
+    let deep = "fn write(tiles: bool) { for _ in 0..1 { if !tiles { return; } } }";
+    assert_eq!(check(listed(&[]), &[(PLANTED, deep)]), [unlisted("write")]);
+    let mentioned = "fn write(tiles: bool) {\n    // if !tiles { return; }\n    \
+                     let _ = \"if !tiles { return; }\";\n    save();\n}";
+    assert_eq!(
+        check(listed(&["write"]), &[(PLANTED, mentioned)]),
+        [not_first("write")]
+    );
+    assert!(check(listed(&[]), &[(PLANTED, mentioned)]).is_empty());
+}
+
+#[test]
+fn planted_missing_and_duplicate_entries_fail() {
+    let gated = "fn write(tiles: bool) { if !tiles { return; } }";
+    assert_eq!(
+        check(listed(&["write", "gone"]), &[(PLANTED, gated)]),
+        [format!("{PLANTED} gone: not found")]
+    );
+    assert_eq!(
+        check(listed(&["write"]), &[]),
+        [format!("{PLANTED}: listed but missing")]
+    );
+    assert_eq!(
+        check(listed(&["write", "write"]), &[(PLANTED, gated)]),
+        [format!("{PLANTED} write: listed twice")]
+    );
+}
+
+#[test]
+fn planted_rejected_forms_never_count() {
+    for src in [
+        "fn write(tiles: bool) { if tiles { return; } save(); }",
+        "fn write(tiles: bool) { if !tiles { save(); return; } }",
+        "fn write(tiles: bool) { if !tiles { return; save(); } }",
+        "fn write(tiles: bool) { if !tiles { save() } }",
+        "fn write(tiles: bool) { if !tiles { return; } else { save(); } }",
+        "fn write(on: bool) { if !on { return; } }",
+        "fn write(tiles: bool) { if !is_on(tiles) { return; } }",
+        "fn write(tiles: bool) { if !!tiles { return; } }",
+    ] {
+        assert_eq!(
+            check(listed(&["write"]), &[(PLANTED, src)]),
+            [not_first("write")],
+            "counted: {src}"
+        );
+        assert!(
+            check(listed(&[]), &[(PLANTED, src)]).is_empty(),
+            "demanded: {src}"
+        );
+    }
+}
+
+#[test]
+fn planted_test_code_and_closures_are_not_demanded() {
+    for src in [
+        "#[cfg(test)] mod tests { fn write(tiles: bool) { if !tiles { return; } } }",
+        "#[cfg(all(test, unix))] fn write(tiles: bool) { if !tiles { return; } }",
+        "#[test] fn write() { let tiles = false; if !tiles { return; } }",
+        "impl S { #[cfg(test)] fn write(&self) { if !self.tiles { return; } } }",
+        "fn spawn(tiles: bool) { let run = || { if !tiles { return; } }; run(); }",
+        "fn spawn(tiles: bool) { let _ = async move { if !tiles { return; } }; }",
+    ] {
+        assert!(
+            check(listed(&[]), &[(PLANTED, src)]).is_empty(),
+            "demanded: {src}"
+        );
+    }
+    let gated = "fn write(tiles: bool) { if !tiles { return; } }";
+    for file in [
+        "src-tauri/src/site_tests.rs",
+        "src-tauri/src/groups/tests.rs",
+        "src-tauri/src/groups/tests/site.rs",
+    ] {
+        assert!(
+            check(listed(&[]), &[(file, gated)]).is_empty(),
+            "demanded: {file}"
+        );
+    }
+    let test_file = "#![cfg(test)]\nfn write(tiles: bool) { if !tiles { return; } }";
+    assert!(check(listed(&[]), &[(PLANTED, test_file)]).is_empty());
+}
+
+#[test]
+fn planted_accepted_forms_pass() {
+    for (func, src) in [
+        ("write", "fn write(tiles: bool) { if !tiles { return; } save(); }"),
+        ("write", "fn write(tiles: bool) { if !(tiles) { return; } }"),
+        ("write", "fn write(tiles: bool) { if (!tiles) { return; } }"),
+        (
+            "S::write",
+            "impl S { fn write(&self) -> Result<(), E> { if !self.tiles { return Err(E::Off); } Ok(()) } }",
+        ),
+        (
+            "write",
+            "fn write(flag: &TilesFlag) -> Option<()> { if !flag.is_on() { return None } Some(()) }",
+        ),
+        (
+            "write",
+            "fn write(flag: &TilesFlag) { if !TilesFlag::is_on(flag) { return; } }",
+        ),
+        (
+            "write",
+            "fn write(flag: &TilesFlag) { if !crate::flags::TilesFlag::is_on(flag) { return; } }",
+        ),
+        (
+            "write",
+            "fn write(app: &App) { if !tiles_enabled(app.state()) { return; } }",
+        ),
+        (
+            "GroupStore::commit",
+            "impl<T> crate::groups::GroupStore<T> { pub fn commit(&self) { if !self.tiles { return; } } }",
+        ),
+        (
+            "GroupStore::commit",
+            "impl Store for GroupStore { fn commit(&self) { if !self.tiles { return; } } }",
+        ),
+        (
+            "Store::commit",
+            "trait Store { fn commit(&self, tiles: bool) { if !tiles { return; } } }",
+        ),
+        (
+            "inner",
+            "fn outer() { fn inner(tiles: bool) { if !tiles { return; } } }",
+        ),
+    ] {
+        assert!(
+            check(listed(&[func]), &[(PLANTED, src)]).is_empty(),
+            "refused: {src}"
+        );
+    }
+}
+
+#[test]
+fn planted_methods_match_only_their_own_type() {
+    let src = "impl A {\n    fn commit(&self) { if !self.tiles { return; } }\n    \
+               fn put(&self) { if !self.tiles { return; } }\n}\n\
+               impl B {\n    fn commit(&self) { save(); }\n}";
+    assert!(check(listed(&["A::commit", "A::put"]), &[(PLANTED, src)]).is_empty());
+    assert_eq!(
+        check(listed(&["A::commit"]), &[(PLANTED, src)]),
+        [unlisted("A::put")]
+    );
+    assert_eq!(
+        check(
+            listed(&["A::commit", "A::put", "B::commit"]),
+            &[(PLANTED, src)]
+        ),
+        [not_first("B::commit")]
+    );
+    assert_eq!(
+        check(listed(&["commit", "A::put"]), &[(PLANTED, src)]),
+        [
+            format!("{PLANTED} commit: not found"),
+            unlisted("A::commit")
+        ]
+    );
+}
