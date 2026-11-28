@@ -48,7 +48,6 @@ import {
 import { wakeName } from "@/features/viewer/lib/wake-marker";
 import { countdownWords, timerTargetKey } from "@/features/viewer/lib/session-timers";
 import { useNowClock } from "@/features/viewer/hooks/use-now-clock";
-import type { AgentSessionRow } from "@/tauri/commands";
 
 export interface SelectTabOptions {
   focusTerminal?: boolean;
@@ -635,7 +634,10 @@ function TabFaceScope({
 
 /** The fields of a tab's agent row a face and its names read, flat so a shallow compare holds
  *  while they do (each sessions snapshot is a new row); null for a plain shell. */
-function tabAgentFields(sessions: readonly AgentSessionRow[] | null, sessionId: string) {
+function tabAgentFields(
+  sessions: ReturnType<typeof useAgentListProjectionStore.getState>["sessions"],
+  sessionId: string,
+) {
   const row = sessions?.find((r) => isAgentSession(r) && r.sessionId === sessionId);
   if (!row) return null;
   const { handle, avatar, agentRevision, displayName, rowNames } = row;

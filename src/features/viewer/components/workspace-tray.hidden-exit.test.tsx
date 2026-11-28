@@ -31,6 +31,7 @@ vi.mock("@tauri-apps/api/event", () => ({
 vi.mock("@/shared/hooks/use-terminal-activity", () => ({ useTerminalActivity: () => {} }));
 vi.mock("@/tauri/commands", () => ({
   LOCAL_MACHINE_ID: "local",
+  avatarPacksListForTeam: vi.fn().mockResolvedValue({ packs: [], warnings: [] }),
   saveAppState: vi.fn().mockResolvedValue(undefined),
   loadAppState: vi.fn().mockResolvedValue("{}"),
   pushViewerState: vi.fn().mockResolvedValue(undefined),

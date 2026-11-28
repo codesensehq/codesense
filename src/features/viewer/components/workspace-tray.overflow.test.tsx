@@ -5,6 +5,7 @@ import { render, screen, within, act, fireEvent, waitFor } from "@/test-utils";
 import userEvent from "@testing-library/user-event";
 
 vi.mock("@/tauri/commands", () => ({
+  avatarPacksListForTeam: vi.fn().mockResolvedValue({ packs: [], warnings: [] }),
   saveAppState: vi.fn().mockResolvedValue(undefined),
   loadAppState: vi.fn().mockResolvedValue("{}"),
   listNotes: vi.fn().mockResolvedValue([]),
