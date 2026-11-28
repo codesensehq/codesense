@@ -1784,6 +1784,31 @@ describe("mosaic leaves saved before leaves carried an id", () => {
     }
   });
 
+  it("with the tiles flag on, an echoed layout keyed like an object member keeps its echoed root", async () => {
+    tiles.on = true;
+    try {
+      await echoAfterGroupShow(shown);
+      const fg = { ...legacyViewer.foregroundLayout[TEAM_KEY], preset: "rows" };
+      expect(() =>
+        applyOwnedViewerPrefs({
+          foregroundLayout: { [TEAM_KEY]: fg, constructor: fg },
+          foregroundLayoutByRail: { [TEAM_KEY]: { epic: fg, toString: fg } },
+          terminalTabGridSizes: { constructor: { preset: "grid", root: legacyRoot } },
+        }),
+      ).not.toThrow();
+      const s = useViewerStore.getState();
+      expect(Object.hasOwn(s.tabGridLayout, "constructor")).toBe(true);
+      expect(s.tabGridLayout.constructor).toEqual({ preset: "grid", root: inMemory });
+      expect(s.foregroundLayout.constructor).toMatchObject({ preset: "rows", root: inMemory });
+      expect(s.foregroundLayoutByRail[TEAM_KEY].toString).toMatchObject({ root: inMemory });
+      expect(s.foregroundLayout[TEAM_KEY].root).toEqual(shown);
+    } finally {
+      tiles.on = false;
+      resetLayoutClientForTests();
+      applyOwnedViewerPrefs({}, true);
+    }
+  });
+
   it("with the tiles flag off, a prefs echo restores each layout it carries, root included", async () => {
     try {
       const s = await echoAfterGroupShow(shown);

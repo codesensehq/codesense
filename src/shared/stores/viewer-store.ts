@@ -1891,7 +1891,7 @@ function withLiveRoots<T extends { root: MosaicNode | null }>(
   return Object.fromEntries(
     Object.entries(restored).map(([key, layout]) => [
       key,
-      key in live ? { ...layout, root: live[key].root } : layout,
+      Object.hasOwn(live, key) ? { ...layout, root: live[key].root } : layout,
     ]),
   );
 }
