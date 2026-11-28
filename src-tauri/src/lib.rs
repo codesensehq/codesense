@@ -1555,6 +1555,7 @@ pub fn run() {
             commands::git::reveal_path,
             // SW-GS-2: git-sync publish-set picker transport (F4).
             commands::git_sync::get_publish_set,
+            commands::git_sync::context_worktree::lead_diff,
             // Cheap name-only changed-path count for the closed-pane sync badge.
             commands::git_sync::changed_path_count,
             // SW-GS-6: read-only out-of-sync probe for the "N incoming" badge.

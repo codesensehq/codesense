@@ -216,7 +216,6 @@
   "exports src/features/viewer/components/session-timers-popover.tsx homeShort",
   "exports src/features/viewer/components/session-timers-popover.tsx useMachineLabel",
   "exports src/features/viewer/components/session-timers-popover.tsx useTabCwd",
-  "exports src/features/viewer/components/source-diff-overlay.tsx SourceDiffPane",
   "exports src/features/viewer/components/terminal-ended-bar.tsx endedBarLabel",
   "exports src/features/viewer/components/workspace-overlay-state.ts EPIC_ASSEMBLY_NO_REPORT_ERROR",
   "exports src/features/viewer/components/workspace-pill.tsx needsYouWords",
