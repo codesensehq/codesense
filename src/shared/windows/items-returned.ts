@@ -9,8 +9,10 @@
  *   the team is;
  * - a kind this build does not know (a newer version's) opens nothing, and one notice
  *   lists how many; a move posts none, since the item was live a moment ago;
- * - an item whose team was removed (`removed_team`), or whose team is gone when it
- *   comes back or once it is ready to open, is closed: one notice per team.
+ * - an item whose team was removed (`removed_team`) is closed, with one "team was removed"
+ *   notice per team. One whose team is otherwise unavailable when it comes back, or once
+ *   it is ready to open (archived, a malformed key, no org root, no teams), is not
+ *   reopened, with one "team isn't available" notice per team.
  */
 import { toast } from "sonner";
 
@@ -68,7 +70,7 @@ function openWaiting(): void {
       gone.push(item.key);
     }
   }
-  noticeClosed(gone);
+  noticeUnavailable(gone);
   if (waiting.length === 0) {
     stopWatching?.();
     stopWatching = null;
@@ -76,8 +78,8 @@ function openWaiting(): void {
 }
 
 /** Opens `key` in its origin team, or queues it while that team is loading. A queued item
- *  is closed, with the removed-team notice, if its team turns out unavailable or there are
- *  no teams. */
+ *  is dropped, with the team-unavailable notice, if its team turns out unavailable or there
+ *  are no teams. */
 export function openWhenTeamReady(key: ItemKey, preview = false): void {
   const repoPath = repoPathForItem(key);
   if (repoPath !== null) {
@@ -102,14 +104,26 @@ function plural(n: number): string {
   return `${n} ${n === 1 ? "item" : "items"}`;
 }
 
-/** One notice per team for the items closed because their team is gone. */
-function noticeClosed(keys: readonly ItemKey[]): void {
+/** One notice per team of `keys`, worded by `say`. */
+function noticePerTeam(keys: readonly ItemKey[], say: (items: string, team: string) => string) {
   const byTeam = new Map<string, number>();
   for (const key of keys) byTeam.set(key.team, (byTeam.get(key.team) ?? 0) + 1);
   for (const [team, n] of byTeam) {
-    const name = parseTeamKey(team).teamName ?? team;
-    toast.info(`Closed ${plural(n)} of ${name}: the team was removed`);
+    toast.info(say(plural(n), parseTeamKey(team).teamName ?? team));
   }
+}
+
+/** The notice for items closed because their team was removed. */
+function noticeRemoved(keys: readonly ItemKey[]): void {
+  noticePerTeam(keys, (items, team) => `Closed ${items} of ${team}: the team was removed`);
+}
+
+/** The notice for items not reopened because their team is unavailable. */
+function noticeUnavailable(keys: readonly ItemKey[]): void {
+  noticePerTeam(
+    keys,
+    (items, team) => `Couldn't reopen ${items} of ${team}: the team isn't available`,
+  );
 }
 
 function teamIsGone(key: ItemKey): boolean {
@@ -119,16 +133,18 @@ function teamIsGone(key: ItemKey): boolean {
 
 /** Opens, closes or lists each returned item by its kind and its team (see above). */
 export function openReturnedItems({ items, reason }: ItemsReturned): void {
-  const closed: ItemKey[] = [];
+  const removed: ItemKey[] = [];
+  const unavailable: ItemKey[] = [];
   let newer = 0;
   for (const key of items) {
-    if (reason === "removed_team") closed.push(key);
+    if (reason === "removed_team") removed.push(key);
     else if (!KNOWN_KINDS.has(key.kind)) newer += 1;
-    else if (teamIsGone(key)) closed.push(key);
+    else if (teamIsGone(key)) unavailable.push(key);
     else if (key.kind === TAB_ITEM_KIND) openWhenTeamReady(key);
   }
   if (newer > 0 && reason !== "move") {
     toast.info(`Couldn't reopen ${plural(newer)} from a newer version`);
   }
-  noticeClosed(closed);
+  noticeRemoved(removed);
+  noticeUnavailable(unavailable);
 }

@@ -116,7 +116,9 @@ describe("items returned to main", () => {
     openReturnedItems({ items: [KEY], reason: "move" });
     useOrgStore.setState({ orgs: [], discoveryComplete: true });
     expect(tabs(ORIGIN)).toEqual([]);
-    expect(notices.mock.calls).toEqual([["Closed 1 item of docs: the team was removed"]]);
+    expect(notices.mock.calls).toEqual([
+      ["Couldn't reopen 1 item of docs: the team isn't available"],
+    ]);
     useOrgStore.setState({ orgs: ready, discoveryComplete: true });
     expect(tabs(ORIGIN)).toEqual([]);
   });
@@ -127,6 +129,9 @@ describe("items returned to main", () => {
     openReturnedItems({ items: [KEY], reason: "move" });
     useOrgStore.setState({ orgs: [{ ...ready[0]!, teams: [] }], discoveryComplete: true });
     expect(tabs(ORIGIN)).toEqual([]);
+    expect(notices.mock.calls).toEqual([
+      ["Couldn't reopen 1 item of docs: the team isn't available"],
+    ]);
     useOrgStore.setState({ orgs: ready, discoveryComplete: true });
     expect(tabs(ORIGIN)).toEqual([]);
   });
@@ -181,24 +186,42 @@ describe("items of a removed team", () => {
       ["Closed 1 item of general: the team was removed"],
     ]);
   });
+});
 
+describe("items of an unavailable team", () => {
   it.each(["boot", "failed_restore"] as const)(
-    "a %s return of an unavailable team opens nothing and posts one notice, with no warn-only drop",
+    "a %s return of a team that is not listed opens nothing and posts one notice, with no warn-only drop",
     (reason) => {
       const [org] = useOrgStore.getState().orgs;
       useOrgStore.setState({ orgs: [{ ...org!, teams: [team("general")] }] });
       openReturnedItems({ items: [KEY, DOCS_B], reason });
       expect(tabs(ORIGIN)).toEqual([]);
-      expect(notices.mock.calls).toEqual([["Closed 2 items of docs: the team was removed"]]);
+      expect(notices.mock.calls).toEqual([
+        ["Couldn't reopen 2 items of docs: the team isn't available"],
+      ]);
       expect(warns).not.toHaveBeenCalled();
     },
   );
+
+  it("an archived team's items are not reopened, and not called removed", () => {
+    const [org] = useOrgStore.getState().orgs;
+    useOrgStore.setState({
+      orgs: [{ ...org!, teams: [{ ...team("docs"), archived: true }, team("general")] }],
+    });
+    openReturnedItems({ items: [KEY], reason: "close" });
+    expect(tabs(ORIGIN)).toEqual([]);
+    expect(notices.mock.calls).toEqual([
+      ["Couldn't reopen 1 item of docs: the team isn't available"],
+    ]);
+  });
 
   it("a boot return to an org with no teams opens nothing and posts one notice", () => {
     const [org] = useOrgStore.getState().orgs;
     useOrgStore.setState({ orgs: [{ ...org!, teams: [] }] });
     openReturnedItems({ items: [KEY], reason: "boot" });
     expect(tabs(ORIGIN)).toEqual([]);
-    expect(notices.mock.calls).toEqual([["Closed 1 item of docs: the team was removed"]]);
+    expect(notices.mock.calls).toEqual([
+      ["Couldn't reopen 1 item of docs: the team isn't available"],
+    ]);
   });
 });
