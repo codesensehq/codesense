@@ -14,9 +14,10 @@ import type { WorktreeRow } from "@/tauri/commands";
 import { getPublishSet } from "./publish-set-source";
 import { useHeadMoves, useShownRead } from "./shown-read";
 import { sourceChangeset } from "./source-redline-source";
+import { publishSetCount } from "./types";
 
 /** One worktree a story uses. Its file count is against main; `count` is absent until
- *  read and while its machine is offline. */
+ *  read, while `state` says why none can be read, and when its read failed (`error`). */
 export interface StoryWorktreeRow {
   key: string;
   kind: "context" | "source";
@@ -25,16 +26,25 @@ export interface StoryWorktreeRow {
   path: string;
   /** The machine a row lives on; null on this Mac. */
   machine: { id: string; label: string } | null;
-  /** The machine's state word while it is not connected ("Offline"), else null. */
-  offline: string | null;
+  /** Why a machine's row has no count: the machine's state word while it is not
+   *  connected ("Offline"), or "Preparing…" while its workspace has no handle yet. */
+  state: string | null;
   count: number | undefined;
+  /** This row's count read failed; the other rows keep theirs. */
+  error: string | null;
 }
 
 export interface StoryWorktrees {
   rows: StoryWorktreeRow[];
   /** A head moved while the list was hidden: it recounts when shown again. */
   stale: boolean;
+  /** The first failed row's error, or null when every read succeeded. */
+  error: string | null;
 }
+
+/** A machine row's state word while its workspace has no handle to read through. */
+const PREPARING = "Preparing…";
+const COULD_NOT_COUNT = "Couldn't count";
 
 /** Whether a context worktree's name or branch names `storyId`: `<id>`, `<id>-ctx` or
  *  `ctx/<id>`, in any case. A context worktree's record names its story. */
@@ -115,15 +125,20 @@ function storyWorkspaceKey(
   return JSON.stringify({ remote, localWsId });
 }
 
-function setCount(set: { general: { count: number }; buckets: { count: number }[] }): number {
-  return set.general.count + set.buckets.reduce((n, b) => n + b.count, 0);
+interface Counts {
+  counts: Record<string, number>;
+  errors: Record<string, string>;
 }
 
 /**
  * Every worktree a story uses, in order: its context worktree, its source worktree on
  * this Mac, then its source worktree on a machine. It never reads the active team or
- * the team chip. Counts are read only while `shown`; a head move recounts while shown
- * and marks the list stale while hidden.
+ * the team chip. Counts are read only while `shown`, each on its own, so one failed read
+ * leaves the other rows' counts. A branch head or ref move under the story's org root
+ * (the only path the app's git watch reports) recounts while shown and marks the list
+ * stale while hidden. Source and machine rows also recount on their worktree's change
+ * nonce, which ticks only while a watch on that worktree is held; the host acquires it
+ * while the list is shown.
  */
 export function useStoryWorktrees(storyId: string, shown: boolean): StoryWorktrees {
   const localKey = useWorktreeRosterStore((s) => localRowsKey(s.rows, storyId));
@@ -138,11 +153,11 @@ export function useStoryWorktrees(storyId: string, shown: boolean): StoryWorktre
   const machine = useMachine(remote?.machineId ?? "");
   const online = machine?.status.state === "connected";
   // The state word reads no clock, only the remembered detail after it does.
-  const offline =
-    remote && !online ? (machine ? describeMachineStatus(machine, 0).word : "Offline") : null;
+  let state: string | null = null;
+  if (remote && !online) state = machine ? describeMachineStatus(machine, 0).word : "Offline";
+  else if (remote && !remote.handle) state = PREPARING;
 
-  const contextPaths = [orgRoot, ...local.filter((r) => r.kind === "context").map((r) => r.path)];
-  const moves = useHeadMoves(contextPaths.join("\n"));
+  const moves = useHeadMoves(orgRoot);
   const localNonce = useViewerStore((s) =>
     localWsId ? (s.worktreeChangedPath[rootWatchKey(localWsId)]?.nonce ?? 0) : 0,
   );
@@ -152,30 +167,43 @@ export function useStoryWorktrees(storyId: string, shown: boolean): StoryWorktre
   );
   const readKey = JSON.stringify([localKey, wsKey, online, moves, localNonce, remoteNonce]);
 
-  const read = useCallback(async () => {
-    const counts: Record<string, number> = {};
-    const reads = local.map(async (row) => {
-      // The worktree id picks the checkout; the repo path only has to be non-empty.
-      const n =
+  const read = useCallback(async (): Promise<Counts> => {
+    const out: Counts = { counts: {}, errors: {} };
+    const settle = (key: string, n: Promise<number>) =>
+      n.then(
+        (v) => {
+          out.counts[key] = v;
+        },
+        (e: unknown) => {
+          out.errors[key] = e instanceof Error ? e.message : String(e);
+        },
+      );
+    const reads = local.map((row) =>
+      settle(
+        row.key,
         row.kind === "context"
-          ? setCount(await getPublishSet(orgRoot || row.path, undefined, undefined, null, row.id))
-          : (await sourceChangeset({ kind: "local", cwd: row.path })).length;
-      counts[row.key] = n;
-    });
+          ? // The worktree id picks the checkout; the repo path only has to be non-empty.
+            getPublishSet(orgRoot || row.path, undefined, undefined, null, row.id).then(
+              publishSetCount,
+            )
+          : sourceChangeset({ kind: "local", cwd: row.path }).then((files) => files.length),
+      ),
+    );
     if (remote?.handle && online)
       reads.push(
-        sourceChangeset({
-          kind: "remote",
-          machineId: remote.machineId,
-          handle: remote.handle,
-        }).then((files) => {
-          counts[`machine:${remote.wsId}`] = files.length;
-        }),
+        settle(
+          `machine:${remote.wsId}`,
+          sourceChangeset({
+            kind: "remote",
+            machineId: remote.machineId,
+            handle: remote.handle,
+          }).then((files) => files.length),
+        ),
       );
     await Promise.all(reads);
-    return counts;
+    return out;
   }, [local, orgRoot, remote, online]);
-  const { value: counts, stale } = useShownRead(shown, readKey, read);
+  const { value, stale, error: readError } = useShownRead(shown, readKey, read);
 
   const rows = useMemo(() => {
     const out: StoryWorktreeRow[] = local.map((r) => ({
@@ -184,8 +212,9 @@ export function useStoryWorktrees(storyId: string, shown: boolean): StoryWorktre
       branch: r.branch,
       path: r.path,
       machine: null,
-      offline: null,
-      count: counts?.[r.key],
+      state: null,
+      count: value?.counts[r.key],
+      error: value?.errors[r.key] ?? null,
     }));
     if (remote) {
       const key = `machine:${remote.wsId}`;
@@ -195,30 +224,34 @@ export function useStoryWorktrees(storyId: string, shown: boolean): StoryWorktre
         branch: remote.branch,
         path: remote.cwd,
         machine: { id: remote.machineId, label: machine?.label || remote.machineId },
-        offline,
-        count: offline ? undefined : counts?.[key],
+        state,
+        count: state ? undefined : value?.counts[key],
+        error: state ? null : (value?.errors[key] ?? null),
       });
     }
     return out;
-  }, [local, remote, counts, machine?.label, offline]);
-  return { rows, stale };
+  }, [local, remote, value, machine?.label, state]);
+  const error = readError ?? rows.find((r) => r.error)?.error ?? null;
+  return { rows, stale, error };
 }
 
 /** How a row reads in a list: "‹branch›" with "(context)" or "(source)", or a
- *  machine's "‹machine›, ‹branch›" with "remote"; its count, or the machine's state. */
+ *  machine's "‹machine›, ‹branch›" with "remote"; its count, the machine's state, or
+ *  "Couldn't count" when its read failed. */
 export function describeWorktreeRow(row: StoryWorktreeRow): {
   label: string;
   tag: string;
   detail: string | null;
 } {
   const branch = row.branch ?? "(no branch)";
-  const files =
-    row.count === undefined ? null : `${row.count} ${row.count === 1 ? "file" : "files"}`;
+  let files: string | null = null;
+  if (row.error) files = COULD_NOT_COUNT;
+  else if (row.count !== undefined) files = `${row.count} ${row.count === 1 ? "file" : "files"}`;
   if (row.machine)
     return {
       label: `${row.machine.label}, ${branch}`,
       tag: "remote",
-      detail: row.offline ?? files,
+      detail: row.state ?? files,
     };
   return { label: branch, tag: row.kind === "context" ? "(context)" : "(source)", detail: files };
 }

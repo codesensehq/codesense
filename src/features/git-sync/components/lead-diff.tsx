@@ -5,6 +5,7 @@ import { SourceDiffPane } from "@/features/viewer/components/source-diff-overlay
 import { LineStat } from "@/features/viewer/components/source-diff-rail";
 import { useWorktreeRosterStore } from "@/features/viewer/stores/worktree-roster-store";
 import { cn } from "@/lib/utils";
+import { useOrgStore } from "@/shared/stores/org-store";
 import type { ContextWorktreeInfo, WorktreeRow } from "@/tauri/commands";
 
 import { getFileRedline } from "../lib/file-redline-source";
@@ -26,15 +27,31 @@ function leadDiffHeader(lead: string, diff: LeadDiffData): string {
   return `Diff for ${lead} · ${n} ${n === 1 ? "worktree" : "worktrees"}, ${files(m)} · read-only`;
 }
 
-/** Each of the lead's worktrees as `id\tpath` lines, so a change to another worktree
- *  never re-renders the diff. */
+/** Each of the lead's worktrees as `id\tpath\torg` lines, so a change to another
+ *  worktree never re-renders the diff. */
 function pathsKey(rows: WorktreeRow[] | null, ids: string): string {
   if (!ids) return "";
   const wanted = new Set(ids.split("\n"));
   return (rows ?? [])
     .filter((r): r is ContextWorktreeInfo => r.kind === "context" && wanted.has(r.id))
-    .map((r) => `${r.id}\t${r.path}`)
+    .map((r) => `${r.id}\t${r.path}\t${r.orgSlug}`)
     .join("\n");
+}
+
+/** The org roots of `slugs` (newline-joined), as one newline-joined string. */
+function rootsKey(orgs: readonly { slug: string; org_root: string }[], slugs: string): string {
+  if (!slugs) return "";
+  const wanted = new Set(slugs.split("\n"));
+  return orgs
+    .filter((o) => wanted.has(o.slug) && o.org_root)
+    .map((o) => o.org_root)
+    .join("\n");
+}
+
+/** The open file, by its branch's worktree id and its path, so a new read re-points it. */
+interface OpenedKey {
+  worktree: string;
+  path: string;
 }
 
 interface Opened {
@@ -42,11 +59,20 @@ interface Opened {
   file: LeadDiffFile;
 }
 
+function find(diff: LeadDiffData, key: OpenedKey | null): Opened | null {
+  if (!key) return null;
+  const branch = diff.branches.find((b) => b.worktree === key.worktree);
+  const file = branch?.files.find((f) => f.path === key.path);
+  return branch && file ? { branch, file } : null;
+}
+
 /**
  * A lead's combined, read-only diff: its stories' branches, then its own, each with its
  * files and their + and − counts, and a "‹N› stories" mark on a path several branches
- * change. Opening a file shows its diff on that branch. It reads nothing while hidden,
- * reads again when a branch head moves while shown, and marks itself stale while hidden.
+ * change. Opening a file shows its diff on that branch. It reads nothing while hidden.
+ * A branch head or ref move under its worktrees' org roots (the only path the app's git
+ * watch reports) reads it again while shown, and marks it stale while hidden; an open
+ * file reads again with it, and closes when the new diff no longer lists it.
  * Each story merges by its own PR, so there is no merge action here.
  */
 export function LeadDiff({
@@ -62,17 +88,18 @@ export function LeadDiff({
 }) {
   const [ids, setIds] = useState("");
   const paths = useWorktreeRosterStore((s) => pathsKey(s.rows, ids));
-  const pathOf = useMemo(
+  const lines = useMemo(
     () =>
-      new Map(
-        paths
-          .split("\n")
-          .filter(Boolean)
-          .map((line) => line.split("\t") as [string, string]),
-      ),
+      paths
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => line.split("\t") as [string, string, string]),
     [paths],
   );
-  const moves = useHeadMoves([...pathOf.values()].join("\n"));
+  const pathOf = useMemo(() => new Map(lines.map(([id, path]) => [id, path])), [lines]);
+  const slugs = [...new Set(lines.map(([, , slug]) => slug))].join("\n");
+  const roots = useOrgStore((s) => rootsKey(s.orgs, slugs));
+  const moves = useHeadMoves(roots);
   const {
     value: diff,
     error,
@@ -81,7 +108,9 @@ export function LeadDiff({
   const nextIds = diff?.branches.map((b) => b.worktree).join("\n") ?? "";
   if (nextIds !== ids) setIds(nextIds);
 
-  const [opened, setOpened] = useState<Opened | null>(null);
+  const [openedKey, setOpenedKey] = useState<OpenedKey | null>(null);
+  const opened = diff ? find(diff, openedKey) : null;
+  if (diff && openedKey && !opened) setOpenedKey(null);
 
   if (!shown) return null;
   if (!diff) {
@@ -111,7 +140,7 @@ export function LeadDiff({
                 key={branch.worktree}
                 branch={branch}
                 opened={opened}
-                onOpen={(file) => setOpened({ branch, file })}
+                onOpen={(file) => setOpenedKey({ worktree: branch.worktree, path: file.path })}
               />
             ))}
           </ul>
@@ -119,11 +148,11 @@ export function LeadDiff({
             <OpenedFile
               diff={diff}
               opened={opened}
+              generation={moves}
               repoPath={pathOf.get(opened.branch.worktree) ?? opened.branch.worktree}
-              onShow={(branch) => {
-                const file = branch.files.find((f) => f.path === opened.file.path);
-                if (file) setOpened({ branch, file });
-              }}
+              onShow={(branch) =>
+                setOpenedKey({ worktree: branch.worktree, path: opened.file.path })
+              }
             />
           ) : null}
         </div>
@@ -147,6 +176,10 @@ function BranchGroup({
       <div className="px-3 py-1 text-[11px] font-medium text-muted-foreground">{title}</div>
       {branch.deleted ? (
         <p className="px-3 text-[12px] text-muted-foreground">{`${branch.branch} was deleted`}</p>
+      ) : branch.error ? (
+        <p className="px-3 text-[12px] text-muted-foreground" title={branch.error}>
+          {`${branch.branch} couldn't be read`}
+        </p>
       ) : branch.files.length === 0 ? (
         <p className="px-3 text-[12px] text-muted-foreground">{NO_CHANGES}</p>
       ) : (
@@ -183,11 +216,14 @@ function BranchGroup({
 function OpenedFile({
   diff,
   opened,
+  generation,
   repoPath,
   onShow,
 }: {
   diff: LeadDiffData;
   opened: Opened;
+  /** The lead diff's head-move count: a new one reads the file again. */
+  generation: number;
   repoPath: string;
   onShow: (branch: LeadBranch) => void;
 }) {
@@ -201,7 +237,7 @@ function OpenedFile({
     redline: null,
     error: null,
   });
-  const key = `${branch.worktree}\n${file.path}`;
+  const key = `${branch.worktree}\n${file.path}\n${generation}`;
   useEffect(() => {
     let cancelled = false;
     getFileRedline(

@@ -7,6 +7,7 @@ import { describeMachineStatus } from "@/features/machines/lib/machine-status";
 import { useMachinesStore } from "@/features/machines/stores/machines-store";
 import { useWorktreeRosterStore } from "@/features/viewer/stores/worktree-roster-store";
 import { useAgentStateStore } from "@/shared/stores/agent-state-store";
+import { useOrgStore } from "@/shared/stores/org-store";
 import { useViewerStore } from "@/shared/stores/viewer-store";
 import type { MachineSummary, WorktreeRow } from "@/tauri/commands";
 
@@ -43,6 +44,8 @@ const STORY = "431";
 const CTX_PATH = "/ctx/wt/431";
 const SRC_PATH = "/src/wt/431";
 const MACHINE_PATH = "/home/dev/wt/431";
+// The app's git watch reports a branch head or ref move with the org root as its path.
+const ORG_ROOT = "/orgs/acme";
 
 function contextRow(over: Partial<Record<string, unknown>> = {}): WorktreeRow {
   return {
@@ -97,7 +100,7 @@ function machine(state: "connected" | "disconnected"): MachineSummary {
   } as MachineSummary;
 }
 
-function setScene({ online = true } = {}) {
+function setScene({ online = true, handle = "h-1" as string | null } = {}) {
   useWorktreeRosterStore.setState({
     rows: [
       sourceRow(),
@@ -118,7 +121,7 @@ function setScene({ online = true } = {}) {
             machineId: "m-1",
             requestId: "r",
             branch: "feat/431-simplify",
-            handle: "h-1",
+            handle,
             cwd: MACHINE_PATH,
           },
         },
@@ -128,10 +131,16 @@ function setScene({ online = true } = {}) {
   useMachinesStore.setState({
     byTeam: { "acme:delivery": [machine(online ? "connected" : "disconnected")] },
   });
+  useOrgStore.setState({
+    orgs: [
+      { slug: "acme", org_root: ORG_ROOT },
+      { slug: "other", org_root: "/orgs/other" },
+    ] as never,
+  });
 }
 
 let renders = 0;
-let latest: StoryWorktrees = { rows: [], stale: false };
+let latest: StoryWorktrees = { rows: [], stale: false, error: null };
 function Probe({ shown }: { shown: boolean }) {
   renders++;
   latest = useStoryWorktrees(STORY, shown);
@@ -145,7 +154,7 @@ async function settle() {
   });
 }
 
-function moveHead(repoPath = CTX_PATH) {
+function moveHead(repoPath = ORG_ROOT) {
   act(() => {
     for (const h of moved.handlers) h({ payload: { repoPath, kinds: ["head"] } });
   });
@@ -203,6 +212,34 @@ describe("useStoryWorktrees", () => {
     );
   });
 
+  it("keeps the local counts when the machine's read fails, and names that row's error", async () => {
+    reads.sourceChangeset.mockImplementation(async (repo: { kind: string }) => {
+      if (repo.kind === "remote") throw new Error("machine read failed");
+      return [{}];
+    });
+    render(<Probe shown />);
+    await settle();
+    expect(latest.rows.map((r) => [r.count, r.error])).toEqual([
+      [12, null],
+      [1, null],
+      [undefined, "machine read failed"],
+    ]);
+    expect(describeWorktreeRow(latest.rows[2]!).detail).toBe("Couldn't count");
+    expect(latest.error).toBe("machine read failed");
+  });
+
+  it("reads a machine row whose workspace has no handle yet as preparing, and reads nothing there", async () => {
+    setScene({ handle: null });
+    render(<Probe shown />);
+    await settle();
+    const row = latest.rows[2]!;
+    expect(row.count).toBeUndefined();
+    expect(describeWorktreeRow(row).detail).toBe("Preparing…");
+    expect(reads.sourceChangeset).not.toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "remote" }),
+    );
+  });
+
   it("reads nothing until shown", async () => {
     const view = render(<Probe shown={false} />);
     await settle();
@@ -237,6 +274,11 @@ describe("useStoryWorktrees", () => {
 
   it("recounts once on a head move while shown, and marks stale while hidden", async () => {
     const view = render(<Probe shown />);
+    await settle();
+    expect(reads.getPublishSet).toHaveBeenCalledTimes(1);
+    // The app never reports a worktree's own path or another org's root.
+    moveHead(CTX_PATH);
+    moveHead("/orgs/other");
     await settle();
     expect(reads.getPublishSet).toHaveBeenCalledTimes(1);
     moveHead();
@@ -277,8 +319,9 @@ describe("worktreeActions", () => {
     branch: CONTEXT,
     path: CTX_PATH,
     machine: null,
-    offline: null,
+    state: null,
     count: 12,
+    error: null,
   };
   it("gives a local row Open in Finder and Copy path", () => {
     expect(worktreeActions(local)).toEqual([

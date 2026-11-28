@@ -102,6 +102,11 @@ export interface PublishSet {
   baselineReason?: string;
 }
 
+/** How many files a publish set changes: its general bucket plus every workspace's. */
+export function publishSetCount(set: Pick<PublishSet, "buckets" | "general">): number {
+  return set.general.count + set.buckets.reduce((n, b) => n + b.count, 0);
+}
+
 /** The canonical empty publish set — nothing pending. */
 export const EMPTY_PUBLISH_SET: PublishSet = { buckets: [], general: { count: 0, files: [] } };
 
@@ -321,6 +326,9 @@ export interface LeadBranch {
   own: boolean;
   /** The branch ref or its checkout is gone; it lists no files. */
   deleted: boolean;
+  /** The branch could not be read (its registration changed, or its diff failed); it
+   *  lists no files and the other branches are unaffected. */
+  error: string | null;
   files: LeadDiffFile[];
 }
 

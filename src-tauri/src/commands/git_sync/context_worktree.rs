@@ -111,6 +111,9 @@ pub struct LeadBranch {
     pub own: bool,
     /// The branch ref or its checkout is gone; such a branch lists no files.
     pub deleted: bool,
+    /// The branch could not be read (its registration changed, or its diff failed); it
+    /// lists no files.
+    pub error: Option<String>,
     pub files: Vec<LeadDiffFile>,
 }
 
@@ -129,6 +132,8 @@ fn owned_by_lead(row: &ContextWorktreeRecord, lead: Option<&String>) -> bool {
     }
 }
 
+/// One branch's changed files: `Ok(None)` when its checkout or its ref is gone, and an
+/// error when its registration changed or its diff cannot be read.
 fn branch_files(row: &ContextWorktreeRecord) -> Result<Option<Vec<PublishFile>>, String> {
     if !Path::exists(&row.root) {
         return Ok(None);
@@ -138,6 +143,7 @@ fn branch_files(row: &ContextWorktreeRecord) -> Result<Option<Vec<PublishFile>>,
     if Result::is_err(&git2::Repository::find_reference(&repo, &refname)) {
         return Ok(None);
     }
+    crate::commands::workspace_open::validate_context_worktree(row)?;
     let scope = crate::context_repo::caller_scope::CallerScope::Human;
     let set = publish_set_for(&row.root, None, &scope)?;
     let mut files = set.general.files;
@@ -149,7 +155,8 @@ fn branch_files(row: &ContextWorktreeRecord) -> Result<Option<Vec<PublishFile>>,
 }
 
 /// The combined diff of every record carrying `work_item`. A path two branches change
-/// is listed once on each, never merged into one.
+/// is listed once on each, never merged into one. A branch that cannot be read carries
+/// its error and no files, and the other branches are still read.
 pub(crate) fn lead_diff_impl(
     records: &[ContextWorktreeRecord],
     work_item: &WorkItemId,
@@ -171,13 +178,17 @@ pub(crate) fn lead_diff_impl(
     );
     let mut branches = Vec::new();
     for (row, item) in carried {
-        let files = branch_files(row)?;
+        let (files, error) = match branch_files(row) {
+            Ok(files) => (files, None),
+            Err(e) => (Some(Vec::new()), Some(e)),
+        };
         branches.push(LeadBranch {
             worktree: Clone::clone(&row.id),
             branch: Clone::clone(&row.branch),
             story: Clone::clone(&row.name),
             own: owned_by_lead(row, Option::as_ref(&item.lead_handle)),
             deleted: Option::is_none(&files),
+            error,
             files: Iterator::collect(Iterator::map(
                 IntoIterator::into_iter(Option::unwrap_or_else(files, Vec::new)),
                 |file| LeadDiffFile { file, branches: 0 },

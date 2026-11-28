@@ -54,8 +54,10 @@
           its workspace's machine. Each row has its branch, "(context)" or "(source)", its file count
           against main, its path and its machine. A machine's row reads "‹machine›, ‹branch›" and
           "remote", counts through the same read the source diff uses for that machine, and shows the
-          machine's state and no count while the machine is offline. The list belongs to the story,
-          so the active team never changes it.
+          machine's state and no count while the machine is offline, or "Preparing…" while its
+          workspace is still being set up. Each row counts on its own: a row whose count fails reads
+          "Couldn't count" and the others keep theirs. The list belongs to the story, so the active
+          team never changes it.
         </p>
         <ul>
           <li>A row on this Mac offers Open in Finder and Copy path.</li>
@@ -67,7 +69,9 @@
           including the lead's own when it has one. Each branch is measured against its own merge base
           with main, with each file's + and − counts. A path that several branches change appears once
           per branch and carries how many branches change it; nothing is merged or overwritten. A
-          branch whose ref or worktree is gone comes back marked deleted, with no files.
+          branch whose ref or worktree is gone comes back marked deleted, with no files. A branch that
+          can't be read, because its worktree's Git registration changed or its diff fails, carries
+          its error and no files, and the other branches are still read.
         </p>
         <p>
           The combined diff reads "Diff for ‹lead› · ‹N› worktrees, ‹M› files · read-only", where ‹M›
@@ -77,8 +81,12 @@
           story still merges through its own pull request.
         </p>
         <p>
-          Neither reads anything while it is hidden. While shown, each reads again when a branch head
-          moves; one that is hidden when a head moves is marked stale and reads again when it is shown.
+          Neither reads anything while it is hidden. CodeSense watches each org's context repository at
+          its root, so a branch head or ref that moves anywhere in the org reads a shown list or diff
+          again, and marks a hidden one stale so it reads again when it is shown. An open file reads
+          again with it, and closes when the new diff no longer lists it. A source worktree's own file
+          changes recount its row only while that worktree is being watched, for example while its diff
+          is open.
         </p>
       </section>
 

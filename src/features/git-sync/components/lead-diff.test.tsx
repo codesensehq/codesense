@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import sampleDay from "../../../../tests/fixtures/sample-day-1402.json";
 import { useWorktreeRosterStore } from "@/features/viewer/stores/worktree-roster-store";
 import { useAgentStateStore } from "@/shared/stores/agent-state-store";
+import { useOrgStore } from "@/shared/stores/org-store";
 import { useViewerStore } from "@/shared/stores/viewer-store";
 
 import type { LeadBranch, LeadDiff as LeadDiffData } from "../lib/types";
@@ -27,9 +28,21 @@ vi.mock("../lib/publish-set-source", () => ({ getLeadDiff: reads.getLeadDiff }))
 vi.mock("../lib/file-redline-source", () => ({ getFileRedline: reads.getFileRedline }));
 const panes = vi.hoisted(() => ({ renders: 0 }));
 vi.mock("@/features/viewer/components/source-diff-overlay", () => ({
-  SourceDiffPane: ({ filePath, after }: { filePath: string; after: string | null }) => {
+  SourceDiffPane: ({
+    filePath,
+    after,
+    status,
+  }: {
+    filePath: string;
+    after: string | null;
+    status: string;
+  }) => {
     panes.renders++;
-    return <div data-testid="file-diff">{`${filePath}: ${after ?? "…"}`}</div>;
+    return (
+      <div data-testid="file-diff" data-status={status}>
+        {`${filePath}: ${after ?? "…"}`}
+      </div>
+    );
   },
 }));
 
@@ -38,6 +51,8 @@ const { leadChanges, expect: expected } = sampleDay;
 const counts = Object.fromEntries(leadChanges.branches.map((b) => [b.worktree, b.files]));
 const OWN = "ctx/sprint-3";
 const [FIRST, SECOND] = ["ctx/431", "ctx/418"];
+// The app's git watch reports a branch head or ref move with the org root as its path.
+const ORG_ROOT = "/orgs/acme";
 
 function branch(name: string, own = false, extra: Partial<LeadBranch> = {}): LeadBranch {
   const n = counts[name]!;
@@ -54,6 +69,7 @@ function branch(name: string, own = false, extra: Partial<LeadBranch> = {}): Lea
     story: name,
     own,
     deleted: false,
+    error: null,
     files,
     ...extra,
   };
@@ -81,7 +97,7 @@ async function settle() {
   });
 }
 
-function moveHead(repoPath: string) {
+function moveHead(repoPath = ORG_ROOT) {
   act(() => {
     for (const h of moved.handlers) h({ payload: { repoPath, kinds: ["refs"] } });
   });
@@ -116,7 +132,14 @@ beforeEach(() => {
       path: `/wt/${b.story}`,
       branch: b.branch,
       name: b.story,
+      orgSlug: "acme",
     })) as never,
+  });
+  useOrgStore.setState({
+    orgs: [
+      { slug: "acme", org_root: ORG_ROOT },
+      { slug: "other", org_root: "/orgs/other" },
+    ] as never,
   });
 });
 
@@ -172,6 +195,45 @@ describe("LeadDiff", () => {
     expect(screen.getByText(`${SECOND} was deleted`)).toBeTruthy();
   });
 
+  it("names a branch that could not be read and still lists the others", async () => {
+    reads.getLeadDiff.mockResolvedValue({
+      ...DIFF,
+      branches: [branch(FIRST), branch(SECOND, false, { error: "no merge base", files: [] })],
+    });
+    render(<Probe shown />);
+    await settle();
+    expect(screen.getByText(`${SECOND} couldn't be read`)).toBeTruthy();
+    expect(screen.getAllByText("README.md")).toHaveLength(1);
+  });
+
+  it("reads an open file again on a head move, re-points it to the new diff, and closes it when gone", async () => {
+    let n = 0;
+    reads.getFileRedline.mockImplementation(async () => ({
+      status: "modified",
+      binary: false,
+      before: "base",
+      after: `read ${++n}`,
+    }));
+    render(<Probe shown />);
+    await settle();
+    fireEvent.click(screen.getAllByText("README.md")[0]!);
+    await settle();
+    expect(screen.getByTestId("file-diff").textContent).toBe("README.md: read 1");
+    // The new read lists the file with a new status: the pane follows it and reads again.
+    const first = branch(FIRST);
+    first.files[0] = { ...first.files[0]!, status: "added" };
+    reads.getLeadDiff.mockResolvedValue({ ...DIFF, branches: [first, branch(SECOND)] });
+    moveHead();
+    await settle();
+    expect(screen.getByTestId("file-diff").textContent).toBe("README.md: read 2");
+    expect(screen.getByTestId("file-diff").dataset.status).toBe("added");
+    // The next read no longer lists it: the file closes.
+    reads.getLeadDiff.mockResolvedValue({ ...DIFF, branches: [branch(SECOND)] });
+    moveHead();
+    await settle();
+    expect(screen.queryByTestId("file-diff")).toBeNull();
+  });
+
   it("makes no lead_diff call while hidden, and recomputes once per head move", async () => {
     const view = render(<Probe shown={false} />);
     await settle();
@@ -179,11 +241,16 @@ describe("LeadDiff", () => {
     view.rerender(<Probe shown />);
     await settle();
     expect(reads.getLeadDiff).toHaveBeenCalledTimes(1);
+    // The app never reports a worktree's own path or another org's root.
     moveHead(`/wt/${FIRST}`);
+    moveHead("/orgs/other");
+    await settle();
+    expect(reads.getLeadDiff).toHaveBeenCalledTimes(1);
+    moveHead();
     await settle();
     expect(reads.getLeadDiff).toHaveBeenCalledTimes(2);
     view.rerender(<Probe shown={false} />);
-    moveHead(`/wt/${SECOND}`);
+    moveHead();
     await settle();
     expect(reads.getLeadDiff).toHaveBeenCalledTimes(2);
     view.rerender(<Probe shown />);
@@ -213,7 +280,7 @@ describe("LeadDiff", () => {
         ],
       });
     });
-    moveHead("/wt/other");
+    moveHead("/orgs/other");
     await settle();
     expect(reads.getLeadDiff.mock.calls.length).toBe(before.calls);
     expect(screen.getAllByTestId("lead-diff-branch")[0]).toBe(lists[0]);

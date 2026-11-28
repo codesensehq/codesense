@@ -148,3 +148,50 @@ fn a_work_item_no_worktree_carries_reads_as_no_branches() {
     assert!(diff.branches.is_empty());
     assert_eq!(diff.lead, None);
 }
+
+#[test]
+fn a_branch_that_cannot_be_read_carries_its_error_and_the_rest_are_still_read() {
+    let fx = Fx::new();
+    write(&fx.team, "README.md", b"base\n");
+    let id = item("wi_00000000000000e5");
+    let kept = carry(fx.context("kept"), &id);
+    commit(&kept, &[("README.md", "kept\n")]);
+    // Its registration now names another checkout: the diff must not read that one.
+    let mut moved = carry(fx.context("moved"), &id);
+    moved.launch_cwd = kept.launch_cwd.clone();
+    // Its head shares no history with main, so its merge base cannot be found.
+    let lonely = carry(fx.context("lonely"), &id);
+    git(
+        &lonely.root,
+        &["checkout", "-q", "--orphan", "lonely-orphan"],
+    );
+    commit(&lonely, &[("README.md", "lonely\n")]);
+
+    let diff = lead_diff_impl(&[kept, moved, lonely], &id).unwrap();
+
+    let rows: Vec<_> = diff
+        .branches
+        .iter()
+        .map(|b| {
+            (
+                b.story.as_str(),
+                b.deleted,
+                b.error.is_some(),
+                b.files.len(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        rows,
+        [
+            ("kept", false, false, 1),
+            ("lonely", false, true, 0),
+            ("moved", false, true, 0),
+        ]
+    );
+    assert_eq!(
+        diff.branches[2].error.as_deref(),
+        Some("That context worktree's Git registration changed")
+    );
+    assert_eq!(diff.branches[0].files[0].branches, 1);
+}
