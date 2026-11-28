@@ -496,7 +496,9 @@ impl WindowRegistry {
 
     /// Creates a satellite entry with no items, no Layout and `pending` set, and sends it
     /// its first slice. Bumps no other window.
-    #[cfg(test)]
+    // A move opens its target with `add_pending_target`; only tests and the webdriver build's
+    // `e2e_open_window` open a bare satellite.
+    #[cfg(any(test, feature = "e2e-webdriver"))]
     pub fn add_satellite(
         &self,
         host: &impl WindowHost,

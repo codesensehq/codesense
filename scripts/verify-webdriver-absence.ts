@@ -34,6 +34,8 @@ export const MARKERS: readonly string[] = [
   "__CODESENSE_TERMINAL_WEBGL_E2E__",
   "__CODESENSE_WEFT_E2E__",
   "__CODESENSE_WINDOWS_E2E__",
+  // The two-window driver's command, which only its control names.
+  "e2e_open_window",
   // The satellite probe route: its results global and its marker.
   "__CODESENSE_PROBE_RESULTS__",
   "codesense-e2e-satellite-probe",

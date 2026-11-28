@@ -475,6 +475,15 @@ fn no_webdriver_code_outside_the_feature_gate() {
         "put test-only WebDriver code under #[cfg(feature = \"{FEATURE}\")]:\n{}",
         scan.hits.join("\n")
     );
+    // The scan sees the driver's commands, each defined once and registered once, so a scan
+    // that stopped reaching them would fail here rather than pass on nothing.
+    for name in ["e2e_open_window", "e2e_seed"] {
+        let seen = scan.commands.iter().filter(|c| *c == name).count();
+        assert_eq!(
+            seen, 2,
+            "{name}: seen {seen} times, not as one fn and one handler entry"
+        );
+    }
 }
 
 #[test]
