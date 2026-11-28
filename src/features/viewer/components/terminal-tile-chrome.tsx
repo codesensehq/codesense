@@ -363,10 +363,12 @@ export function TerminalTileChrome({
   const menuTab = contextMenu ? tabs.find((t) => t.id === contextMenu.tabId) : undefined;
   const menuTabEnded = useSessionEnd(menuTab?.sessionId ?? "", menuTab?.exit) !== null;
   const menuAgentLook = useTabAgentLook(menuTab?.sessionId);
-  const menuSessions = useAgentListProjectionStore((s) => s.sessions);
-  const menuAgent = menuTab
-    ? menuSessions?.find((r) => isFleetAgent(r) && r.sessionId === menuTab.sessionId)
-    : undefined;
+  // Only the right-clicked tab's agent: no other session's change redraws the chrome.
+  const menuAgent = useAgentListProjectionStore((s) =>
+    menuTab
+      ? s.sessions?.find((r) => isFleetAgent(r) && r.sessionId === menuTab.sessionId)
+      : undefined,
+  );
   const { requestStop, dialog: stopDialog } = useAgentStop();
   // SW-AGR-6: "Remind this agent…" on an interactive agent tab (saved or
   // unnamed, local or remote); its popover hangs from that tab's pill.
