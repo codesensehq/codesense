@@ -1345,9 +1345,6 @@ fn project_agent_views(model: &mut Model) -> Result<Vec<projection::Delta>, Stri
     Ok(deltas)
 }
 
-/// Recompute the needs-you set on the events that refresh its inputs (sessions, the Inbox
-/// and spend), never on a timer. An unchanged set publishes nothing.
-fn project_needs_you(model: &mut Model) -> Result<Vec<projection::Delta>, String> {
 /// Each session row's work item from the launch registry, keyed by handle as
 /// [`needs_you::hub_inputs`] reads it. A row with none is left out.
 fn work_items_by_handle(
@@ -1359,6 +1356,9 @@ fn work_items_by_handle(
         .collect()
 }
 
+/// Recompute the needs-you set on the events that refresh its inputs (sessions, the Inbox
+/// and spend), never on a timer. An unchanged set publishes nothing.
+fn project_needs_you(model: &mut Model) -> Result<Vec<projection::Delta>, String> {
     let sessions = TopicRegistry::snapshot(&mut model.projections, "sessions", "all")?.snapshot;
     let inputs = needs_you::hub_inputs(
         &model.rows,
