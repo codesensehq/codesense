@@ -4,9 +4,9 @@
  * (`viewer.settings.tiles`) and the remote kill, and this reads that boot value once, so the
  * front end and the app agree for the whole session. A failed read is off.
  *
- * Every tile-file writer and the tile host's mount await `tilesEnabled()` and are listed in
- * `tiles-flag-sites.json`, beside the app files that check `TilesFlag::is_on`; with the flag
- * off the app is today's app and no tile code writes any file.
+ * Every tile-file writer and the tile host's mount call `tilesEnabled()` and are listed in
+ * `tiles-flag-sites.json`; with the flag off the app is today's app and no tile code writes
+ * any file.
  */
 import { getTilesEnabled } from "@/tauri/commands";
 

@@ -190,9 +190,8 @@ agree for the whole session. A kill takes effect from the next launch.
 
 With the flag off the app is today's app on untouched old state, and no tile
 code writes any file. Every file that writes a tile file or mounts the tile host
-awaits `tilesEnabled()`, every app file that publishes tile state calls
-`TilesFlag::is_on` outside its tests, and each is listed in
-`src/shared/lib/tiles-flag-sites.json`, one entry per file:
+calls `tilesEnabled()` and is listed in `src/shared/lib/tiles-flag-sites.json`,
+one entry per file:
 
 ```json
 [{ "file": "src/features/tiles/save-layout.ts", "what": "writes the tile layout file" }]
