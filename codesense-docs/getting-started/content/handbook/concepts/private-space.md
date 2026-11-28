@@ -57,6 +57,14 @@ split, and a restart opens them exactly as you left them.
   If another window saved first, yours is applied on top of what it saved. If an
   agent changed the same tile in the meantime, your window shows the agent's
   change and you repeat yours.
+- A change another window or an agent saves shows in your open window at once,
+  in that arrangement only: the tiles it didn't touch don't redraw, and an
+  arrangement you don't have on screen changes nothing you see.
+- A window keeps up to three pinned tiles. They're saved with the arrangements
+  of the org you're in, under the window's own name, so a window that reopens
+  under the same name gets its pins back, and the pins of a window that isn't
+  open are kept. For now, pins belong to the org you pinned them in: switch to
+  another org and the window shows that org's pins instead.
 - With the preview on, a window opens each arrangement from its saved file. An
   arrangement that has no file yet opens as it did before, and gets its file
   the first time you change it.
