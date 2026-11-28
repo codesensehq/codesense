@@ -582,9 +582,17 @@ function argObject(args: unknown, verb: string): Record<string, unknown> {
   return args as Record<string, unknown>;
 }
 
-/** A topic is a string, as the native dispatcher checks it: String() would turn ["inbox"] into "inbox". */
+/** The live topics only the host reads, as `HOST_ONLY_TOPICS` in the Rust live hub
+ * (`live_hub/projection.rs`): a group's tree names every tile a person has arranged. */
+const HOST_ONLY_TOPICS: readonly string[] = ["group", "groups"];
+
+/** A topic is a string, as the native dispatcher checks it: String() would turn ["inbox"] into "inbox".
+ * It is never a host-only topic, so `subscribe`, `page`, `unsubscribe` and `setUiState` refuse
+ * those before the live frame. */
 function topicArg(a: Record<string, unknown>, verb: string): string {
   if (typeof a.topic !== "string") throw new Error(`invalid: ${verb} topic must be a string`);
+  if (HOST_ONLY_TOPICS.includes(a.topic))
+    throw new Error(`denied: ${verb}: ${a.topic} is a host-only topic`);
   return a.topic;
 }
 

@@ -568,6 +568,42 @@ describe("runBridgeCommand", () => {
   });
 });
 
+describe("host-only topics", () => {
+  const rust = readFileSync(
+    resolve(__dirname, "../../../../src-tauri/src/live_hub/groups.rs"),
+    "utf8",
+  );
+  const hostOnly = [...rust.matchAll(/pub const GROUPS?: &str = "([^"]+)";/g)].map((m) => m[1]);
+
+  it("names the same topics as the Rust live hub", () => {
+    expect(hostOnly).toEqual(["group", "groups"]);
+  });
+
+  it.each(["subscribe", "page", "unsubscribe", "setUiState"])(
+    "%s refuses a host-only topic before it reaches the live frame",
+    async (verb) => {
+      for (const topic of hostOnly) {
+        const liveFrame = vi.fn(async () => ({}) as never);
+        await expect(
+          runBridgeCommand(verb, { topic, cursor: "c", patch: {} }, { liveFrame }),
+        ).rejects.toThrow(`denied: ${verb}: ${topic} is a host-only topic`);
+        expect(liveFrame).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it("still lets a page subscribe to an ordinary topic", async () => {
+    const subscribe = vi.fn(async () => ({ topic: "sessions", rev: 1, snapshot: [] }));
+    const ctx = { liveFrame: async () => ({ subscribe }) as never };
+    await expect(runBridgeCommand("subscribe", { topic: "sessions" }, ctx)).resolves.toEqual({
+      topic: "sessions",
+      rev: 1,
+      snapshot: [],
+    });
+    expect(subscribe).toHaveBeenCalledWith("sessions", undefined, undefined);
+  });
+});
+
 // ── SW-DX-6 action verbs ────────────────────────────────────────────────────
 describe("setStatus action verb", () => {
   it("flips status via applyMetadataEdit with the setField variant (single path)", async () => {

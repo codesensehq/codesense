@@ -1,5 +1,5 @@
 {
-  "about": "The leaf-id grammar's cases: each tile ref, the layer it is stored in and whether it is valid there. Read by the Rust validator's tests and by every check of a tile key.",
+  "about": "The leaf-id grammar's cases: each tile ref, the layer it is stored in and whether it is valid there. Read by the Rust validator's tests and by every check of a tile key. `tiles` holds the tile-key cases: a saved leaf of each kind and the key it reads back as, in TS and Rust.",
   "refs": [
     { "leaf": "agent:core/dev", "layer": "private", "valid": true },
     { "leaf": "agent:core/dev", "layer": "shared", "valid": true },
@@ -65,5 +65,37 @@
     { "id": "ws-1", "workspaceId": "ws-2", "valid": false, "why": "id and workspaceId differ" },
     { "id": "ws-1", "valid": false, "why": "no workspaceId" },
     { "workspaceId": "ws-1", "valid": false, "why": "no id" }
+  ],
+  "tiles": [
+    {
+      "leaf": { "kind": "leaf", "id": "agent:core/dev", "workspaceId": "agent:core/dev" },
+      "layer": "shared",
+      "key": "agent:core/dev"
+    },
+    {
+      "leaf": { "kind": "leaf", "id": "doc:core/notes/plan.md", "workspaceId": "doc:core/notes/plan.md" },
+      "layer": "shared",
+      "key": "doc:core/notes/plan.md"
+    },
+    {
+      "leaf": { "kind": "leaf", "id": "generic:/home/me/code/app", "workspaceId": "generic:/home/me/code/app" },
+      "layer": "private",
+      "key": "generic:/home/me/code/app"
+    },
+    {
+      "leaf": { "kind": "leaf", "id": "ws-1a2b3c", "workspaceId": "ws-1a2b3c" },
+      "layer": "private",
+      "key": "ws-1a2b3c"
+    },
+    {
+      "leaf": { "kind": "leaf", "id": "tab_7F3e", "workspaceId": "tab_7F3e" },
+      "layer": "private",
+      "key": "tab_7F3e"
+    },
+    {
+      "leaf": { "kind": "leaf", "id": "AB-12-tile-keys.story", "workspaceId": "AB-12-tile-keys.story" },
+      "layer": "private",
+      "key": "AB-12-tile-keys.story"
+    }
   ]
 }

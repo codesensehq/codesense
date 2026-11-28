@@ -190,7 +190,7 @@ agree for the whole session. A kill takes effect from the next launch.
 
 With the flag off the app is today's app on untouched old state, and no tile
 code writes any file. Every file that writes a tile file or mounts the tile host
-calls `tilesEnabled()` and is listed in `src/shared/lib/tiles-flag-sites.json`,
+awaits `tilesEnabled()` and is listed in `src/shared/lib/tiles-flag-sites.json`,
 one entry per file:
 
 ```json
@@ -198,7 +198,7 @@ one entry per file:
 ```
 
 `tiles-flag.guard.test.ts` (in `pnpm test:docs-gate`) fails if a listed file
-doesn't call `tilesEnabled()` in code; a mention in a comment or a string
+doesn't await `tilesEnabled()` in code; a mention in a comment or a string
 doesn't count.
 
 A Rust site is one entry per function, whose first statement returns when the

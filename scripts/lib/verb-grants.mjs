@@ -24,6 +24,11 @@ export function conditionalVerbGrants(app, verbs) {
     const end = matchBracket(source, open);
     const condition = source.slice(start, open);
     const body = source.slice(open + 1, end - 1);
+    // The host-only topics' branch grants nothing: no frame reaches them, so no page row.
+    if (/^return\s+HOST_ONLY\s*;$/.test(body.trim())) {
+      offset = end;
+      continue;
+    }
     const names = stringLiterals(
       condition.match(/matches!\((?:self\.name\.as_str\(\)|&\*self\.name),([\s\S]*?)\)/)?.[1] ?? "",
     );
