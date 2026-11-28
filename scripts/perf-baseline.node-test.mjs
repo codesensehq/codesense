@@ -574,8 +574,9 @@ test("case 12: the committed M1 numbers pass compare against themselves", (t) =>
 
 const BUDGET = { runner: "m1", p95Ms: 200, keys: ["open_warm"] };
 
-/** An m1 set whose warm open has p50 156, with the budget block or without it. */
-function budgeted({ budget = BUDGET, keys = ["open_warm"] } = {}) {
+/** An m1 set whose warm open has p50 156; `budget: undefined` leaves the budget block out. */
+function budgeted(options = {}) {
+  const { budget, keys = ["open_warm"] } = { budget: BUDGET, ...options };
   const file = baseline({
     keys,
     sets: [
@@ -595,4 +596,38 @@ test("budget: the committed file holds the open-time budget for both open keys o
   // Each key is checked against the m1 set itself, not against `compare.keys`.
   for (const key of file.budget.keys) assert.ok(m1.keys[key], `m1 has ${key}`);
   assert.doesNotMatch(JSON.stringify(file.budget), /[A-Z]{2,}-[A-Z]*-?\d+/);
+});
+
+test("budget: a p95 over the budget fails even when the median stays inside tolerance", () => {
+  const out = compare(budgeted(), current({ open_warm: ms([156, 156, 156, 156, 230]) }), {
+    runner: "m1",
+  });
+  assert.equal(out.exitCode, 1);
+  assert.equal(out.rows.length, 1);
+  assert.equal(out.rows[0].fail, false);
+  assert.deepEqual(out.lines, [
+    "PASS open_warm 156ms (p50 156, limit 187.2, +0%, team-switch)",
+    "FAIL open_warm p95 230ms > budget 200",
+    "perf compare m1: FAIL budget: open_warm p95 230ms",
+  ]);
+  assert.equal(out.verdict, "perf compare m1: FAIL budget: open_warm p95 230ms");
+});
+
+test("budget: a budget key missing from the current file is an input error", () => {
+  const file = budgeted({ budget: { ...BUDGET, keys: ["open_warm", "open_cold"] } });
+  assert.throws(
+    () => compare(file, current({ open_warm: ms([156, 156, 156]) }), { runner: "m1" }),
+    (err) => err.exitCode === 2 && /open_cold: not in the current file/.test(err.message),
+  );
+});
+
+test("budget: another runner, or a file with no block, compares exactly as before", () => {
+  const measured = current({ open_warm: ms([156, 156, 156, 156, 990]) });
+  const before = compare(budgeted({ budget: undefined }), measured, { runner: "macos-15" });
+  assert.deepEqual(compare(budgeted(), measured, { runner: "macos-15" }), before);
+  assert.equal(before.exitCode, 0);
+  // m1 with no block: no budget pass at all.
+  const m1 = compare(budgeted({ budget: undefined }), measured, { runner: "m1" });
+  assert.equal(m1.exitCode, 0);
+  assert.equal(m1.verdict, "perf compare m1: PASS 1/1 (tol 20%, 5 runs)");
 });
