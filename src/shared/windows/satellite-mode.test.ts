@@ -222,10 +222,11 @@ describe("a satellite registers listeners by their inventory class", () => {
     const { unmount } = renderHook(() => useSatellitePathRefresh());
     await vi.waitFor(() => expect(bus.get(CONTEXT_FILE_CHANGE_EVENT)?.size).toBe(1));
 
+    const held = () => useFileRefreshStore.getState().contentRefreshKeys["team:acme:docs"];
     deliver(CONTEXT_FILE_CHANGE_EVENT, { repo_path: REPO, file_path: `${REPO}/b.md` });
-    expect(useFileRefreshStore.getState().contentRefreshKeys[REPO]).toBeUndefined();
+    expect(held()).toBeUndefined();
     deliver(CONTEXT_FILE_CHANGE_EVENT, { repo_path: REPO, file_path: `${REPO}/a.md` });
-    expect(useFileRefreshStore.getState().contentRefreshKeys[REPO]).toBe(1);
+    expect(held()).toBe(1);
     unmount();
     uninstall();
   });

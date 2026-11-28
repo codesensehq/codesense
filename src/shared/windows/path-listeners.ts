@@ -5,19 +5,23 @@
  * Tauri hands a global `listen` every emit whatever its target, so a satellite checks the
  * payload against its own items (`ownsPathEvent`) before it refreshes.
  *
- * The refresh is `main`'s own bump without its debounce: a satellite holds one item, so
- * one change is one bump of its own file-refresh store, which its viewer reads.
+ * The refresh bumps, in the window's own file-refresh store, the key each covered item's
+ * viewer reads (`refreshKeyForItem`). The key comes from the item alone, since a satellite
+ * loads no org list: the key `main`'s viewer reads for the same file, `team:{org}:{team}`,
+ * or a private file's content root. There is no debounce: a satellite holds one item.
  */
 import type { Event } from "@tauri-apps/api/event";
 import { useEffect } from "react";
 
-import { bumpKeyForContextFileChange } from "@/shared/lib/build-synthetic-repo";
+import { teamAllContextId } from "@/shared/lib/context-model";
+import { parseTeamKey } from "@/shared/lib/parse-team-key";
 import { isWithin } from "@/shared/lib/path";
+import { privateFile } from "@/shared/lib/private-file";
 import { bumpFileRefreshForSourceRepo } from "@/shared/lib/refresh-for-source-repo";
 import { safeUnlisten } from "@/shared/lib/tauri-listeners";
 import { CONTEXT_FILE_CHANGE_EVENT, type ContextFileChangePayload } from "@/tauri/events";
 
-import { TAB_ITEM_KIND } from "./item-key";
+import { TAB_ITEM_KIND, type ItemKey } from "./item-key";
 import { listenScoped } from "./listen-scoped";
 import { sliceSource } from "./slice";
 
@@ -27,21 +31,38 @@ function tabPath(id: string): string {
   return query === -1 ? id : id.slice(0, query);
 }
 
-/** True when this window's slice holds a tab the change covers: the changed path is the
- *  tab's path, or a directory or root that contains it. */
-export function ownsPathEvent(payload: ContextFileChangePayload): boolean {
-  const changed = payload.file_path;
-  if (!changed) return false;
-  const items = sliceSource().current()?.items ?? [];
-  return items.some((item) => item.kind === TAB_ITEM_KIND && isWithin(changed, tabPath(item.id)));
+/** The refresh key a tab item's viewer reads, from the item alone: a private file's content
+ *  root, else its team's content (`main` reads the same key for the same file). `""` for a
+ *  team key with no team. */
+export function refreshKeyForItem(item: ItemKey): string {
+  const contentRoot = privateFile(tabPath(item.id))?.contentRoot;
+  if (contentRoot) return contentRoot;
+  const { orgSlug, teamName } = parseTeamKey(item.team);
+  return teamName ? teamAllContextId(orgSlug, teamName) : "";
 }
 
-/** Bumps the refresh key the change resolves to, with the changed path, as `main` does. */
+/** The tabs this window's slice holds that the change covers: the changed path is the
+ *  tab's path, or a directory or root that contains it. */
+function coveredTabs(payload: ContextFileChangePayload): ItemKey[] {
+  const changed = payload.file_path;
+  if (!changed) return [];
+  const items = sliceSource().current()?.items ?? [];
+  return items.filter((item) => item.kind === TAB_ITEM_KIND && isWithin(changed, tabPath(item.id)));
+}
+
+/** True when this window's slice holds a tab the change covers. */
+export function ownsPathEvent(payload: ContextFileChangePayload): boolean {
+  return coveredTabs(payload).length > 0;
+}
+
+/** Bumps the key each covered tab's viewer reads, with the changed path. */
 export function refreshItem(event: Event<ContextFileChangePayload>): void {
-  const key = bumpKeyForContextFileChange(event.payload);
-  if (key === null) return;
   const { file_path } = event.payload;
-  bumpFileRefreshForSourceRepo(key, file_path ? new Set([file_path]) : undefined);
+  if (!file_path) return;
+  const keys = new Set(coveredTabs(event.payload).map(refreshKeyForItem));
+  for (const key of keys) {
+    if (key) bumpFileRefreshForSourceRepo(key, new Set([file_path]));
+  }
 }
 
 /** Refreshes this satellite's held item when its file changes outside the window. */

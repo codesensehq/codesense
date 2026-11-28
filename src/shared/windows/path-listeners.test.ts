@@ -39,13 +39,19 @@ vi.mock("@/shared/components/code-editor", async (importActual) => {
 });
 
 import { fileContentCache } from "@/shared/lib/file-content-cache";
+import { teamContentIdentityForPath } from "@/shared/lib/team-content-context";
 import { useFileRefreshStore } from "@/shared/stores/file-refresh-store";
 import { useOrgStore } from "@/shared/stores/org-store";
 import type { Org } from "@/shared/types/domain";
 import { CONTEXT_FILE_CHANGE_EVENT, type ContextFileChangePayload } from "@/tauri/events";
 
 import type { ItemKey } from "./item-key";
-import { ownsPathEvent, refreshItem, useSatellitePathRefresh } from "./path-listeners";
+import {
+  ownsPathEvent,
+  refreshItem,
+  refreshKeyForItem,
+  useSatellitePathRefresh,
+} from "./path-listeners";
 import { SatelliteRoot } from "./satellite-root";
 import { installSliceSource, type SliceSource } from "./slice";
 
@@ -70,11 +76,13 @@ function deliver(payload: ContextFileChangePayload) {
   for (const handler of bus.get(CONTEXT_FILE_CHANGE_EVENT) ?? []) handler({ payload });
 }
 
-const refreshes = () => useFileRefreshStore.getState().contentRefreshKeys["/repo"] ?? 0;
+const refreshes = () => useFileRefreshStore.getState().contentRefreshKeys["team:acme:docs"] ?? 0;
 
 beforeEach(() => {
   host.main = false;
   bus.clear();
+  // A satellite loads no org list.
+  useOrgStore.setState({ orgs: [], discoveryComplete: false });
   useFileRefreshStore.setState({
     fileRefreshKeys: {},
     lastChangedContextFile: {},
@@ -117,16 +125,51 @@ describe("ownsPathEvent", () => {
   });
 });
 
-describe("refreshItem", () => {
-  it("bumps the change's repo with the changed path", () => {
-    refreshItem({ event: CONTEXT_FILE_CHANGE_EVENT, id: 1, payload: change("/repo/notes/a.md") });
-    const state = useFileRefreshStore.getState();
-    expect(state.contentRefreshKeys["/repo"]).toBe(1);
-    expect(state.lastChangedContextFile["/repo"]).toEqual(new Set(["/repo/notes/a.md"]));
+const PRIVATE = "/home/u/.cs/users/42/scratch/orgs/acme/docs/content/p.ts";
+const PRIVATE_ROOT = "/home/u/.cs/users/42/scratch/orgs/acme/docs/content";
+
+describe("refreshKeyForItem", () => {
+  it("is the team's content key, or a private file's content root, with no org list", () => {
+    expect(useOrgStore.getState().orgs).toEqual([]);
+    expect(refreshKeyForItem(tab("/repo/notes/a.md?x=1"))).toBe("team:acme:docs");
+    expect(refreshKeyForItem(tab(PRIVATE))).toBe(PRIVATE_ROOT);
+    expect(refreshKeyForItem({ kind: "tab", team: "acme:_none", id: "/repo/a.md" })).toBe("");
   });
 
-  it("bumps nothing when the change resolves to no key", () => {
-    refreshItem({ event: CONTEXT_FILE_CHANGE_EVENT, id: 1, payload: change(undefined, "") });
+  it("is the key main's viewer reads for the same file once the org list is loaded", () => {
+    const orgs = [
+      {
+        slug: "acme",
+        display_name: "Acme",
+        org_root: "/orgs/acme",
+        teams: [{ name: "docs", source_repos: [] }],
+      } as unknown as Org,
+    ];
+    const file = "/orgs/acme/docs/content/a.md";
+    expect(teamContentIdentityForPath(file, orgs)).toBe(refreshKeyForItem(tab(file)));
+  });
+});
+
+describe("refreshItem", () => {
+  it("bumps the held tab's key with the changed path", () => {
+    holding(tab("/repo/notes/a.md"));
+    refreshItem({ event: CONTEXT_FILE_CHANGE_EVENT, id: 1, payload: change("/repo/notes/a.md") });
+    const state = useFileRefreshStore.getState();
+    expect(state.contentRefreshKeys["team:acme:docs"]).toBe(1);
+    expect(state.lastChangedContextFile["team:acme:docs"]).toEqual(new Set(["/repo/notes/a.md"]));
+    expect(state.contentRefreshKeys["/repo"]).toBeUndefined();
+  });
+
+  it("bumps a private tab's content root", () => {
+    holding(tab(PRIVATE));
+    refreshItem({ event: CONTEXT_FILE_CHANGE_EVENT, id: 1, payload: change(PRIVATE, "") });
+    expect(useFileRefreshStore.getState().contentRefreshKeys[PRIVATE_ROOT]).toBe(1);
+  });
+
+  it("bumps nothing with no path or no covered tab", () => {
+    holding(tab("/repo/notes/a.md"));
+    refreshItem({ event: CONTEXT_FILE_CHANGE_EVENT, id: 1, payload: change(undefined) });
+    refreshItem({ event: CONTEXT_FILE_CHANGE_EVENT, id: 1, payload: change("/repo/notes/b.md") });
     expect(useFileRefreshStore.getState().contentRefreshKeys).toEqual({});
   });
 });
@@ -159,20 +202,7 @@ describe("useSatellitePathRefresh in a satellite", () => {
 });
 
 describe("a satellite's viewer", () => {
-  const FILE = "/orgs/acme/docs/content/a.ts";
-
-  it("re-reads its held file when that file changes, on the key main's viewer reads", async () => {
-    useOrgStore.setState({
-      orgs: [
-        {
-          slug: "acme",
-          display_name: "Acme",
-          org_root: "/orgs/acme",
-          teams: [{ name: "docs", source_repos: [] }],
-        } as unknown as Org,
-      ],
-      discoveryComplete: true,
-    });
+  async function showing(file: string) {
     fileContentCache.clear();
     reads.count = 0;
     const slice = {
@@ -180,18 +210,33 @@ describe("a satellite's viewer", () => {
       kind: "satellite",
       version: 1,
       layoutRef: null,
-      items: [tab(FILE)],
+      items: [tab(file)],
     };
     const source: SliceSource = { current: () => slice, subscribe: () => () => {} };
-    const { unmount } = render(createElement(SatelliteRoot, { source }));
+    const view = render(createElement(SatelliteRoot, { source }));
     await screen.findByText("read 1");
     await vi.waitFor(() => expect(bus.get(CONTEXT_FILE_CHANGE_EVENT)?.size).toBe(1));
+    return view;
+  }
+
+  it("re-reads its held file when that file changes, with no org list loaded", async () => {
+    const file = "/orgs/acme/docs/content/a.ts";
+    const { unmount } = await showing(file);
+    expect(useOrgStore.getState().orgs).toEqual([]);
 
     deliver(change("/orgs/acme/docs/content/b.ts", ""));
-    deliver(change(FILE, ""));
+    deliver(change(file, ""));
     await screen.findByText("read 2");
     expect(reads.count).toBe(2);
     expect(useFileRefreshStore.getState().contentRefreshKeys["team:acme:docs"]).toBe(1);
+    unmount();
+  });
+
+  it("re-reads a held private file when it changes", async () => {
+    const { unmount } = await showing(PRIVATE);
+    deliver(change(PRIVATE, ""));
+    await screen.findByText("read 2");
+    expect(useFileRefreshStore.getState().contentRefreshKeys[PRIVATE_ROOT]).toBe(1);
     unmount();
   });
 });
