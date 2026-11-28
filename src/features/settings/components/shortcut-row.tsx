@@ -15,9 +15,8 @@ import {
   hasCommandModifier,
   hasCtrlAndCmd,
   hasMod,
-  isMac,
+  isCtrlChordUnavailable,
   keystrokeFromEvent,
-  parseKeystroke,
 } from "@/shared/lib/shortcuts/keystroke";
 import {
   findConflict,
@@ -180,7 +179,7 @@ export function ShortcutRow({ action, humanOnly }: ShortcutRowProps) {
     const keystroke = keystrokeFromEvent(e.nativeEvent);
     if (!keystroke) return;
     // ⌃ held with ⌘ is a macOS chord: elsewhere it would never fire.
-    if (!isMac() && parseKeystroke(keystroke).ctrl) {
+    if (isCtrlChordUnavailable(keystroke)) {
       setError({ detail: "Ctrl with the Meta key works only on macOS — pick another chord" });
       return;
     }

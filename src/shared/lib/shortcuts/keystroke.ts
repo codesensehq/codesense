@@ -129,6 +129,11 @@ export function hasCtrlAndCmd(e: ModifierState): boolean {
   return !!(e.metaKey && e.ctrlKey);
 }
 
+/** A keystroke that names Ctrl with Cmd while this OS has no such chord, so it could never fire. */
+export function isCtrlChordUnavailable(keystroke: string): boolean {
+  return !isMac() && parseKeystroke(keystroke).ctrl;
+}
+
 /** The Meta key itself: a macOS Cmd feature that stays Cmd-only. */
 export function hasCmd(e: ModifierState): boolean {
   return !!e.metaKey;
