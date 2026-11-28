@@ -240,12 +240,12 @@ impl VerbSpec {
     pub fn required_capability(&self, caller: &super::Caller, args: &Value) -> &str {
         // A group's tree names every tile a person has arranged: those topics are the host's.
         if matches!(
-            self.name.as_str(),
+            &*self.name,
             "subscribe" | "unsubscribe" | "page" | "setUiState"
-        ) && args["topic"]
-            .as_str()
-            .is_some_and(crate::live_hub::projection::host_only)
-        {
+        ) && matches!(
+            &args["topic"],
+            Value::String(topic) if crate::live_hub::projection::host_only(topic)
+        ) {
             return HOST_ONLY;
         }
         if matches!(self.name.as_str(), "subscribe" | "unsubscribe" | "page")
