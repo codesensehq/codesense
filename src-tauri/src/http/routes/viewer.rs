@@ -3070,6 +3070,69 @@ mod caller_scope_tests {
         });
     }
 
+    // A web view on macOS reaches a frame through a CONNECT tunnel into the
+    // API listener. The viewer sends a frame's media whole (it has no byte
+    // ranges), and the tunnel carries it unchanged.
+    #[test]
+    fn a_frame_media_file_loads_whole_through_a_tunnel() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let f = AppFixture::new();
+        f.app.manage(crate::http::HttpApiPort(9321));
+        let page = f.fixture.path("parent", "panes/parent.html");
+        let clip = include_bytes!("../../../../tests/frame-security/fixtures/black.mp4");
+        std::fs::write(page.with_file_name("clip.mp4"), clip).unwrap();
+        let repo = git2::Repository::init(&f.fixture.root).unwrap();
+        let mut index = repo.index().unwrap();
+        for path in ["parent/panes/parent.html", "parent/panes/clip.mp4"] {
+            index.add_path(std::path::Path::new(path)).unwrap();
+        }
+        let oid = index.write_tree().unwrap();
+        let tree = repo.find_tree(oid).unwrap();
+        let sig = git2::Signature::now("fixture", "fixture@example.com").unwrap();
+        let commit = repo
+            .commit(Some("HEAD"), &sig, &sig, "fixture", &tree, &[])
+            .unwrap();
+        repo.reference("refs/remotes/origin/main", commit, true, "fixture")
+            .unwrap();
+        let frame = f.frame_for_team(&page, "workspace", "parent");
+        let router = frame_routes(&f);
+        let host = frame.origin.trim_start_matches("http://");
+        let root = URL_SAFE_NO_PAD.encode(page.parent().unwrap().to_string_lossy().as_bytes());
+        let read = tauri::async_runtime::block_on(async {
+            let (mut client, server) = tokio::io::duplex(64 * 1024);
+            tokio::spawn(crate::http::tunnel::serve_test_connection(
+                router, 9321, server,
+            ));
+            let request = format!(
+                "CONNECT {host} HTTP/1.1\r\nhost: {host}\r\n\r\n\
+                 GET /viewer/{root}/clip.mp4 HTTP/1.1\r\nhost: {host}\r\norigin: {}\r\n\
+                 x-codesense-proxy-token: {}\r\nconnection: close\r\n\r\n",
+                frame.origin, frame.token
+            );
+            client.write_all(request.as_bytes()).await.unwrap();
+            let mut read = Vec::new();
+            tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                client.read_to_end(&mut read),
+            )
+            .await
+            .expect("the server closes")
+            .unwrap();
+            read
+        });
+        let connected = read.windows(4).position(|w| w == b"\r\n\r\n").unwrap() + 4;
+        assert!(read.starts_with(b"HTTP/1.1 200 "));
+        let response = &read[connected..];
+        let head_end = response.windows(4).position(|w| w == b"\r\n\r\n").unwrap() + 4;
+        let head = String::from_utf8_lossy(&response[..head_end]);
+        assert!(head.starts_with("HTTP/1.1 200 "), "{head}");
+        assert!(
+            head.contains(&format!("content-length: {}\r\n", clip.len())),
+            "{head}"
+        );
+        assert_eq!(&response[head_end..], clip);
+    }
+
     /// The authenticated byte routes (`/viewer`, `/pane`, `/viewer-baseline`)
     /// behind the frame boundary, as the HTTP server mounts them.
     fn frame_routes(f: &AppFixture) -> Router {

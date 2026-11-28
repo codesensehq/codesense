@@ -392,6 +392,15 @@ fn refuse(status: StatusCode) -> Response<Body> {
     response
 }
 
+/// Serves one client connection on `io` as the API listener at `port` does.
+#[cfg(test)]
+pub(crate) async fn serve_test_connection<I>(router: Router, port: u16, io: I)
+where
+    I: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
+    Api::new(router, port).serve_connection(io).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -425,16 +434,19 @@ mod tests {
             FramePolicy::default(),
             None,
         );
-        let router = Router::new().route(
-            "/echo",
-            axum::routing::get(|uri: Uri, headers: HeaderMap| async move {
-                let mut echo = format!("{uri}\n");
-                for (name, value) in &headers {
-                    echo += &format!("{name}: {}\n", value.to_str().unwrap());
-                }
-                echo
-            }),
-        );
+        let router = Router::new()
+            .route(
+                "/echo",
+                axum::routing::get(|uri: Uri, headers: HeaderMap| async move {
+                    let mut echo = format!("{uri}\n");
+                    for (name, value) in &headers {
+                        echo += &format!("{name}: {}\n", value.to_str().unwrap());
+                    }
+                    echo
+                }),
+            )
+            .route("/media", axum::routing::get(media))
+            .route("/stream", axum::routing::get(stream));
         let router = with_boundary(
             router,
             FrameBoundary {
@@ -445,6 +457,51 @@ mod tests {
         );
         let host = frame.origin.trim_start_matches("http://").to_owned();
         (Api::new(router, PORT), host, frame.token)
+    }
+
+    /// The bytes `/media` serves.
+    fn clip() -> Vec<u8> {
+        (0..1000).map(|i| (i % 251) as u8).collect()
+    }
+
+    /// Media with byte ranges, as a media server answers them. The viewer's
+    /// own media routes send the whole file; this proves a tunnel carries a
+    /// range request and its 206 untouched.
+    async fn media(headers: HeaderMap) -> axum::response::Response {
+        use axum::response::IntoResponse;
+        let clip = clip();
+        let range = headers
+            .get(header::RANGE)
+            .and_then(|range| range.to_str().ok()?.strip_prefix("bytes=")?.split_once('-'))
+            .and_then(|(start, end)| {
+                Some((start.parse::<usize>().ok()?, end.parse::<usize>().ok()?))
+            });
+        match range {
+            Some((start, end)) if start <= end && end < clip.len() => (
+                StatusCode::PARTIAL_CONTENT,
+                [(
+                    header::CONTENT_RANGE,
+                    format!("bytes {start}-{end}/{}", clip.len()),
+                )],
+                clip[start..=end].to_vec(),
+            )
+                .into_response(),
+            _ => clip.into_response(),
+        }
+    }
+
+    /// Chunks of the streamed body, one a minute.
+    const CHUNKS: u32 = 7;
+
+    /// A body that takes longer than the idle timeout, a chunk a minute.
+    async fn stream() -> Body {
+        Body::from_stream(futures_util::stream::unfold(0, |sent| async move {
+            if sent == CHUNKS {
+                return None;
+            }
+            tokio::time::sleep(Duration::from_secs(60)).await;
+            Some((Ok::<_, Infallible>(format!("chunk-{sent};")), sent + 1))
+        }))
     }
 
     /// A client connection to `api`.
@@ -819,5 +876,85 @@ mod tests {
         let error = idle.read(&mut byte).await.unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::TimedOut);
         assert!(start.elapsed() >= limit && start.elapsed() < limit + Duration::from_secs(1));
+    }
+
+    #[tokio::test]
+    async fn a_range_request_through_a_tunnel_gets_its_206() {
+        let (api, host, _) = api();
+        // A media element's request: same-origin, no capability header.
+        let inner = format!(
+            "GET /media HTTP/1.1\r\nhost: {host}\r\nrange: bytes=0-99\r\n\
+             sec-fetch-dest: video\r\nsec-fetch-site: same-origin\r\nconnection: close\r\n\r\n"
+        );
+        let mut client = connect(api);
+        client
+            .write_all((connect_head(&host) + &inner).as_bytes())
+            .await
+            .unwrap();
+        assert_eq!(statuses(&read_head(&mut client).await), [200]);
+        let head = read_head(&mut client).await;
+        assert_eq!(statuses(&head), [206], "{head}");
+        assert!(
+            head.contains("content-range: bytes 0-99/1000\r\n"),
+            "{head}"
+        );
+        let mut body = Vec::new();
+        client.read_to_end(&mut body).await.unwrap();
+        assert_eq!(body, clip()[..100]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_body_longer_than_the_idle_timeout_arrives_whole_while_it_flows() {
+        let (api, host, token) = api();
+        let mut client = connect(api);
+        client
+            .write_all((connect_head(&host) + &echo_request("/stream", &host, &token)).as_bytes())
+            .await
+            .unwrap();
+        let start = Instant::now();
+        let mut read = Vec::new();
+        client.read_to_end(&mut read).await.unwrap();
+        let read = String::from_utf8(read).unwrap();
+        assert!(start.elapsed() >= Duration::from_secs(60 * u64::from(CHUNKS)));
+        assert!(start.elapsed() > IDLE_TIMEOUT);
+        assert_eq!(statuses(&read), [200, 200], "{read}");
+        let mut rest = read.as_str();
+        for chunk in 0..CHUNKS {
+            let at = rest
+                .find(&format!("chunk-{chunk};"))
+                .expect("every chunk, in order");
+            rest = &rest[at..];
+        }
+        assert!(read.ends_with("0\r\n\r\n"), "{read}");
+    }
+
+    #[tokio::test]
+    async fn serve_api_answers_on_a_real_listener() {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let router = Router::new().route("/health", axum::routing::get(|| async { "ok" }));
+        let server = tokio::spawn(serve_api(listener, router));
+        let mut client = TcpStream::connect((Ipv4Addr::LOCALHOST, port))
+            .await
+            .unwrap();
+        let authority = format!("localhost:{port}");
+        client
+            .write_all(
+                format!(
+                    "{}GET /health HTTP/1.1\r\nhost: {authority}\r\nconnection: close\r\n\r\n",
+                    connect_head(&authority)
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+        let mut read = String::new();
+        tokio::time::timeout(Duration::from_secs(5), client.read_to_string(&mut read))
+            .await
+            .expect("the server closes")
+            .unwrap();
+        assert_eq!(statuses(&read), [200, 200], "{read}");
+        assert!(read.ends_with("\r\n\r\nok"), "{read}");
+        server.abort();
     }
 }
