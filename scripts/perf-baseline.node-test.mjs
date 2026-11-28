@@ -419,6 +419,16 @@ test("upsertSet records a MiB key from its samples' mib field as p50 and p95", (
   );
 });
 
+test("runs that end in different states keep the first run's and the count, not a join", () => {
+  const ends = ["frames:61 worst:18ms", "frames:60 worst:21ms", "frames:61 worst:18ms"];
+  const fps = { unit: "fps", samples: ends.map((endState) => ({ fps: 60, endState })) };
+  const after = upsertSet(baseline(), current({ fps_tiles: fps }), "m1");
+  assert.equal(after.sets[0].keys.fps_tiles.endState, "frames:61 worst:18ms (+1 other)");
+  // One shared end state reads as it always did.
+  const same = upsertSet(baseline(), current({ open_cold: ms([1, 2, 3]) }), "m1");
+  assert.equal(same.sets[0].keys.open_cold.endState, "team-switch");
+});
+
 test("an unknown unit is an input error, never read as ms", () => {
   const kib = { unit: "KiB", samples: [1, 2, 3].map((value) => ({ ms: value })) };
   assert.throws(

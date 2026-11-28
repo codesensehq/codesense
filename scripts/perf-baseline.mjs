@@ -93,7 +93,12 @@ function measuredKey(file, key) {
   if (values.length < MIN_SAMPLES) {
     throw new InputError(`${key}: fewer than ${MIN_SAMPLES} samples (${values.length})`);
   }
-  const endState = [...new Set(entry.samples.map((sample) => sample.endState))].join(",");
+  // Runs that stopped on different states (a measured frame rate's worst frame) keep the first
+  // run's and say how many others there were.
+  const [first, ...others] = new Set(entry.samples.map((sample) => sample.endState));
+  const endState = others.length
+    ? `${first} (+${others.length} other${others.length > 1 ? "s" : ""})`
+    : (first ?? "");
   return { unit: entry.unit, values, endState };
 }
 
