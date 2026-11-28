@@ -266,7 +266,7 @@ describe("every tile writer and the tile host check the tiles flag", () => {
           at("src/a.rs"),
           at("src-tauri/src/../a.rs"),
           at("src-tauri/src/./a.rs"),
-          at("src-tauri/src\\a.rs"),
+          at("src-tauri/src/a\\b.rs"),
           at("src-tauri/src/a_tests.rs"),
           at("src-tauri/src/groups/tests.rs"),
           at("src-tauri/src/tests/a.rs"),

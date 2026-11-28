@@ -17,9 +17,10 @@
 //! skipped, since their `return` leaves only them. Comments and strings are never code.
 //!
 //! The check is syntactic and keyed on those names, so a flag threaded under another name gets
-//! through, as does a flag-off branch that does other work before it returns. Test code is
-//! skipped as `group_file_writer_guard.rs` skips it. Point `CODESENSE_GUARD_ROOT` at another
-//! checkout's `src-tauri` to run it there; the planted self-tests show each form failing.
+//! through, as does a flag-off branch that does other work before it returns or sits inside a
+//! macro call. Test code is skipped as `group_file_writer_guard.rs` skips it. Point
+//! `CODESENSE_GUARD_ROOT` at another checkout's `src-tauri` to run it there; the planted
+//! self-tests show each form failing.
 
 mod common;
 
