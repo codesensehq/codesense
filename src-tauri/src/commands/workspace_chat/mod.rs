@@ -7,6 +7,7 @@ pub mod index;
 pub mod media;
 pub mod model;
 pub mod resolve;
+pub mod send;
 pub mod state;
 pub mod store;
 

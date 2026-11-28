@@ -16,10 +16,13 @@ use tauri::{AppHandle, Emitter, Manager};
 
 use crate::commands::agent_inbox::InboxHost;
 use crate::commands::dashboard_launch::DashboardLaunchState;
+use crate::commands::workspace_chat::media::{ChatSender, MediaRefusal};
+use crate::commands::workspace_chat::send::{self, ChatPost, SendRefusal};
 use crate::commands::workspace_chat::{
-    fire_fanout, ChatAppend, ChatMediaState, ChatStoreError, MessageKind, WorkspaceChatMessage,
-    WorkspaceChatStore,
+    fire_fanout, ChatMediaState, ChatStoreError, WorkspaceChatMessage, WorkspaceChatStore,
 };
+#[cfg(test)]
+use crate::commands::workspace_chat::{ChatAppend, MessageKind};
 use crate::commands::workspace_registry::WorkspaceRegistryState;
 use crate::weft::inbox::{MessageContentType, MessageOnClick};
 
@@ -225,10 +228,10 @@ fn store_error(e: ChatStoreError) -> ErrorData {
     }
 }
 
-/// Post `params` as `poster`. Text, media and the encoded line are checked before
-/// `started` (the first-use anchor) runs or anything is appended, so a refused send
-/// writes nothing. A post with
-/// media is then indexed, registered once and, when admitted, fetched in the background.
+/// Post `params` as `poster`, through the chat's one send core: text, media and the
+/// encoded line are checked before `started` (the first-use anchor) runs or anything is
+/// appended, so a refused send writes nothing. A post with media is then indexed,
+/// registered once and, when admitted, fetched in the background.
 pub(crate) async fn send_core(
     host: &std::sync::Arc<dyn InboxHost>,
     store: &WorkspaceChatStore,
@@ -236,49 +239,36 @@ pub(crate) async fn send_core(
     params: WorkspaceChatSendParams,
     started: impl std::future::Future<Output = ()>,
 ) -> Result<WorkspaceChatMessage, ErrorData> {
-    if params.text.trim().is_empty() && params.media.is_none() {
-        return Err(store_error(ChatStoreError::EmptyText));
-    }
-    let prepared = match &params.media {
-        Some(input) => Some(
-            crate::commands::workspace_chat::media::prepare(
-                &**host,
-                &poster.handle,
-                poster.remote,
-                input,
-            )
-            .await
-            .map_err(|e| ErrorData::invalid_params(e, None))?,
-        ),
-        None => None,
-    };
-    let fetch = prepared.as_ref().is_some_and(|p| p.fetch);
-    let at = ChatAppend {
-        workspace_id: poster.workspace,
-        from: poster.handle,
-        from_name: poster.from_name,
+    let ChatPoster {
+        handle,
+        from_name,
+        workspace,
+        remote,
+    } = poster;
+    let post = ChatPost {
+        workspace,
+        from_name,
         text: params.text,
-        kind: MessageKind::Chat,
         content_type: params.content_type,
         on_click: params.on_click,
         primary_file: params.primary_file,
-        media: prepared.map(|p| p.media),
+        media: params.media,
     };
-    store.check_line(&at).map_err(store_error)?;
-    started.await;
-    let writer = store.clone();
-    // The fetch's in-flight mark is taken with the append, so a send dropped before the
-    // fetch starts drops the mark with it.
-    let (message, in_flight) = tauri::async_runtime::spawn_blocking(move || {
-        let message = writer.append(at, chrono::Utc::now().timestamp_millis())?;
-        let in_flight = fetch.then(|| writer.in_flight(&message.workspace_id, message.message_id));
-        Ok::<_, ChatStoreError>((message, in_flight))
-    })
+    // The MCP tool fans out itself, after the send.
+    send::send(
+        host,
+        store,
+        ChatSender::Session { handle, remote },
+        post,
+        started,
+        |_| {},
+    )
     .await
-    .map_err(|e| ErrorData::internal_error(format!("join: {e}"), None))?
-    .map_err(store_error)?;
-    crate::commands::workspace_chat::media::stored(host, &message, in_flight).await;
-    Ok(message)
+    .map_err(|e| match e {
+        SendRefusal::Store(e) => store_error(e),
+        SendRefusal::Media(e) => ErrorData::invalid_params(MediaRefusal::reason(&e), None),
+        SendRefusal::Join(e) => ErrorData::internal_error(format!("join: {e}"), None),
+    })
 }
 
 /// MCP: `workspace_chat_send`.

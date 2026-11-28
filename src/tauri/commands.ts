@@ -10260,7 +10260,9 @@ export interface WorkspaceChatUpdatedPayload {
 }
 
 /** Human compose. The invoke path stamps `from = "human"` and `fromName` from
- *  the active profile's display name (fallback chain in `commands.rs`). */
+ *  the active profile's display name (fallback chain in `commands.rs`). With
+ *  `media` (one GIF by url), `text` may be blank and `team` must be the chat's
+ *  team; the host reads `team` only when the send carries media. */
 export const workspaceChatSend = (
   workspaceId: string,
   text: string,
@@ -10268,7 +10270,8 @@ export const workspaceChatSend = (
     contentType?: MessageContentType;
     onClick?: MessageOnClick;
     primaryFile?: string;
-    attachments?: InboxMediaAttachment[];
+    media?: HumanMedia;
+    team?: InboxTeam;
   },
 ) =>
   invoke<WorkspaceChatSendResult>("workspace_chat_send", {
@@ -10277,6 +10280,8 @@ export const workspaceChatSend = (
     contentType: options?.contentType ?? null,
     onClick: options?.onClick ?? null,
     primaryFile: options?.primaryFile ?? null,
+    media: options?.media ?? null,
+    team: options?.team ?? null,
   });
 
 /** Read a window of chat messages. `since = null` returns the tail (last
