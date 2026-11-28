@@ -69,17 +69,34 @@ fn a_lead_diff_lists_each_branch_against_its_own_merge_base_and_never_latest_win
 
     assert_eq!(diff.work_item, id.as_str());
     assert_eq!(diff.lead.as_deref(), Some("Sprint lead"));
-    let names: Vec<_> = diff.branches.iter().map(|b| (b.story.as_str(), b.own)).collect();
+    let names: Vec<_> = diff
+        .branches
+        .iter()
+        .map(|b| (b.story.as_str(), b.own))
+        .collect();
     assert_eq!(
         names,
-        [("story-one", false), ("story-two", false), ("lead-own", true)]
+        [
+            ("story-one", false),
+            ("story-two", false),
+            ("lead-own", true)
+        ]
     );
     assert_eq!(
         paths(&diff.branches[0]),
-        [(content("README.md").as_str(), 2), (content("one.md").as_str(), 1)]
+        [
+            (content("README.md").as_str(), 2),
+            (content("one.md").as_str(), 1)
+        ]
     );
-    assert_eq!(paths(&diff.branches[1]), [(content("README.md").as_str(), 2)]);
-    assert_eq!(paths(&diff.branches[2]), [(content("sprint.md").as_str(), 1)]);
+    assert_eq!(
+        paths(&diff.branches[1]),
+        [(content("README.md").as_str(), 2)]
+    );
+    assert_eq!(
+        paths(&diff.branches[2]),
+        [(content("sprint.md").as_str(), 1)]
+    );
     let readme = &diff.branches[0].files[0];
     assert_eq!(readme.file.status, PublishFileStatus::Modified);
     assert_eq!((readme.file.added, readme.file.removed), (Some(1), Some(1)));

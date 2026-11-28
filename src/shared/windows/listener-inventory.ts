@@ -63,6 +63,7 @@ export const LISTENER_INVENTORY: readonly ListenerRow[] = [
   { file: "features/dashboard/components/nav-selection.ts", event: "CONTEXT_INDEX_CHANGED_EVENT", scope: "every-window", why: "re-reads the nav when the index changes" },
   { file: "features/dashboard/lib/dashboard-commands.ts", event: "COMMAND_RUN_EVENT", scope: "main-only", why: "runs a command: one window acts" },
   { file: "features/dashboard/lib/live-hub.ts", event: "{event}", scope: "every-window", why: "the live hub's injected listen; the host releases a window's subscriptions on Destroyed" },
+  { file: "features/git-sync/lib/shown-read.ts", event: "CONTEXT_GIT_MOVED_EVENT", scope: "every-window", why: "re-reads a shown worktree list or lead diff when a branch head moves" },
   { file: "features/git-sync/lib/use-context-git-source.ts", event: "CONTEXT_GIT_MOVED_EVENT", scope: "every-window", why: "re-reads a repo's git state" },
   { file: "features/git-sync/lib/use-context-git-source.ts", event: "CONTEXT_REPO_STATUS_CHANGED_EVENT", scope: "every-window", why: "re-reads a repo's git state" },
   { file: "features/git-sync/lib/use-file-redline.ts", event: "CONTEXT_GIT_MOVED_EVENT", scope: "every-window", why: "re-reads a repo's baseline" },

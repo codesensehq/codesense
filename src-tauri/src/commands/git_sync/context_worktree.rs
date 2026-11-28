@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 use super::*;
-use crate::install::worktree_index::{ContextWorktreeOwner, ContextWorktreeRecord};
+use crate::install::worktree_index::{
+    ContextWorkItem, ContextWorktreeOwner, ContextWorktreeRecord,
+};
 use crate::work_item::WorkItemId;
 use tauri::Manager;
 
@@ -142,7 +144,7 @@ fn branch_files(row: &ContextWorktreeRecord) -> Result<Option<Vec<PublishFile>>,
     for bucket in set.buckets {
         Vec::extend(&mut files, bucket.files);
     }
-    <[PublishFile]>::sort_by(&mut files, |a, b| String::cmp(&a.path, &b.path));
+    <[PublishFile]>::sort_by(&mut files, |a, b| Ord::cmp(&a.path, &b.path));
     Ok(Some(files))
 }
 
@@ -159,18 +161,21 @@ pub(crate) fn lead_diff_impl(
             (item.id == *work_item).then_some((row, item))
         },
     ));
-    let lead = Iterator::find_map(<[_]>::iter(&carried), |(_, item)| {
-        Option::or_else(Option::clone(&item.lead_agent), || {
-            Option::clone(&item.lead_handle)
-        })
-    });
+    let lead = Iterator::find_map(
+        &mut <[(&ContextWorktreeRecord, &ContextWorkItem)]>::iter(&carried),
+        |(_, item)| {
+            Option::or_else(Option::clone(&item.lead_agent), || {
+                Option::clone(&item.lead_handle)
+            })
+        },
+    );
     let mut branches = Vec::new();
     for (row, item) in carried {
         let files = branch_files(row)?;
         branches.push(LeadBranch {
-            worktree: String::clone(&row.id),
-            branch: String::clone(&row.branch),
-            story: String::clone(&row.name),
+            worktree: Clone::clone(&row.id),
+            branch: Clone::clone(&row.branch),
+            story: Clone::clone(&row.name),
             own: owned_by_lead(row, Option::as_ref(&item.lead_handle)),
             deleted: Option::is_none(&files),
             files: Iterator::collect(Iterator::map(
@@ -186,7 +191,7 @@ pub(crate) fn lead_diff_impl(
     for branch in &branches {
         for f in &branch.files {
             *std::collections::hash_map::Entry::or_insert(
-                std::collections::HashMap::entry(&mut counts, String::clone(&f.file.path)),
+                std::collections::HashMap::entry(&mut counts, Clone::clone(&f.file.path)),
                 0,
             ) += 1;
         }
