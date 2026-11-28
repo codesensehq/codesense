@@ -29,13 +29,25 @@
 //! AC-6: a reload must not thrash. After a reload the watchdog backs off
 //! (exponential, capped by [`RELOAD_BACKOFF_CAP_MS`]) before it will reload
 //! again, and resets that backoff the moment acks resume.
+//!
+//! Every window is watched: [`WindowLiveness`] holds a [`RendererLiveness`] per label, the
+//! heartbeat writes the calling window's, and the one task steps each registered, non-pending
+//! window ([`watch_step`]). `main` keeps the backoff ladder above and is never destroyed. A
+//! satellite gets [`SATELLITE_MAX_RELOADS`] reloads in a row, each followed by
+//! `renderer_recovery::RECOVERY_TIMEOUT` for a heartbeat; then its items return to `main` as
+//! `crash` and the window is destroyed ([`give_up_satellite`]).
 
+use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use tauri::Manager;
 
 use crate::runtime::now_ms;
+use crate::windows::moves::MoveHost;
+use crate::windows::registry::{Locked, WindowRegistry};
+use crate::windows::returns::{return_by_kind, ReturnReason};
+use crate::windows::{is_main, MAIN_LABEL};
 
 /// RF-perf-4 (AC-1): the per-resource FE instance tally pushed on the heartbeat —
 /// the attribution the coarse renderer RSS cannot give (which surface class holds the
@@ -104,6 +116,10 @@ pub const RENDER_STALL_BEATS: u32 = 2;
 /// watchdog logs a blank window. Log only: the cause of an alive-but-blank window
 /// is not known yet, so the line exists to make the next one diagnosable.
 pub const BLANK_ROOT_BEATS: u32 = 2;
+
+/// Reloads in a row a satellite gets before the watchdog gives up on it. Each is followed by
+/// `renderer_recovery::RECOVERY_TIMEOUT` for a heartbeat from that window.
+pub const SATELLITE_MAX_RELOADS: u32 = 2;
 
 /// How long the Mac slept between two watchdog ticks. The wall clock keeps
 /// counting through sleep; the monotonic clock the ticks run on does not (on
@@ -301,6 +317,46 @@ impl RendererLiveness {
     }
 }
 
+/// Every watched window's [`RendererLiveness`], by label. Tauri managed state: the heartbeat
+/// writes the calling window's entry and the watchdog reads it, dropping it when the window
+/// leaves the registry.
+#[derive(Debug, Default)]
+pub struct WindowLiveness {
+    by_label: Mutex<HashMap<String, Arc<RendererLiveness>>>,
+}
+
+impl WindowLiveness {
+    fn labels_locked(&self) -> std::sync::MutexGuard<'_, HashMap<String, Arc<RendererLiveness>>> {
+        self.by_label.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    /// `label`'s entry, created on first use.
+    pub fn liveness_of(&self, label: &str) -> Arc<RendererLiveness> {
+        let mut labels = WindowLiveness::labels_locked(self);
+        Arc::clone(
+            HashMap::entry(&mut *labels, label.to_owned())
+                .or_insert_with(|| Arc::new(<RendererLiveness as Default>::default())),
+        )
+    }
+
+    /// `label`'s entry if it has one.
+    pub fn window_liveness(&self, label: &str) -> Option<Arc<RendererLiveness>> {
+        WindowLiveness::labels_locked(self).get(label).cloned()
+    }
+
+    /// Drops the entry of every label `registered` does not name.
+    pub fn retain_registered(&self, registered: &[(String, bool)]) {
+        HashMap::retain(&mut *WindowLiveness::labels_locked(self), |label, _| {
+            Iterator::any(&mut registered.iter(), |(l, _)| l == label)
+        });
+    }
+
+    /// Drops `label`'s entry: the window is gone.
+    pub fn forget_liveness(&self, label: &str) {
+        WindowLiveness::labels_locked(self).remove(label);
+    }
+}
+
 /// AC-1: the frontend liveness ack. A tiny, infallible signal — the renderer
 /// proving it can still run JS and reach IPC. Bumps the last-ack timestamp the
 /// watchdog reads. Deliberately returns nothing and never errors: the FE calls
@@ -328,9 +384,15 @@ impl RendererLiveness {
 /// block the liveness store (a read that could break the ack would ironically
 /// trip the watchdog). Adding args to an existing command does not change the
 /// command-count contract.
+///
+/// The beat is the calling window's: it lands in that label's entry of [`WindowLiveness`].
+/// A label that is neither `main` nor registered is dropped.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub fn renderer_heartbeat(
-    state: tauri::State<'_, RendererLiveness>,
+    webview: tauri::Webview,
+    windows: tauri::State<'_, WindowLiveness>,
+    registry: tauri::State<'_, WindowRegistry>,
     heap_bytes: Option<u64>,
     unhandled_rejections: Option<u64>,
     init: Option<bool>,
@@ -339,6 +401,12 @@ pub fn renderer_heartbeat(
     instance_counts: Option<FeInstanceCounts>,
     root_empty: Option<bool>,
 ) {
+    let label = webview.label();
+    if !is_main(label) && !Locked::has_window(&WindowRegistry::locked(&registry), label) {
+        return;
+    }
+    let state: Arc<RendererLiveness> = WindowLiveness::liveness_of(&windows, label);
+    let state: &RendererLiveness = &state;
     let now = now_ms();
     state.beat(now);
     if let Some(bytes) = heap_bytes {
@@ -363,7 +431,7 @@ pub fn renderer_heartbeat(
         let cause = state.note_init(now);
         log::info!(
             target: "webview-watchdog",
-            "renderer initialized (cause={cause})"
+            "renderer {label} initialized (cause={cause})"
         );
         // SR-0 (Q4): the post-reload seam. Only for a `watchdog-reload` init (the
         // reload we captured `pre_*` for) and only when the memory gate is on, so
@@ -543,14 +611,269 @@ fn accrue_render_stall_beats(
     }
 }
 
-/// Start the renderer-liveness watchdog. Seeds the ack to `now` (startup grace),
-/// then ticks every [`WATCHDOG_TICK_MS`] for the life of the process, reloading
-/// the main webview when the renderer goes stale (with AC-6 backoff). Called
-/// once from Tauri `setup()`.
+/// One watched window's loop state. `main`'s is what the loop held before there were
+/// satellites; a satellite's also carries its reload ladder.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct WindowWatch {
+    /// When watching began (startup for `main`, `pending` clearing for a satellite): counts
+    /// as an ack, so a booting window gets a boot's grace.
+    watched_since: u64,
+    consecutive_reloads: u32,
+    last_reload_ms: Option<u64>,
+    /// RF-perf-7 (AC-2) render-stall reduction: consecutive *beats* whose paint tick did not
+    /// advance while visible. `prev_ack` detects a NEW beat (ack advanced) so we count per
+    /// beat, not per (finer) watchdog tick.
+    render_stall_beats: u32,
+    prev_ack: u64,
+    prev_render_tick: u64,
+    /// Blank-window capture: consecutive visible beats with an empty app root, and whether
+    /// this episode was already logged.
+    blank_beats: u32,
+    blank_logged: bool,
+    /// A satellite the watchdog gave up on whose removal the registry refused: every tick
+    /// retries the give-up.
+    giving_up: bool,
+}
+
+/// What one tick reads of one window.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct WatchReading {
+    pub now: u64,
+    pub last_ack: u64,
+    /// The wall-clock ms of the last wake from sleep, which counts as an ack.
+    pub woke_at: u64,
+    pub render_tick: u64,
+    pub visible: bool,
+    pub root_empty: bool,
+    /// The app-wide memory pressure signal; only `main`'s step reads it.
+    pub pressure_over: bool,
+}
+
+/// What the watchdog does for one window this tick: the output of [`watch_step`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WatchStep {
+    /// Acking and painting. `cleared` is the length of the reload ladder this tick ended.
+    Healthy {
+        cleared: u32,
+    },
+    /// `main` only: alive and painting but over the memory ceiling (log only, SR-10).
+    PressureObserved {
+        cleared: u32,
+    },
+    /// Unhealthy, within `main`'s backoff or a satellite's heartbeat wait after a reload.
+    Wait,
+    Reload(ReloadCause),
+    /// A satellite whose reloads brought no heartbeat: return its items and destroy it.
+    GiveUp,
+}
+
+/// A watch that starts at `now`, from the window's current ack and paint tick.
+pub fn watch_from(now: u64, last_ack: u64, render_tick: u64) -> WindowWatch {
+    WindowWatch {
+        watched_since: now,
+        prev_ack: last_ack,
+        prev_render_tick: render_tick,
+        ..<WindowWatch as Default>::default()
+    }
+}
+
+/// Folds a new beat (the ack advanced) into the render-stall and blank-root counts. Returns
+/// the blank count on the beat a blank episode reaches [`BLANK_ROOT_BEATS`], once per episode.
+pub fn fold_beat(watch: &mut WindowWatch, reading: &WatchReading) -> Option<u32> {
+    if reading.last_ack == watch.prev_ack {
+        return None;
+    }
+    // RF-perf-7 (AC-2): see `accrue_render_stall_beats` for the visible / non-zero /
+    // did-not-advance rule (R2 guards baked in).
+    watch.render_stall_beats = accrue_render_stall_beats(
+        watch.render_stall_beats,
+        reading.visible,
+        reading.render_tick,
+        watch.prev_render_tick,
+    );
+    watch.prev_render_tick = reading.render_tick;
+    watch.prev_ack = reading.last_ack;
+    watch.blank_beats = if reading.visible && reading.root_empty {
+        watch.blank_beats.saturating_add(1)
+    } else {
+        0
+    };
+    if watch.blank_beats == 0 {
+        watch.blank_logged = false;
+    } else if watch.blank_beats >= BLANK_ROOT_BEATS && !watch.blank_logged {
+        watch.blank_logged = true;
+        return Some(watch.blank_beats);
+    }
+    None
+}
+
+/// The window slept: its paint tick legitimately froze.
+pub fn note_sleep(watch: &mut WindowWatch) {
+    watch.render_stall_beats = 0;
+}
+
+/// A reload of the window was posted at `now`.
+pub fn record_reload(watch: &mut WindowWatch, now: u64) {
+    watch.last_reload_ms = Some(now);
+    watch.consecutive_reloads = watch.consecutive_reloads.saturating_add(1);
+    // A reload resets the renderer: the stall count is moot until it re-proves itself.
+    // `prev_ack` / `prev_render_tick` are deliberately NOT reset: the fresh renderer re-runs
+    // its FE module (paint tick back to 0), and the `render_tick != 0` "no proof" guard in
+    // `accrue_render_stall_beats` covers the boot window.
+    watch.render_stall_beats = 0;
+}
+
+/// A satellite reload could not be posted, or its removal was refused: give up every tick
+/// until the window is gone.
+pub fn mark_giving_up(watch: &mut WindowWatch) {
+    watch.giving_up = true;
+}
+
+fn clear_ladder(watch: &mut WindowWatch) -> u32 {
+    let cleared = watch.consecutive_reloads;
+    watch.consecutive_reloads = 0;
+    watch.last_reload_ms = None;
+    cleared
+}
+
+/// The pure per-window step: [`decide`] for `main`, with its backoff ladder and pressure
+/// reading; for a satellite, `decide` plus the satellite ladder. After a satellite reload
+/// (either cause) a heartbeat from that window ends the ladder; none within
+/// `RECOVERY_TIMEOUT` is a failed reload, answered by the next reload or, after
+/// [`SATELLITE_MAX_RELOADS`], by [`WatchStep::GiveUp`].
+pub fn watch_step(label: &str, watch: &mut WindowWatch, reading: &WatchReading) -> WatchStep {
+    let now = reading.now;
+    let acked = reading
+        .last_ack
+        .max(reading.woke_at)
+        .max(watch.watched_since);
+    let render_stalled = watch.render_stall_beats >= RENDER_STALL_BEATS;
+    if is_main(label) {
+        let backoff = backoff_window_ms(watch.consecutive_reloads);
+        let action = decide(
+            now,
+            acked,
+            RENDERER_STALE_AFTER_MS,
+            watch.last_reload_ms,
+            backoff,
+            reading.pressure_over,
+            render_stalled,
+        );
+        // Liveness is OK in both Healthy and MemoryPressureObserved: memory pressure is not
+        // a liveness failure (SR-10), so either clears a prior reload's backoff (AC-6). Only
+        // a real ack clears it, not the grace after a sleep.
+        let mut cleared = 0;
+        if matches!(
+            action,
+            WatchdogAction::Healthy | WatchdogAction::MemoryPressureObserved
+        ) && watch.consecutive_reloads > 0
+            && now.saturating_sub(reading.last_ack) <= RENDERER_STALE_AFTER_MS
+        {
+            cleared = clear_ladder(watch);
+        }
+        return match action {
+            WatchdogAction::Healthy => WatchStep::Healthy { cleared },
+            WatchdogAction::MemoryPressureObserved => WatchStep::PressureObserved { cleared },
+            WatchdogAction::BackoffWait => WatchStep::Wait,
+            WatchdogAction::Reload(cause) => WatchStep::Reload(cause),
+        };
+    }
+    if watch.giving_up {
+        return WatchStep::GiveUp;
+    }
+    let mut cleared = 0;
+    if let Some(reloaded) = watch.last_reload_ms {
+        if reading.last_ack > reloaded {
+            cleared = clear_ladder(watch);
+        } else if now.saturating_sub(reloaded)
+            < crate::renderer_recovery::RECOVERY_TIMEOUT.as_millis() as u64
+        {
+            return WatchStep::Wait;
+        } else if watch.consecutive_reloads >= SATELLITE_MAX_RELOADS {
+            return WatchStep::GiveUp;
+        } else if now.saturating_sub(acked) > RENDERER_STALE_AFTER_MS {
+            return WatchStep::Reload(ReloadCause::ProcessDeath);
+        } else {
+            return WatchStep::Reload(ReloadCause::RenderStall);
+        }
+    }
+    match decide(
+        now,
+        acked,
+        RENDERER_STALE_AFTER_MS,
+        None,
+        0,
+        false,
+        render_stalled,
+    ) {
+        WatchdogAction::Reload(cause) => WatchStep::Reload(cause),
+        _ => WatchStep::Healthy { cleared },
+    }
+}
+
+/// Gives `label`'s items back to `main` as `crash`, through the windows' one return path.
+fn return_satellite_items(host: &impl MoveHost, registry: &WindowRegistry, label: &str) {
+    let items = Locked::items_held_by(&WindowRegistry::locked(registry), label);
+    return_by_kind(host, registry, &items, ReturnReason::Crash);
+}
+
+/// Drops `label`'s entry, then destroys the window once the lock is released. `false` when
+/// the registry refuses (an item arrived since its items were returned).
+fn drop_satellite(host: &impl MoveHost, registry: &WindowRegistry, label: &str) -> bool {
+    // The lock is released at the end of this statement, before the window is destroyed.
+    let removed = Locked::remove_empty_satellite(&mut WindowRegistry::locked(registry), label);
+    if let Err(e) = removed {
+        log::warn!(target: "webview-watchdog", "satellite {label} kept for now: {e}");
+        return false;
+    }
+    MoveHost::destroy_window(host, label);
+    true
+}
+
+/// The watchdog's give-up on a satellite: its items return to `main` as `crash`, its entry
+/// goes, and the window is destroyed. `main` is never given up on. `false` when the window
+/// stays (the next tick retries).
+pub fn give_up_satellite(host: &impl MoveHost, registry: &WindowRegistry, label: &str) -> bool {
+    if is_main(label) {
+        return false;
+    }
+    return_satellite_items(host, registry, label);
+    drop_satellite(host, registry, label)
+}
+
+/// Keeps one watch per registered, non-pending window: a window whose `pending` cleared gets a
+/// watch starting `now` (its boot's grace, from `reading_of`'s ack and paint tick), and a
+/// pending or unregistered window has none.
+pub fn sync_watches(
+    watches: &mut BTreeMap<String, WindowWatch>,
+    windows: &[(String, bool)],
+    now: u64,
+    reading_of: &dyn Fn(&str) -> (u64, u64),
+) {
+    BTreeMap::retain(watches, |label, _| {
+        Iterator::any(&mut windows.iter(), |(l, pending)| l == label && !pending)
+    });
+    for (label, pending) in windows {
+        if !*pending && !BTreeMap::contains_key(watches, label) {
+            let (last_ack, render_tick) = reading_of(label);
+            BTreeMap::insert(
+                watches,
+                label.clone(),
+                watch_from(now, last_ack, render_tick),
+            );
+        }
+    }
+}
+
+/// Start the renderer-liveness watchdog. Seeds `main`'s ack to `now` (startup grace),
+/// then ticks every [`WATCHDOG_TICK_MS`] for the life of the process, stepping every
+/// registered, non-pending window ([`watch_step`]). Called once from Tauri `setup()`.
 pub fn start_renderer_watchdog(app: tauri::AppHandle) {
     // Grace: pretend the renderer just acked so the window between app start and
     // the first FE beat can't trip a reload.
-    app.state::<RendererLiveness>().beat(now_ms());
+    let started = now_ms();
+    let main_liveness = WindowLiveness::liveness_of(&app.state::<WindowLiveness>(), MAIN_LABEL);
+    RendererLiveness::beat(&main_liveness, started);
 
     #[cfg(debug_assertions)]
     debug_wedge_renderer(app.clone());
@@ -558,18 +881,20 @@ pub fn start_renderer_watchdog(app: tauri::AppHandle) {
     tauri::async_runtime::spawn(async move {
         let mut interval =
             tokio::time::interval(std::time::Duration::from_millis(WATCHDOG_TICK_MS));
-        let mut last_reload_ms: Option<u64> = None;
-        let mut consecutive_reloads: u32 = 0;
+        let mut watches: BTreeMap<String, WindowWatch> = BTreeMap::new();
+        BTreeMap::insert(
+            &mut watches,
+            MAIN_LABEL.to_owned(),
+            watch_from(
+                started,
+                RendererLiveness::last_ack_ms(&main_liveness),
+                RendererLiveness::last_render_tick(&main_liveness),
+            ),
+        );
         let mut tick: u64 = 0;
         // RF-perf-7 (AC-1) pressure reduction: consecutive over-threshold memory
-        // samples; `pressure_over` once it reaches the K-sample floor.
+        // samples; `pressure_over` once it reaches the K-sample floor. One app-wide reading.
         let mut pressure_samples: u32 = 0;
-        // RF-perf-7 (AC-2) render-stall reduction: consecutive *beats* whose paint
-        // tick did not advance while visible. `prev_ack` detects a NEW beat (ack
-        // advanced) so we count per beat, not per (finer) watchdog tick.
-        let mut render_stall_beats: u32 = 0;
-        let mut prev_ack: u64 = app.state::<RendererLiveness>().last_ack_ms();
-        let mut prev_render_tick: u64 = app.state::<RendererLiveness>().last_render_tick();
         // SR-10 (AC-1): rising-edge guard so the "over ceiling, not reloading" warn
         // logs once per pressure episode, not every tick. Cleared when the episode
         // ends (`!pressure_over`), independent of what action the tick took.
@@ -583,18 +908,12 @@ pub fn start_renderer_watchdog(app: tauri::AppHandle) {
         let mut prev_wall = now_ms();
         let mut prev_mono = std::time::Instant::now();
         let mut woke_at: u64 = 0;
-        // Blank-window capture: consecutive visible beats with an empty app root,
-        // and whether this episode was already logged.
-        let mut blank_beats: u32 = 0;
-        let mut blank_logged = false;
 
         loop {
             interval.tick().await;
 
             tick = tick.wrapping_add(1);
 
-            let liveness = app.state::<RendererLiveness>();
-            let last_ack = liveness.last_ack_ms();
             let now = now_ms();
             let mono = std::time::Instant::now();
             let slept = slept_ms(
@@ -607,10 +926,12 @@ pub fn start_renderer_watchdog(app: tauri::AppHandle) {
                 // A renderer cannot ack while the Mac sleeps: give it a fresh
                 // grace window, as at startup, instead of reloading a live window.
                 woke_at = now;
-                render_stall_beats = 0;
+                for watch in watches.values_mut() {
+                    note_sleep(watch);
+                }
                 log::info!(
                     target: "webview-watchdog",
-                    "Mac was asleep for {}s; renderer gets a fresh grace period",
+                    "Mac was asleep for {}s; renderers get a fresh grace period",
                     gap / 1000
                 );
             }
@@ -637,138 +958,139 @@ pub fn start_renderer_watchdog(app: tauri::AppHandle) {
                 pressure_logged = false;
             }
 
-            // RF-perf-7 (AC-2): on each NEW beat (ack advanced), fold the paint
-            // signal into the stall count. See `accrue_render_stall_beats` for the
-            // visible / non-zero / did-not-advance rule (R2 guards baked in).
-            if last_ack != prev_ack {
-                let render_tick = liveness.last_render_tick();
-                let visible = liveness.render_visible();
-                render_stall_beats = accrue_render_stall_beats(
-                    render_stall_beats,
-                    visible,
-                    render_tick,
-                    prev_render_tick,
-                );
-                prev_render_tick = render_tick;
-                prev_ack = last_ack;
-                blank_beats = if visible && liveness.root_empty() {
-                    blank_beats.saturating_add(1)
-                } else {
-                    0
+            // The windows to watch: `main` and every registered window that is not pending.
+            let windows: Vec<(String, bool)> = {
+                let registry = app.state::<WindowRegistry>();
+                let locked = WindowRegistry::locked(&registry);
+                Iterator::collect(Locked::window_labels(&locked).into_iter().map(|label| {
+                    let pending = Locked::is_pending(&locked, &label);
+                    (label, pending)
+                }))
+            };
+            let liveness_map = app.state::<WindowLiveness>();
+            let reading_of = |label: &str| {
+                let liveness = WindowLiveness::liveness_of(&liveness_map, label);
+                (
+                    RendererLiveness::last_ack_ms(&liveness),
+                    RendererLiveness::last_render_tick(&liveness),
+                )
+            };
+            sync_watches(&mut watches, &windows, now, &reading_of);
+            WindowLiveness::retain_registered(&liveness_map, &windows);
+
+            let labels: Vec<String> = Iterator::collect(watches.keys().cloned());
+            for label in labels {
+                let liveness = WindowLiveness::liveness_of(&liveness_map, &label);
+                let last_ack = RendererLiveness::last_ack_ms(&liveness);
+                let reading = WatchReading {
+                    now,
+                    last_ack,
+                    woke_at,
+                    render_tick: RendererLiveness::last_render_tick(&liveness),
+                    visible: RendererLiveness::render_visible(&liveness),
+                    root_empty: RendererLiveness::root_empty(&liveness),
+                    pressure_over,
                 };
-                if blank_beats == 0 {
-                    blank_logged = false;
-                } else if blank_beats >= BLANK_ROOT_BEATS && !blank_logged {
-                    blank_logged = true;
+                let Some(watch) = watches.get_mut(&label) else {
+                    continue;
+                };
+                if let Some(blank_beats) = fold_beat(watch, &reading) {
                     let rss =
                         last_sample_rss.map_or_else(|| "unresolved".to_string(), |b| b.to_string());
                     log::warn!(
                         target: "webview-watchdog",
-                        "renderer visible and acking but the app root is empty for {blank_beats} beats (blank window); paint tick {render_tick}, renderer RSS {rss}, runtime stalled {} — not reloading",
+                        "renderer {label} visible and acking but the app root is empty for {blank_beats} beats (blank window); paint tick {}, renderer RSS {rss}, runtime stalled {} — not reloading",
+                        reading.render_tick,
                         crate::runtime_diagnostics::runtime_stalled()
                     );
                 }
-            }
-            let render_stalled = render_stall_beats >= RENDER_STALL_BEATS;
-
-            let backoff = backoff_window_ms(consecutive_reloads);
-
-            match decide(
-                now,
-                last_ack.max(woke_at),
-                RENDERER_STALE_AFTER_MS,
-                last_reload_ms,
-                backoff,
-                pressure_over,
-                render_stalled,
-            ) {
-                // Liveness is OK in BOTH of these — the renderer is acking and
-                // painting. Memory pressure is NOT a liveness failure (SR-10), so an
-                // alive+painting renderer clears any prior reload's backoff whether or
-                // not it is over the memory ceiling (AC-6): the reload that opened the
-                // backoff demonstrably helped (the renderer came back).
-                WatchdogAction::Healthy | WatchdogAction::MemoryPressureObserved => {
-                    // Only a real ack clears it, not the grace after a sleep.
-                    if consecutive_reloads > 0
-                        && now.saturating_sub(last_ack) <= RENDERER_STALE_AFTER_MS
+                let render_stall_beats = watch.render_stall_beats;
+                let mut give_up = false;
+                let step = watch_step(&label, watch, &reading);
+                match step {
+                    WatchStep::Healthy { cleared } | WatchStep::PressureObserved { cleared }
+                        if cleared > 0 =>
                     {
                         log::info!(
                             target: "webview-watchdog",
-                            "renderer acks resumed — clearing reload backoff after {consecutive_reloads} reload(s)"
+                            "renderer {label} acks resumed — clearing reload backoff after {cleared} reload(s)"
                         );
-                        consecutive_reloads = 0;
-                        last_reload_ms = None;
                     }
-                    // SR-10 (AC-1): the renderer is over the memory ceiling, but a
-                    // `win.reload()` reclaims ZERO native renderer memory (proven ×3)
-                    // and blanks the screen — so we no longer reload here. Log once
-                    // per pressure episode (rising edge) so the signal stays visible
-                    // without spamming a line every tick, carrying the ACTUAL sampled
-                    // RSS (the value the leak hunt needs), not just the ceiling. The
-                    // gated `memory` forensic line still carries per-sample detail.
-                    if pressure_over && !pressure_logged {
-                        pressure_logged = true;
-                        let rss = last_sample_rss
-                            .map_or_else(|| "unresolved".to_string(), |b| b.to_string());
+                    WatchStep::Healthy { .. } | WatchStep::PressureObserved { .. } => {}
+                    WatchStep::Wait => {
+                        // Keep the ack age in the line so a suppressed event is still
+                        // reconstructable (ack age > stale window ⇒ process-death).
                         log::warn!(
                             target: "webview-watchdog",
-                            "renderer over memory ceiling (RSS {rss} ≥ ceiling {RENDERER_PRESSURE_BYTES} bytes, {pressure_samples} samples) — NOT reloading (a reload reclaims no renderer memory)"
+                            "renderer {label} unhealthy but within reload backoff or its heartbeat wait (last ack {}ms ago) — waiting",
+                            now.saturating_sub(last_ack)
                         );
                     }
-                }
-                WatchdogAction::BackoffWait => {
-                    // Keep the ack age in the line so a backoff-suppressed event is
-                    // still reconstructable (which mode was suppressed is implied by
-                    // ack age: > stale window ⇒ process-death, else pressure/stall).
-                    log::warn!(
-                        target: "webview-watchdog",
-                        "renderer unhealthy but within reload backoff ({backoff}ms, last ack {}ms ago) — waiting",
-                        now.saturating_sub(last_ack)
-                    );
-                }
-                WatchdogAction::Reload(cause) => {
-                    // AC-3/AC-4: a distinct, cause-tagged WARN line so every reload
-                    // class (process-death / render-stall) is observable and
-                    // attributable from the log alone. Logged Rust-side because for
-                    // process-death the renderer that would otherwise log it is the
-                    // thing that's dead.
-                    let detail = match cause {
-                        ReloadCause::ProcessDeath => {
-                            format!("no ack for {}ms", now.saturating_sub(last_ack))
+                    WatchStep::Reload(cause) => {
+                        // AC-3/AC-4: a distinct, cause-tagged WARN line so every reload
+                        // class (process-death / render-stall) is observable and
+                        // attributable from the log alone. Logged Rust-side because for
+                        // process-death the renderer that would otherwise log it is the
+                        // thing that's dead.
+                        let detail = match cause {
+                            ReloadCause::ProcessDeath => {
+                                format!("no ack for {}ms", now.saturating_sub(last_ack))
+                            }
+                            ReloadCause::RenderStall => format!(
+                                "paint tick frozen for {render_stall_beats} beats while visible"
+                            ),
+                        };
+                        log::warn!(
+                            target: "webview-watchdog",
+                            "renderer {label} unhealthy — reloading webview (cause={}, {detail})",
+                            cause.as_str()
+                        );
+                        let dispatched =
+                            crate::renderer_recovery::reload(app.clone(), &label, cause).await;
+                        // AC-6: only engage the backoff once a reload actually
+                        // dispatched. For `main`, a missing window or a failed `reload()`
+                        // never attempted recovery — retry on the next tick rather than
+                        // backing off. A satellite whose reload cannot be posted is
+                        // given up on.
+                        if dispatched {
+                            record_reload(watch, now);
+                            // RF-perf-5 (AC-4): record the reload so the renderer's
+                            // post-reload `init` breadcrumb attributes its cause to the
+                            // watchdog rather than reading as an external re-init.
+                            RendererLiveness::mark_reload(&liveness, now);
+                            if is_main(&label) {
+                                pressure_samples = 0;
+                            }
+                        } else if !is_main(&label) {
+                            give_up = true;
                         }
-                        ReloadCause::RenderStall => format!(
-                            "paint tick frozen for {render_stall_beats} beats while visible"
-                        ),
-                    };
+                    }
+                    WatchStep::GiveUp => give_up = true,
+                }
+                // SR-10 (AC-1): `main` is over the memory ceiling, but a `win.reload()`
+                // reclaims ZERO native renderer memory (proven ×3) and blanks the screen, so
+                // it never reloads for it. Log once per pressure episode (rising edge), with
+                // the ACTUAL sampled RSS.
+                if matches!(step, WatchStep::PressureObserved { .. }) && !pressure_logged {
+                    pressure_logged = true;
+                    let rss =
+                        last_sample_rss.map_or_else(|| "unresolved".to_string(), |b| b.to_string());
                     log::warn!(
                         target: "webview-watchdog",
-                        "renderer unhealthy — reloading webview (cause={}, {detail})",
-                        cause.as_str()
+                        "renderer over memory ceiling (RSS {rss} ≥ ceiling {RENDERER_PRESSURE_BYTES} bytes, {pressure_samples} samples) — NOT reloading (a reload reclaims no renderer memory)"
                     );
-                    let dispatched = crate::renderer_recovery::reload(app.clone(), cause).await;
-                    // AC-6: only engage the backoff once a reload actually
-                    // dispatched. A missing window or a failed `reload()` never
-                    // attempted recovery — retry on the next tick rather than
-                    // backing off (and escalating toward the 15-min cap) for a
-                    // reload that never happened.
-                    if dispatched {
-                        last_reload_ms = Some(now);
-                        consecutive_reloads = consecutive_reloads.saturating_add(1);
-                        // RF-perf-5 (AC-4): record the reload so the renderer's
-                        // post-reload `init` breadcrumb attributes its cause to the
-                        // watchdog rather than reading as an external re-init.
-                        app.state::<RendererLiveness>().mark_reload(now);
-                        // A reload resets the renderer — both health signals are
-                        // moot until it re-proves itself; clear them so a carried
-                        // count can't immediately re-fire on the next tick.
-                        // `prev_ack` / `prev_render_tick` are deliberately NOT reset:
-                        // the fresh renderer re-runs its FE module (paint tick back to
-                        // 0), and the `render_tick != 0` "no proof" guard in
-                        // `accrue_render_stall_beats` covers the boot window until it
-                        // re-proves paint — so a stale `prev_render_tick` can't
-                        // fabricate a stall regardless of its carried value.
-                        pressure_samples = 0;
-                        render_stall_beats = 0;
+                }
+                if give_up {
+                    mark_giving_up(watch);
+                    log::warn!(
+                        target: "webview-watchdog",
+                        "renderer {label} did not recover after {} reload(s) — returning its items to main and closing it",
+                        watch.consecutive_reloads
+                    );
+                    let registry = app.state::<WindowRegistry>();
+                    if give_up_satellite(&app, &registry, &label) {
+                        BTreeMap::remove(&mut watches, &label);
+                        WindowLiveness::forget_liveness(&liveness_map, &label);
                     }
                 }
             }
@@ -1327,5 +1649,359 @@ mod tests {
             l.note_init(50_000 + RENDERER_STALE_AFTER_MS + 60_000),
             "external"
         );
+    }
+}
+
+#[cfg(test)]
+mod per_label {
+    use super::*;
+    use crate::renderer_recovery::RECOVERY_TIMEOUT;
+    use crate::windows::item_key::ItemKey;
+    use crate::windows::moves::MoveTimer;
+    use crate::windows::registry::{WindowHost, WindowSlice};
+    use std::cell::RefCell;
+
+    /// Records the events and destroys a give-up sends.
+    #[derive(Default)]
+    struct Host {
+        events: RefCell<Vec<(String, String, serde_json::Value)>>,
+        destroyed: RefCell<Vec<String>>,
+    }
+
+    impl WindowHost for Host {
+        fn send_slice(&self, _: &WindowSlice) {}
+        fn focus(&self, _: &str) {}
+    }
+
+    impl MoveHost for Host {
+        fn send_event(&self, label: &str, event: &str, payload: serde_json::Value) {
+            self.events
+                .borrow_mut()
+                .push((label.to_owned(), event.to_owned(), payload));
+        }
+        fn window_exists(&self, _: &str) -> bool {
+            true
+        }
+        fn create_window(&self, _: &str) -> Result<(), String> {
+            Ok(())
+        }
+        fn destroy_window(&self, label: &str) {
+            self.destroyed.borrow_mut().push(label.to_owned());
+        }
+        fn schedule(&self, _: u64, _: MoveTimer) {}
+    }
+
+    fn tab(id: &str) -> ItemKey {
+        ItemKey {
+            kind: "tab".into(),
+            team: "acme:docs".into(),
+            id: id.into(),
+        }
+    }
+
+    /// `main` and a ready `sat-1` holding one tab.
+    fn reg(host: &Host) -> WindowRegistry {
+        let reg = WindowRegistry::new();
+        reg.add_satellite(host, "sat-1").unwrap();
+        reg.ready(host, "sat-1").unwrap();
+        reg.reassign_item(host, &tab("/repo/a.md"), "sat-1")
+            .unwrap();
+        host.events.borrow_mut().clear();
+        reg
+    }
+
+    fn at(now: u64, last_ack: u64) -> WatchReading {
+        WatchReading {
+            now,
+            last_ack,
+            visible: true,
+            ..<WatchReading as Default>::default()
+        }
+    }
+
+    const STALE_PLUS: u64 = RENDERER_STALE_AFTER_MS + 1;
+    const WAIT_MS: u64 = RECOVERY_TIMEOUT.as_millis() as u64;
+
+    #[test]
+    fn two_windows_heartbeats_do_not_mask_each_other() {
+        let windows = <WindowLiveness as Default>::default();
+        RendererLiveness::beat(&WindowLiveness::liveness_of(&windows, "main"), 200_000);
+        let sat = WindowLiveness::liveness_of(&windows, "sat-1");
+        assert_eq!(RendererLiveness::last_ack_ms(&sat), 0);
+
+        let mut main = watch_from(0, 0, 0);
+        let mut sat_watch = watch_from(0, 0, 0);
+        let main_ack =
+            RendererLiveness::last_ack_ms(&WindowLiveness::liveness_of(&windows, "main"));
+        assert_eq!(
+            watch_step("main", &mut main, &at(200_000, main_ack)),
+            WatchStep::Healthy { cleared: 0 }
+        );
+        assert_eq!(
+            watch_step("sat-1", &mut sat_watch, &at(200_000, 0)),
+            WatchStep::Reload(ReloadCause::ProcessDeath)
+        );
+
+        // And the other way round: a live satellite does not keep a hung `main` alive.
+        RendererLiveness::beat(&sat, 400_000);
+        assert_eq!(
+            watch_step("main", &mut main, &at(400_000, main_ack)),
+            WatchStep::Reload(ReloadCause::ProcessDeath)
+        );
+    }
+
+    #[test]
+    fn a_hung_satellite_reloads_with_its_items_kept_while_mains_counters_stay() {
+        let host = Host::default();
+        let reg = reg(&host);
+        let mut main = watch_from(0, 0, 0);
+        let mut sat = watch_from(0, 0, 0);
+        assert_eq!(
+            watch_step("sat-1", &mut sat, &at(STALE_PLUS, 0)),
+            WatchStep::Reload(ReloadCause::ProcessDeath)
+        );
+        record_reload(&mut sat, STALE_PLUS);
+        assert_eq!(
+            watch_step("main", &mut main, &at(STALE_PLUS, STALE_PLUS)),
+            WatchStep::Healthy { cleared: 0 }
+        );
+        assert_eq!(main, watch_from(0, 0, 0));
+        let locked = WindowRegistry::locked(&reg);
+        assert_eq!(
+            Locked::items_held_by(&locked, "sat-1"),
+            vec![tab("/repo/a.md")]
+        );
+        assert!(host.destroyed.borrow().is_empty());
+        assert!(host.events.borrow().is_empty());
+    }
+
+    #[test]
+    fn a_heartbeat_after_a_satellite_reload_ends_its_ladder() {
+        let mut sat = watch_from(0, 0, 0);
+        record_reload(&mut sat, STALE_PLUS);
+        assert_eq!(
+            watch_step("sat-1", &mut sat, &at(STALE_PLUS + 1_000, 0)),
+            WatchStep::Wait
+        );
+        assert_eq!(
+            watch_step(
+                "sat-1",
+                &mut sat,
+                &at(STALE_PLUS + 10_000, STALE_PLUS + 5_000)
+            ),
+            WatchStep::Healthy { cleared: 1 }
+        );
+        assert_eq!(sat.consecutive_reloads, 0);
+    }
+
+    /// Steps a satellite on a 15 s tick starting at `offset`, with heartbeats from `acks`
+    /// (the last ack at a time, given whether it has been reloaded yet), until it is given
+    /// up on. Returns the give-up time and the last heartbeat before it.
+    fn give_up_time(offset: u64, acks: &dyn Fn(u64, bool) -> (u64, u64)) -> (u64, u64) {
+        let mut watch = watch_from(0, 0, 0);
+        let mut now = offset;
+        loop {
+            let (last_ack, render_tick) = acks(now, watch.consecutive_reloads > 0);
+            let reading = WatchReading {
+                render_tick,
+                ..at(now, last_ack)
+            };
+            fold_beat(&mut watch, &reading);
+            match watch_step("sat-1", &mut watch, &reading) {
+                WatchStep::GiveUp => return (now, last_ack),
+                WatchStep::Reload(_) => record_reload(&mut watch, now),
+                WatchStep::Healthy { cleared } => assert_eq!(cleared, 0),
+                _ => {}
+            }
+            now += WATCHDOG_TICK_MS;
+            assert!(now < 1_000_000, "never gave up");
+        }
+    }
+
+    #[test]
+    fn two_failed_reloads_give_up_within_190_s_of_the_last_heartbeat_for_both_causes() {
+        // Process death: the last heartbeat was at 0.
+        let dead = |_: u64, _: bool| (0, 0);
+        // Render stall: beats every 30 s with a frozen paint tick until the first reload,
+        // none after it (the last ack stays the last pre-reload beat).
+        let frozen = std::cell::Cell::new(0);
+        let stalled = |now: u64, reloaded: bool| {
+            if !reloaded {
+                frozen.set(now - now % RENDERER_ACK_INTERVAL_MS);
+            }
+            (frozen.get(), 7)
+        };
+        for offset in (0..WATCHDOG_TICK_MS).step_by(1_000) {
+            let (when, last) = give_up_time(offset, &dead);
+            assert!(when - last <= 190_000, "process death at {offset}: {when}");
+            let (when, last) = give_up_time(offset, &stalled);
+            assert!(when - last <= 190_000, "render stall at {offset}: {when}");
+        }
+    }
+
+    #[test]
+    fn a_satellite_gives_up_after_exactly_two_reloads() {
+        let mut watch = watch_from(0, 0, 0);
+        let mut reloads = 0;
+        let mut now = 0;
+        loop {
+            match watch_step("sat-1", &mut watch, &at(now, 0)) {
+                WatchStep::Reload(_) => {
+                    reloads += 1;
+                    record_reload(&mut watch, now);
+                }
+                WatchStep::GiveUp => break,
+                _ => {}
+            }
+            now += WATCHDOG_TICK_MS;
+        }
+        assert_eq!(reloads, SATELLITE_MAX_RELOADS);
+        assert!(now >= STALE_PLUS + 2 * WAIT_MS);
+    }
+
+    #[test]
+    fn the_give_up_returns_the_items_as_crash_and_destroys_the_window() {
+        let host = Host::default();
+        let reg = reg(&host);
+        assert!(give_up_satellite(&host, &reg, "sat-1"));
+        assert_eq!(*host.destroyed.borrow(), vec!["sat-1".to_owned()]);
+        let events = host.events.borrow();
+        let returned: Vec<&serde_json::Value> = Iterator::collect(
+            events
+                .iter()
+                .filter(|(to, event, _)| {
+                    to == MAIN_LABEL && event == crate::windows::moves::ITEMS_RETURNED_EVENT
+                })
+                .map(|(_, _, payload)| payload),
+        );
+        assert_eq!(returned.len(), 1);
+        assert_eq!(returned[0]["reason"], "crash");
+        assert_eq!(returned[0]["items"].as_array().unwrap().len(), 1);
+        let locked = WindowRegistry::locked(&reg);
+        assert!(!Locked::has_window(&locked, "sat-1"));
+    }
+
+    #[test]
+    fn a_failed_dispatch_gives_up() {
+        let host = Host::default();
+        let reg = reg(&host);
+        let mut watch = watch_from(0, 0, 0);
+        assert_eq!(
+            watch_step("sat-1", &mut watch, &at(STALE_PLUS, 0)),
+            WatchStep::Reload(ReloadCause::ProcessDeath)
+        );
+        // The loop's answer to a reload that could not be posted.
+        mark_giving_up(&mut watch);
+        assert_eq!(
+            watch_step("sat-1", &mut watch, &at(STALE_PLUS, STALE_PLUS)),
+            WatchStep::GiveUp
+        );
+        assert!(give_up_satellite(&host, &reg, "sat-1"));
+        assert_eq!(*host.destroyed.borrow(), vec!["sat-1".to_owned()]);
+    }
+
+    #[test]
+    fn a_refused_remove_keeps_the_window_and_the_next_tick_retries() {
+        let host = Host::default();
+        let reg = reg(&host);
+        return_satellite_items(&host, &reg, "sat-1");
+        // An item arrives between the return and the removal.
+        reg.reassign_item(&host, &tab("/repo/b.md"), "sat-1")
+            .unwrap();
+        assert!(!drop_satellite(&host, &reg, "sat-1"));
+        assert!(host.destroyed.borrow().is_empty());
+        assert!(Locked::has_window(&WindowRegistry::locked(&reg), "sat-1"));
+
+        let mut watch = watch_from(0, 0, 0);
+        mark_giving_up(&mut watch);
+        assert_eq!(
+            watch_step("sat-1", &mut watch, &at(1_000, 1_000)),
+            WatchStep::GiveUp
+        );
+        assert!(give_up_satellite(&host, &reg, "sat-1"));
+        assert_eq!(*host.destroyed.borrow(), vec!["sat-1".to_owned()]);
+        assert!(!Locked::has_window(&WindowRegistry::locked(&reg), "sat-1"));
+    }
+
+    #[test]
+    fn a_hung_main_reloads_backs_off_and_is_never_destroyed() {
+        let host = Host::default();
+        let reg = reg(&host);
+        let mut main = watch_from(0, 0, 0);
+        let mut reload_times = Vec::new();
+        let mut now = 0;
+        while now < 2 * RELOAD_BACKOFF_CAP_MS {
+            match watch_step("main", &mut main, &at(now, 0)) {
+                WatchStep::Reload(cause) => {
+                    assert_eq!(cause, ReloadCause::ProcessDeath);
+                    reload_times.push(now);
+                    record_reload(&mut main, now);
+                }
+                WatchStep::GiveUp => panic!("main given up at {now}"),
+                _ => {}
+            }
+            now += WATCHDOG_TICK_MS;
+        }
+        assert!(reload_times.len() > SATELLITE_MAX_RELOADS as usize);
+        let gaps: Vec<u64> = Iterator::collect(reload_times.windows(2).map(|w| w[1] - w[0]));
+        assert!(gaps[0] >= RELOAD_BACKOFF_BASE_MS);
+        assert!(Iterator::all(&mut gaps.windows(2), |w| w[1] >= w[0]));
+        assert!(!give_up_satellite(&host, &reg, MAIN_LABEL));
+        assert!(host.destroyed.borrow().is_empty());
+        assert!(Locked::has_window(
+            &WindowRegistry::locked(&reg),
+            MAIN_LABEL
+        ));
+    }
+
+    #[test]
+    fn a_pending_window_is_unwatched_and_its_grace_starts_when_pending_clears() {
+        let host = Host::default();
+        let reg = WindowRegistry::new();
+        reg.add_satellite(&host, "sat-2").unwrap();
+        let labels = |reg: &WindowRegistry| -> Vec<(String, bool)> {
+            let locked = WindowRegistry::locked(reg);
+            let labels: Vec<(String, bool)> =
+                Iterator::collect(Locked::window_labels(&locked).into_iter().map(|l| {
+                    let pending = Locked::is_pending(&locked, &l);
+                    (l, pending)
+                }));
+            labels
+        };
+        let never = |_: &str| (0, 0);
+        let mut watches = BTreeMap::new();
+        sync_watches(&mut watches, &labels(&reg), 0, &never);
+        assert_eq!(
+            Iterator::collect::<Vec<&String>>(watches.keys()),
+            vec!["main"]
+        );
+
+        let ready_at = 500_000;
+        reg.ready(&host, "sat-2").unwrap();
+        sync_watches(&mut watches, &labels(&reg), ready_at, &never);
+        let watch = watches.get_mut("sat-2").unwrap();
+        assert_eq!(
+            watch_step("sat-2", watch, &at(ready_at + RENDERER_STALE_AFTER_MS, 0)),
+            WatchStep::Healthy { cleared: 0 }
+        );
+        assert_eq!(
+            watch_step("sat-2", watch, &at(ready_at + STALE_PLUS, 0)),
+            WatchStep::Reload(ReloadCause::ProcessDeath)
+        );
+
+        // Pending again (a move target) or gone: unwatched.
+        reg.set_pending(&host, "sat-2", true).unwrap();
+        sync_watches(&mut watches, &labels(&reg), ready_at, &never);
+        assert!(!watches.contains_key("sat-2"));
+    }
+
+    #[test]
+    fn liveness_keeps_only_registered_windows() {
+        let windows = <WindowLiveness as Default>::default();
+        WindowLiveness::liveness_of(&windows, "main");
+        WindowLiveness::liveness_of(&windows, "sat-9");
+        WindowLiveness::retain_registered(&windows, &[("main".to_owned(), false)]);
+        assert!(WindowLiveness::window_liveness(&windows, "main").is_some());
+        assert!(WindowLiveness::window_liveness(&windows, "sat-9").is_none());
     }
 }

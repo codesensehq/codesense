@@ -547,7 +547,7 @@ function App() {
   // each event with its `wsId`, so this listener just bumps the per-workspace
   // signal — no reverse cwd→ws lookup — and `useWorktreeFileEditor` reacts when
   // the changed path is the file it has open (clean → reload, dirty → warn). The
-  // `cancelled` flag mirrors the menu:action idiom (non-idempotent event: a
+  // `cancelled` flag mirrors the menu-listener.ts idiom (non-idempotent event: a
   // leaked StrictMode listener would double-fire reloads).
   // boot: worktree-file-change
   useEffect(() => {
@@ -772,7 +772,7 @@ function App() {
   // Flush any pending debounced persist before the window closes.
   // `saveAppState` is async Tauri IPC — `beforeunload` can't await it,
   // so we use Tauri's `onCloseRequested` which supports async work.
-  // Uses the cancelled-flag pattern (see menu:action listener above) to
+  // Uses the cancelled-flag pattern (see menu-listener.ts) to
   // handle React StrictMode's mount-unmount-remount cycle.
   // boot: close-flush
   useEffect(() => {

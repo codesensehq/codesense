@@ -291,7 +291,15 @@ fn log_forensic_line(
 
     // AC-2/AC-4: FE JS-heap subset (0 → engine-gated → `unavailable`) + the
     // non-JS gap, and the cumulative unhandled-rejection count (AC-4).
-    let liveness = app.try_state::<crate::renderer_watchdog::RendererLiveness>();
+    // `main`'s renderer: the memory line stays one app-wide reading.
+    let liveness = app
+        .try_state::<crate::renderer_watchdog::WindowLiveness>()
+        .and_then(|windows| {
+            crate::renderer_watchdog::WindowLiveness::window_liveness(
+                &windows,
+                crate::windows::MAIN_LABEL,
+            )
+        });
     let heap = liveness.as_ref().map_or(0, |s| s.last_heap_bytes());
     let unhandled_rejections = liveness.as_ref().map_or(0, |s| s.unhandled_rejections());
     // RF-perf-4 (AC-1): the FE per-resource instance tally, attributing the renderer
