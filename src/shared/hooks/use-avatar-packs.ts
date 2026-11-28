@@ -4,7 +4,13 @@ import { create } from "zustand";
 import { listenScoped } from "@/shared/windows/listen-scoped";
 
 import { createListenerGroup, type ListenerGroup } from "@/shared/lib/tauri-listeners";
-import { getActiveTeamKey, NO_TEAM_SENTINEL, useActiveTeamKey } from "@/shared/lib/team-key";
+import {
+  buildTeamKey,
+  getActiveTeamKey,
+  NO_TEAM_SENTINEL,
+  useActiveTeamKey,
+} from "@/shared/lib/team-key";
+import { useOrgStore } from "@/shared/stores/org-store";
 import {
   BUILTIN_AVATAR_PACKS,
   BUILTIN_FACE_SOURCE,
@@ -300,9 +306,17 @@ function useCallerId(): symbol {
   return ref.current;
 }
 
-/** The avatar packs the active team can use, and a resolver for face refs. */
-export function useAvatarPacks(): AvatarPacks {
-  const teamKey = useActiveTeamKey();
+/**
+ * The avatar packs a team can use, and a resolver for face refs: the named team's, or the active
+ * team's with no team named. A named team other than the active one is read-only (only the active
+ * team can be shared to or given a default pack), and a caller naming a team does not redraw when
+ * the active team switches between two others.
+ */
+export function useAvatarPacks(team?: string): AvatarPacks {
+  const teamKey = useOrgStore((s) => team ?? teamKeyOf(s.activeOrgSlug, s.activeTeamName));
+  const isActive = useOrgStore(
+    (s) => team === undefined || teamKeyOf(s.activeOrgSlug, s.activeTeamName) === team,
+  );
   const entry = useAvatarPacksStore((s) =>
     teamKey === NO_TEAM_SENTINEL ? undefined : s.byTeam[teamKey],
   );
@@ -313,9 +327,14 @@ export function useAvatarPacks(): AvatarPacks {
     ensureLoaded(teamKey);
   }, [caller, teamKey]);
   useEffect(() => () => wantTeams(caller, null), [caller]);
-  useRetryFailedRead(teamKey, entry);
-  const actions = useMemo(() => teamActions(teamKey), [teamKey]);
+  useRetryFailedRead(isActive ? teamKey : NO_TEAM_SENTINEL, entry);
+  const actions = useMemo(() => (isActive ? teamActions(teamKey) : null), [isActive, teamKey]);
   return useMemo(() => avatarPacksView(entry ?? EMPTY_TEAM, actions), [entry, actions]);
+}
+
+/** The team key of an org and team, as {@link useActiveTeamKey} builds it. */
+function teamKeyOf(orgSlug: string | null, teamName: string | null): string {
+  return orgSlug === null ? NO_TEAM_SENTINEL : buildTeamKey(orgSlug, teamName);
 }
 
 /**
