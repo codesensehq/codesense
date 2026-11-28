@@ -576,3 +576,38 @@ async fn needs_you_count_tracks_post_read_archive() {
         .unwrap();
     assert_eq!(hub.needs_you_mail_count(&team()), Ok(3), "a new question waits");
 }
+
+/// With no session row to name a team, the needs-you set still reads as loading until an Inbox
+/// pass has read every team it looked for; a pass that came to no mail then reads as nobody
+/// waiting, and a pass that skipped a team does not.
+#[tokio::test]
+async fn the_needs_you_set_is_loading_until_the_inbox_has_read_every_team() {
+    let app = app();
+    let hub = app.state::<LiveHub>();
+    let host = CountingHost::new();
+    project_agent_views(&mut hub.model.lock().unwrap()).unwrap();
+    let loading = Err("inbox projection is loading".to_string());
+    for view in ["all", "team:acme/default"] {
+        assert_eq!(hub.needs_you_rows(view), loading, "{view}");
+    }
+
+    host.store_failed.store(true, Ordering::Relaxed);
+    let complete = refresh_inbox_with_host(app.handle(), &host, false)
+        .await
+        .unwrap();
+    assert!(!complete);
+    assert_eq!(
+        hub.needs_you_rows("all"),
+        loading,
+        "a skipped team has not loaded"
+    );
+
+    host.store_failed.store(false, Ordering::Relaxed);
+    let complete = refresh_inbox_with_host(app.handle(), &host, false)
+        .await
+        .unwrap();
+    assert!(complete);
+    for view in ["all", "team:acme/default"] {
+        assert_eq!(hub.needs_you_rows(view), Ok(vec![]), "no mail: {view}");
+    }
+}

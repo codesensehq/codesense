@@ -201,6 +201,9 @@ struct Model {
     files: files::Files,
     nav_files: BTreeMap<String, stories::NativeFiles>,
     inbox: std::sync::Arc<inbox::InboxProjection>,
+    /// Whether an Inbox refresh has read every team it looked for, even when that came to no
+    /// mail: until then the needs-you set reads as loading, never as nobody waiting.
+    inbox_hydrated: bool,
     inbox_pending: BTreeMap<String, (crate::commands::dashboard_launch::LaunchTeam, BTreeSet<i64>)>,
     activity_captured_at: BTreeMap<String, u64>,
     status_request_id: Option<String>,
@@ -484,8 +487,9 @@ impl LiveHub {
     }
     /// The needs-you set as the hub last published it, in one view: `all`, or a team's
     /// `team:<org>/<team>`. Errors until a recompute has published it, and while an Inbox the
-    /// view covers is still loading, so missing cards never read as nobody waiting: a team's
-    /// view needs its own team's Inbox, `all` the Inbox of every team a session row names.
+    /// view covers is still loading, so missing cards never read as nobody waiting: every view
+    /// needs a complete Inbox refresh first, a team's view its own team's Inbox, and `all` the
+    /// Inbox of every team a session row names.
     pub(crate) fn needs_you_rows(&self, view: &str) -> Result<Vec<serde_json::Value>, String> {
         let mut model = self.model.lock().unwrap();
         if !model.needs_you_projected {
@@ -497,7 +501,9 @@ impl LiveHub {
             .iter()
             .map(|team| view_key::team_key(&team.org, &team.team))
             .collect();
-        let loading = if view == "all" {
+        let loading = if !model.inbox_hydrated {
+            true
+        } else if view == "all" {
             model
                 .rows
                 .iter()
@@ -2515,6 +2521,8 @@ async fn refresh_inbox_with_host<R: tauri::Runtime>(
             }
         }
     }
+    // Every team was discovered, resolved and read: the Inbox has loaded, mail or none.
+    let read_all = complete && pending.is_empty();
     if !pending.is_empty() {
         restore_pending(&hub, pending);
     }
@@ -2579,6 +2587,7 @@ async fn refresh_inbox_with_host<R: tauri::Runtime>(
     let (deltas, resets) = {
         let mut model = hub.model.lock().unwrap();
         model.inbox = std::sync::Arc::new(inbox);
+        model.inbox_hydrated |= read_all;
         let mut deltas = model
             .projections
             .patch_view("inbox", updates, removes, None)?;

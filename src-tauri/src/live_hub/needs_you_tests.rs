@@ -625,6 +625,7 @@ fn another_teams_workspace_doc_and_quiet_launch_patch_only_their_own_rows() {
         model.rows = vec![lead];
         model.spend_rows = vec![reached("lead-agent")];
         model.inbox = loaded(&["default", "quick-fix"]);
+        model.inbox_hydrated = true;
     }
     let mut viewer = serde_json::json!({
         "openedTeams": ["acme:delivery"],
@@ -775,7 +776,11 @@ fn spend_and_inbox_events_upsert_the_set_through_the_hub() {
             "a loading Inbox is not nobody waiting: {view}"
         );
     }
-    hub.model.lock().unwrap().inbox = loaded(&["default"]);
+    {
+        let mut model = hub.model.lock().unwrap();
+        model.inbox = loaded(&["default"]);
+        model.inbox_hydrated = true;
+    }
     assert_eq!(hub.needs_you_rows("all").unwrap(), Vec::<Value>::new());
     hub.needs_you_rows("team:acme/default").unwrap();
 
@@ -865,6 +870,7 @@ fn a_loading_inbox_is_an_error_in_the_views_it_covers() {
     fixer.team = Some(acme("quick-fix"));
     model.rows = vec![row("lead", "Lead", SessionState::Running), fixer];
     model.inbox = loaded(&["default"]);
+    model.inbox_hydrated = true;
     crate::live_hub::project_agent_views(&mut model).unwrap();
     drop(model);
     let loading = Err("inbox projection is loading".to_string());
@@ -892,6 +898,7 @@ fn live_asks_and_a_failed_mark_reach_the_topic_and_clear() {
         row("ender", "Ender", SessionState::Exited),
     ];
     model.inbox = loaded(&["default"]);
+    model.inbox_hydrated = true;
     for view in ["all", "team:acme/default"] {
         TopicRegistry::snapshot(&mut model.projections, TOPIC, view).unwrap();
     }
@@ -1048,6 +1055,7 @@ fn the_overview_reads_a_team_callers_own_needs_you_section() {
                 MessageKind::NeedsYou,
             ),
         ]));
+        model.inbox_hydrated = true;
         crate::live_hub::project_agent_views(&mut model).unwrap();
     }
     let root = tempfile::tempdir().unwrap();
