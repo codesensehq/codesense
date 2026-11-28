@@ -199,12 +199,33 @@ const SUPERSEDED = {
 const RESULT_ALWAYS = { file: "rust.yml", job: "rust-macos", term: "always()" };
 // rust.yml's source guards also scan the front end (src/), so they run on every change: the job
 // has no if: or needs: (no path filter can skip it), and one step runs the guards crate's tests,
-// with no if: or continue-on-error of its own.
+// with no if: or continue-on-error of its own. That step has only a name, its env and the exact
+// command, under bash, and the job's and the step's env keys are the ones listed. Nothing in rust.yml
+// may name CODESENSE_GUARD_ROOT (which moves the tree the guards read), no step in the job may write
+// GITHUB_PATH or GITHUB_ENV, rust.yml's pull_request and merge_group triggers take no path filter,
+// and no other job anywhere may report the Rust guards check. What is left unpinned: the job's
+// earlier steps (checkout, toolchain, cache) may still change the tree or the toolchain before the
+// tests run, and the workflow-level env applies to the job too.
 const RUST_GUARDS = {
   file: "rust.yml",
   job: "rust-guards",
+  check: "Rust guards",
   run: "cargo test --locked -p codesense-guards",
+  stepKeys: ["name", "env", "run"],
+  stepEnv: ["X1_DIFF_BASE"],
+  jobEnv: ["CARGO_INCREMENTAL", "RUST_BACKTRACE", "CARGO_TERM_COLOR"],
+  root: "CODESENSE_GUARD_ROOT",
 };
+// The checks a single job reports: a job anywhere else whose name could render one would report
+// it too, and could pass a required check that job failed.
+const OWNED_CHECKS = [
+  ...Object.entries(EXPORTS_GUARD.checks).map(([job, check]) => ({
+    file: EXPORTS_GUARD.file,
+    job,
+    check,
+  })),
+  { file: RUST_GUARDS.file, job: RUST_GUARDS.job, check: RUST_GUARDS.check },
+];
 const SCORECARD_ACTIONS = new Set([
   "actions/checkout",
   "ossf/scorecard-action",
@@ -354,6 +375,48 @@ export function workflowPolicy(text, file = "") {
       errors.push(
         `${RUST_GUARDS.job}: must have no if: or needs: and run ${RUST_GUARDS.run} in one unconditional step`,
       );
+    if (mapping(job) && job.name !== RUST_GUARDS.check)
+      errors.push(`${RUST_GUARDS.job}: name must be ${RUST_GUARDS.check}`);
+    const onlyKeys = (value, keys) =>
+      value === undefined ||
+      (mapping(value) && Object.keys(value).every((key) => keys.includes(key)));
+    if (
+      runs.length === 1 &&
+      (!onlyKeys(runs[0], RUST_GUARDS.stepKeys) || !onlyKeys(runs[0].env, RUST_GUARDS.stepEnv))
+    )
+      errors.push(
+        `${RUST_GUARDS.job}: the step that runs ${RUST_GUARDS.run} may set only ${RUST_GUARDS.stepKeys.join(", ")}, and env only ${RUST_GUARDS.stepEnv.join(", ")}`,
+      );
+    if (mapping(job) && !onlyKeys(job.env, RUST_GUARDS.jobEnv))
+      errors.push(`${RUST_GUARDS.job}: env may set only ${RUST_GUARDS.jobEnv.join(", ")}`);
+    // Run steps take their shell from defaults; anything but bash could swallow a failed test.
+    for (const [where, holder] of [
+      [RUST_GUARDS.job, job],
+      [RUST_GUARDS.file, workflow],
+    ])
+      if (
+        mapping(holder) &&
+        Object.hasOwn(holder, "defaults") &&
+        JSON.stringify(holder.defaults) !== '{"run":{"shell":"bash"}}'
+      )
+        errors.push(`${where}: defaults may set only run.shell: bash`);
+    for (const step of steps)
+      if (mapping(step) && /GITHUB_(PATH|ENV)/.test(String(step.run ?? "")))
+        errors.push(
+          `${RUST_GUARDS.job}: step "${step.name ?? step.run}" writes GITHUB_PATH or GITHUB_ENV`,
+        );
+    let rootUses = 0;
+    visit(doc, {
+      Scalar(_, scalar) {
+        if (String(scalar.value).includes(RUST_GUARDS.root)) rootUses++;
+      },
+    });
+    if (rootUses) errors.push(`${RUST_GUARDS.root} may not appear in ${RUST_GUARDS.file}`);
+    for (const trigger of ["pull_request", "merge_group"]) {
+      const filter = mapping(workflow.on) ? workflow.on[trigger] : null;
+      if (mapping(filter) && ["paths", "paths-ignore"].some((key) => Object.hasOwn(filter, key)))
+        errors.push(`${RUST_GUARDS.file}: the ${trigger} trigger takes no paths or paths-ignore`);
+    }
   }
   if (file === REGENERATE_EXPORTS.file) {
     const inputs = mapping(workflow.on) ? workflow.on.workflow_dispatch?.inputs : null;
@@ -414,17 +477,17 @@ export function workflowPolicy(text, file = "") {
         );
     }
   }
-  // A required check's name belongs to the exports guard alone.
+  // Each owned check's name belongs to its own job alone.
   for (const [name, job] of Object.entries(mapping(workflow.jobs) ? workflow.jobs : {}))
-    for (const [owner, check] of Object.entries(EXPORTS_GUARD.checks))
+    for (const owned of OWNED_CHECKS)
       if (
         mapping(job) &&
         Object.hasOwn(job, "name") &&
-        couldRender(job.name, check) &&
-        !(file === EXPORTS_GUARD.file && name === owner)
+        couldRender(job.name, owned.check) &&
+        !(file === owned.file && name === owned.job)
       )
         errors.push(
-          `${name}: the job name could report ${check}, a check only ${EXPORTS_GUARD.file} reports`,
+          `${name}: the job name could report ${owned.check}, a check only ${owned.file} reports`,
         );
   if (
     file === COMMIT_EMAILS.file &&

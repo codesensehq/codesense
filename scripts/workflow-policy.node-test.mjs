@@ -105,7 +105,7 @@ jobs:
 
 // rust.yml must keep its source-guards job, so a fixture checked as rust.yml gets one.
 const rustGuards =
-  "  rust-guards:\n    runs-on: ubuntu-24.04\n    timeout-minutes: 20\n    permissions:\n      contents: read\n" +
+  "  rust-guards:\n    name: Rust guards\n    runs-on: ubuntu-24.04\n    timeout-minutes: 20\n    permissions:\n      contents: read\n" +
   "    steps:\n      - run: cargo test --locked -p codesense-guards\n";
 const rustPolicy = (text, file) =>
   workflowPolicy(
@@ -525,6 +525,123 @@ test("rust.yml runs its source guards on every change", () => {
     );
   // The pin is rust.yml's alone.
   assert.deepEqual(workflowPolicy(good, "ci.yml"), []);
+});
+
+// The guards' step runs the exact command under bash, nothing moves the tree the guards read or
+// the job's PATH and env, no path filter skips the workflow, and no other job reports the check.
+test("rust.yml's source guards step cannot be bent or shadowed", () => {
+  const text = fs.readFileSync(path.join(directory, "rust.yml"), "utf8");
+  const step = parse(text).jobs["rust-guards"].steps.find(
+    (candidate) => candidate.run === "cargo test --locked -p codesense-guards",
+  );
+  assert.deepEqual(Object.keys(step), ["name", "env", "run"]);
+  assert.deepEqual(Object.keys(step.env), ["X1_DIFF_BASE"]);
+  const header = "  rust-guards:\n    name: Rust guards\n";
+  const jobEnv = "      CARGO_TERM_COLOR: always\n    steps:\n";
+  const run = "        run: cargo test --locked -p codesense-guards\n";
+  const stepEnv = "        env:\n          # Empty on push";
+  const pullRequest = "  pull_request:\n";
+  for (const [from, to, error] of [
+    [run, "        run: cargo test --locked -p codesense-guards; exit 0\n", /must have no if:/],
+    [run, "        run: set +e; cargo test --locked -p codesense-guards\n", /must have no if:/],
+    [run, `${run}        shell: sh\n`, /may set only name, env, run/],
+    [run, `${run}        working-directory: elsewhere\n`, /may set only name, env, run/],
+    [run, `${run}        id: guards\n`, /may set only name, env, run/],
+    [run, `${run}        timeout-minutes: 1\n`, /may set only name, env, run/],
+    [
+      stepEnv,
+      "        env:\n          RUSTC_WRAPPER: /bin/true\n          # Empty on push",
+      /and env only X1_DIFF_BASE/,
+    ],
+    [
+      stepEnv,
+      "        env:\n          CODESENSE_GUARD_ROOT: /tmp\n          # Empty on push",
+      /CODESENSE_GUARD_ROOT may not appear/,
+    ],
+    [
+      jobEnv,
+      '      CARGO_TERM_COLOR: always\n      RUSTFLAGS: "--cfg x"\n    steps:\n',
+      /rust-guards: env may set only/,
+    ],
+    [
+      header,
+      `${header}    defaults:\n      run:\n        shell: sh\n`,
+      /rust-guards: defaults may set only run.shell: bash/,
+    ],
+    [
+      header,
+      `${header}    defaults:\n      run:\n        working-directory: x\n`,
+      /rust-guards: defaults may set only/,
+    ],
+    [
+      "\njobs:\n",
+      "\ndefaults:\n  run:\n    shell: pwsh\njobs:\n",
+      /rust\.yml: defaults may set only run.shell: bash/,
+    ],
+    [
+      jobEnv,
+      `${jobEnv}      - run: echo "$RUNNER_TEMP/fake" >> "$GITHUB_PATH"\n`,
+      /rust-guards: step "echo .*" writes GITHUB_PATH or GITHUB_ENV/,
+    ],
+    [
+      jobEnv,
+      `${jobEnv}      - run: echo "X=1" >> $GITHUB_ENV\n`,
+      /rust-guards: step "echo .*" writes GITHUB_PATH or GITHUB_ENV/,
+    ],
+    [
+      "\nenv:\n",
+      "\nenv:\n  CODESENSE_GUARD_ROOT: /tmp\n",
+      /CODESENSE_GUARD_ROOT may not appear in rust\.yml/,
+    ],
+    [
+      pullRequest,
+      `${pullRequest}    paths: ["src-tauri/**"]\n`,
+      /the pull_request trigger takes no paths or paths-ignore/,
+    ],
+    [
+      pullRequest,
+      `${pullRequest}    paths-ignore: ["src/**"]\n`,
+      /the pull_request trigger takes no paths or paths-ignore/,
+    ],
+    [
+      "  merge_group:\n",
+      '  merge_group:\n    paths-ignore: ["src/**"]\n',
+      /the merge_group trigger takes no paths or paths-ignore/,
+    ],
+    [
+      header,
+      "  rust-guards:\n    name: Rust source guards\n",
+      /rust-guards: name must be Rust guards/,
+    ],
+  ]) {
+    assert.ok(text.includes(from), from);
+    assert.match(workflowPolicy(text.replace(from, to), "rust.yml").join("\n"), error, to);
+  }
+  // A job elsewhere, or another job in rust.yml, whose name could report Rust guards.
+  const named = (name) =>
+    good.replace("    runs-on: ubuntu-24.04\n", `    name: ${name}\n    runs-on: ubuntu-24.04\n`);
+  for (const name of [
+    "Rust guards",
+    "rust GUARDS",
+    "Rust ${{ matrix.x }}",
+    "\"${{ 'Rust guards' }}\"",
+  ])
+    assert.match(
+      workflowPolicy(named(name), "ci.yml").join("\n"),
+      /static: the job name could report Rust guards, a check only rust\.yml reports/,
+      name,
+    );
+  assert.deepEqual(workflowPolicy(named("Rust guards tests"), "ci.yml"), []);
+  assert.match(
+    workflowPolicy(
+      text.replace(
+        "  rust-macos-build:\n    name: Rust (macOS arm64) build ${{ matrix.part }}\n",
+        "  rust-macos-build:\n    name: Rust ${{ matrix.part }}\n",
+      ),
+      "rust.yml",
+    ).join("\n"),
+    /rust-macos-build: the job name could report Rust guards/,
+  );
 });
 
 // The Linux app job is not a required check: it carries the path filter and nothing else, so it
