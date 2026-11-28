@@ -5,8 +5,8 @@
  * own client.
  */
 import { useEffect } from "react";
-import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { windowGetSlice, windowReady } from "@/tauri/commands";
+import { currentWebviewWindow } from "@/shared/lib/current-window";
 import { logger } from "@/shared/lib/logger";
 import { safeUnlisten } from "@/shared/lib/tauri-listeners";
 import { mainSlice } from "./owner-map";
@@ -21,7 +21,7 @@ export function useMainWindowRegistry() {
       {
         label: MAIN_WINDOW_LABEL,
         listen: async (handler) => {
-          const off = await getCurrentWebviewWindow().listen<WindowSlice>(
+          const off = await currentWebviewWindow().listen<WindowSlice>(
             WINDOW_SLICE_EVENT,
             (event) => handler(event.payload),
           );
