@@ -990,7 +990,8 @@ jobs:
         run: cargo test --locked -p codesense --lib --features e2e-webdriver -- windows::e2e windows::command_acl windows::pending_timeout
       - name: Lint with the webdriver feature
         # The webdriver-only module must lint clean; the rest of the tree has lints no job gates,
-        # so `-D warnings` would fail on those first and never reach the module.
+        # so `-D warnings` would fail on those first and never reach the module. The script fails
+        # closed: an error in a crate the app needs, or no sign the app crate was checked, fails.
         run: |
           cargo clippy --locked -p codesense --features e2e-webdriver --message-format=json > "$RUNNER_TEMP/clippy.json" || true
           node scripts/clippy-webdriver-module.mjs "$RUNNER_TEMP/clippy.json"

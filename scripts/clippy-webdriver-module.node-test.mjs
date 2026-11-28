@@ -11,9 +11,21 @@ import { clippyProblems } from "./clippy-webdriver-module.mjs";
 
 const script = fileURLToPath(new URL("clippy-webdriver-module.mjs", import.meta.url));
 
-const message = (level, file, { code = "clippy::needless_return", text = "a lint" } = {}) =>
+const ROOT = "/home/runner/work/codesense/codesense/src-tauri";
+const APP = { name: "codesense_lib", src_path: `${ROOT}/src/lib.rs` };
+const PLATFORM = {
+  name: "codesense_platform",
+  src_path: `${ROOT}/crates/codesense-platform/src/lib.rs`,
+};
+
+const message = (
+  level,
+  file,
+  { code = "clippy::needless_return", text = "a lint", target = APP } = {},
+) =>
   JSON.stringify({
     reason: "compiler-message",
+    target,
     message: {
       level,
       message: text,
@@ -22,14 +34,25 @@ const message = (level, file, { code = "clippy::needless_return", text = "a lint
       rendered: `${level}: ${text}`,
     },
   });
+const artifact = (target) => JSON.stringify({ reason: "compiler-artifact", target });
 const finished = (success) => JSON.stringify({ reason: "build-finished", success });
 
-test("passes a finished build whose warnings are all outside the module", () => {
+test("passes a clean run: the app crate checked and the build finished", () => {
+  assert.deepEqual(
+    clippyProblems([artifact(PLATFORM), artifact(APP), finished(true)].join("\n")),
+    [],
+  );
+});
+
+test("passes warnings and deny lints in the app crate outside the module", () => {
   const lines = [
-    message("warning", "src-tauri/crates/codesense-platform/src/limits/unix.rs"),
+    message("warning", "src-tauri/crates/codesense-platform/src/limits/unix.rs", {
+      target: PLATFORM,
+    }),
     message("warning", "src-tauri/src/windows/mod.rs", { code: "unused_imports" }),
     message("warning", "src-tauri/src/windows/e2e_names.rs"),
-    finished(true),
+    message("error", "src-tauri/src/commands/fs.rs", { code: "clippy::never_loop" }),
+    finished(false),
   ];
   assert.deepEqual(clippyProblems(lines.join("\n")), []);
 });
@@ -48,11 +71,10 @@ test("fails any lint or warning in the module or a file under it", () => {
   ]);
 });
 
-test("fails a compile error anywhere, but not a deny lint outside the module", () => {
+test("fails a compile error in the app crate", () => {
   const lines = [
     message("error", "src-tauri/src/lib.rs", { code: "E0425", text: "cannot find value" }),
-    message("error", "src-tauri/crates/codesense-platform/src/fs.rs"),
-    message("error", null, { code: null, text: "aborting due to 2 previous errors" }),
+    message("error", null, { code: null, text: "aborting due to 1 previous error" }),
     finished(false),
   ];
   assert.deepEqual(clippyProblems(lines.join("\n")), [
@@ -60,22 +82,48 @@ test("fails a compile error anywhere, but not a deny lint outside the module", (
   ]);
 });
 
-test("fails a build that did not finish or failed with nothing to show for it", () => {
-  assert.deepEqual(clippyProblems(message("warning", "src-tauri/src/lib.rs")), [
-    "clippy did not finish: no build-finished line",
+test("fails closed when a dependency's error stops the app crate being linted", () => {
+  // A deny-by-default lint in a dependency ends the build before the app crate is checked.
+  const lines = [
+    message("warning", "src-tauri/crates/codesense-platform/src/limits/unix.rs", {
+      code: "unused_mut",
+      target: PLATFORM,
+    }),
+    message("error", "src-tauri/crates/codesense-platform/src/limits/unix.rs", {
+      code: "clippy::never_loop",
+      text: "this loop never actually loops",
+      target: PLATFORM,
+    }),
+    finished(false),
+  ];
+  assert.deepEqual(clippyProblems(lines.join("\n")), [
+    "src-tauri/crates/codesense-platform/src/limits/unix.rs:7: error in codesense_platform, which the app crate needs: this loop never actually loops",
+    "the app crate (src-tauri/src/lib.rs) was never checked, so the module was not linted",
   ]);
-  assert.deepEqual(clippyProblems(finished(false)), [
+});
+
+test("fails closed when nothing shows the app crate was checked", () => {
+  assert.deepEqual(clippyProblems([artifact(PLATFORM), finished(true)].join("\n")), [
+    "the app crate (src-tauri/src/lib.rs) was never checked, so the module was not linted",
+  ]);
+});
+
+test("fails a build that did not finish or failed with nothing to show for it", () => {
+  assert.deepEqual(
+    clippyProblems([artifact(APP), message("warning", "src-tauri/src/lib.rs")].join("\n")),
+    ["clippy did not finish: no build-finished line"],
+  );
+  assert.deepEqual(clippyProblems([artifact(APP), finished(false)].join("\n")), [
     "the build failed and no diagnostic says why",
   ]);
-  assert.deepEqual(clippyProblems(""), ["clippy did not finish: no build-finished line"]);
+  assert.deepEqual(clippyProblems(""), [
+    "clippy did not finish: no build-finished line",
+    "the app crate (src-tauri/src/lib.rs) was never checked, so the module was not linted",
+  ]);
 });
 
 test("ignores cargo's other lines and text that is not JSON", () => {
-  const lines = [
-    "   Compiling codesense v0.1.0",
-    JSON.stringify({ reason: "compiler-artifact", target: { name: "codesense" } }),
-    finished(true),
-  ];
+  const lines = ["   Compiling codesense v0.1.1", artifact(APP), finished(true)];
   assert.deepEqual(clippyProblems(lines.join("\n")), []);
 });
 
@@ -87,7 +135,7 @@ test("the command exits non-zero on a problem and prints it", () => {
     bad,
     [message("warning", "src-tauri/src/windows/e2e.rs"), finished(true)].join("\n"),
   );
-  fs.writeFileSync(good, finished(true));
+  fs.writeFileSync(good, [artifact(APP), finished(true)].join("\n"));
   assert.throws(
     () => execFileSync("node", [script, bad], { stdio: "pipe" }),
     (e) => e.status === 1 && /e2e\.rs:7: warning: a lint/.test(String(e.stderr)),
