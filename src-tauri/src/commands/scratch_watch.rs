@@ -78,6 +78,35 @@ pub(crate) fn configuration_path_changed<R: tauri::Runtime>(
     }
 }
 
+/// Whether `path` is in a space's group folder under the scratch repo `root`.
+pub(crate) fn is_group_file(root: &Path, path: &Path) -> bool {
+    std::result::Result::ok(path.strip_prefix(root))
+        .and_then(segments)
+        .is_some_and(|parts| crate::groups::store::is_group_path(&parts))
+}
+
+/// Keep group files out of the scratch repo's status, when this launch has the tiles flag on.
+/// An app with no flag managed counts as off.
+fn exclude_group_files_for_launch<R: tauri::Runtime>(app: &tauri::AppHandle<R>, root: &Path) {
+    let tiles = tauri::Manager::try_state::<crate::flags::TilesFlag>(app)
+        .is_some_and(|flag| crate::flags::TilesFlag::is_on(&flag));
+    crate::context_repo::scratch_space::exclude_group_files(root, tiles);
+}
+
+/// The path the scratch handler ingests: `path` as registered under `pane_root`, or `None` for
+/// a group file, which is dropped before any content, footprint or pane ingestion.
+fn ingestible_path(
+    pane_root: &Path,
+    canonical_root: Option<&PathBuf>,
+    path: &Path,
+) -> Option<PathBuf> {
+    let registered = canonical_root
+        .and_then(|root| path.strip_prefix(root).ok())
+        .map(|relative| pane_root.join(relative))
+        .unwrap_or_else(|| path.to_path_buf());
+    (!is_group_file(pane_root, &registered)).then_some(registered)
+}
+
 /// The scratch repo currently watched (one profile at a time).
 static WATCHED: Mutex<Option<PathBuf>> = Mutex::new(None);
 
@@ -152,6 +181,8 @@ pub fn register_scratch_watch<R: tauri::Runtime>(
         let coalescer = crate::panes::watch::app_coalescer(app);
         Arc::new(move |change| coalescer.note(change))
     };
+    // Group files are private-layer state, never in the repo's status.
+    exclude_group_files_for_launch(app, &root);
     super::context_git_watch::register_private_git_watch(app, state, &root);
     let canonical_root = root.canonicalize().ok();
     let pane_root = root.clone();
@@ -159,12 +190,12 @@ pub fn register_scratch_watch<R: tauri::Runtime>(
     // footprint index.
     let index_app = app.clone();
     let handler: crate::content_engine::DispatchHandler = Arc::new(move |path: &Path| {
-        // Configuration paths share the scratch watch but bypass content ingestion.
-        let registered = canonical_root
-            .as_ref()
-            .and_then(|root| path.strip_prefix(root).ok())
-            .map(|relative| pane_root.join(relative))
-            .unwrap_or_else(|| path.to_path_buf());
+        // Configuration paths share the scratch watch but bypass content ingestion. The group
+        // store writes its files and keeps them out of the repo's status; a move or a resize is
+        // no content change, footprint or pane edit.
+        let Some(registered) = ingestible_path(&pane_root, canonical_root.as_ref(), path) else {
+            return;
+        };
         // A coalesced scratch/org root can hide both content and pane changes.
         if Result::ok(registered.strip_prefix(&pane_root))
             .and_then(segments)
@@ -245,6 +276,87 @@ mod tests {
         for real in ["guide.md", "teams.yml", "v2.md", ""] {
             assert!(!is_noise(real), "{real} is not noise");
         }
+    }
+
+    /// A group write under the scratch repo is dropped before any ingestion: no content change,
+    /// footprint or pane edit.
+    #[test]
+    fn the_handler_drops_group_files_before_ingesting_them() {
+        let root = Path::new("/home/users/42/scratch");
+        let group = root.join("orgs/acme/plans/config/groups/main.json");
+        assert!(is_group_file(root, &group));
+        assert!(is_group_file(
+            root,
+            &root.join("orgs/acme/plans/config/groups/.gitignore")
+        ));
+        assert!(is_group_file(
+            root,
+            &root.join("orgs/acme/plans/config/groups")
+        ));
+        assert!(content_change_payload(&group).is_none());
+        // A one-segment org keeps its group folder at orgs/<name>/config/groups.
+        assert!(is_group_file(
+            root,
+            &root.join("orgs/solo/config/groups/main.json")
+        ));
+        for other in [
+            "orgs/solo/content/groups/main.json",
+            "orgs/acme/plans/config/profile.json",
+            "orgs/acme/plans/content/groups/main.json",
+            "orgs/acme/plans/config/groupsx/main.json",
+            "all-orgs/config/groups/main.json",
+        ] {
+            assert!(!is_group_file(root, &root.join(other)), "{other}");
+        }
+        assert!(!is_group_file(
+            root,
+            Path::new("/elsewhere/orgs/a/b/config/groups/x.json")
+        ));
+    }
+
+    /// The handler's early return: a group file is dropped, other scratch paths are ingested,
+    /// also when the watcher reports them under the canonical root.
+    #[test]
+    fn the_handler_returns_early_for_a_group_file_only() {
+        let root = PathBuf::from("/home/users/42/scratch");
+        let group = root.join("orgs/acme/plans/config/groups/main.json");
+        assert_eq!(ingestible_path(&root, None, &group), None);
+        let note = root.join("orgs/acme/plans/content/note.md");
+        assert_eq!(ingestible_path(&root, None, &note), Some(note.clone()));
+
+        let canonical = PathBuf::from("/private/home/users/42/scratch");
+        let reported = canonical.join("orgs/acme/plans/config/groups/main.json");
+        assert_eq!(ingestible_path(&root, Some(&canonical), &reported), None);
+        let reported = canonical.join("orgs/acme/plans/content/note.md");
+        assert_eq!(
+            ingestible_path(&root, Some(&canonical), &reported),
+            Some(note)
+        );
+    }
+
+    /// The flag read the scratch watch registers with: the exclude is written with the flag on,
+    /// and not with it off or unmanaged.
+    #[test]
+    fn the_scratch_watch_excludes_group_files_only_with_the_flag_on() {
+        use tauri::Manager;
+        let exclude_has_groups = |managed: Option<bool>| {
+            let tmp = tempfile::tempdir().unwrap();
+            std::fs::create_dir_all(tmp.path().join(".git/info")).unwrap();
+            let app = crate::commands::source_repo_add::tests::mock_app();
+            if let Some(on) = managed {
+                app.manage(crate::flags::TilesFlag::fixed(on));
+            }
+            exclude_group_files_for_launch(app.handle(), tmp.path());
+            let exclude = tmp.path().join(".git/info/exclude");
+            std::fs::read_to_string(exclude).is_ok_and(|text| {
+                crate::groups::store::GROUPS_EXCLUDES
+                    .iter()
+                    .all(|line| text.contains(line))
+            })
+        };
+        assert!(!exclude_has_groups(None), "no flag managed: off");
+        assert!(!exclude_has_groups(Some(false)));
+        assert!(exclude_has_groups(Some(true)));
     }
 
     #[test]

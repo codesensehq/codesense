@@ -95,12 +95,23 @@ impl TilesFlag {
         log::info!(target: "flags", "tiles release flag: {}", if on { "on" } else { "off" });
         Self(on)
     }
+
+    /// A flag fixed to `on`, for tests that manage it in an app.
+    #[cfg(test)]
+    pub(crate) fn fixed(on: bool) -> Self {
+        Self(on)
+    }
+
+    /// Whether tiles are on for this session: the Rust side's `tiles_enabled()`.
+    pub fn is_on(&self) -> bool {
+        self.0
+    }
 }
 
 /// The tiles flag's boot value, the same for the whole session.
 #[tauri::command]
 pub fn tiles_enabled(flag: tauri::State<'_, TilesFlag>) -> bool {
-    flag.0
+    flag.is_on()
 }
 
 #[cfg(test)]
@@ -113,7 +124,11 @@ pub(crate) mod tests {
 
     pub(crate) fn local_tiles(dir: &Path, on: bool) {
         let state = serde_json::json!({ "viewer": { "settings": { "tiles": on } } });
-        std::fs::write(crate::commands::system::app_state_file_in(dir), state.to_string()).unwrap();
+        std::fs::write(
+            crate::commands::system::app_state_file_in(dir),
+            state.to_string(),
+        )
+        .unwrap();
     }
 
     #[test]

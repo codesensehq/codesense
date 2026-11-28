@@ -379,6 +379,81 @@ pub fn ensure_scratch_repo(
     Ok(root)
 }
 
+/// Keep group files out of the scratch repo's git status: add the group folders' entries to the
+/// repo's `.git/info/exclude` once, keeping its other lines. Does nothing with the tiles flag off
+/// or before the repo exists. A failed write is logged and never fails the open; the group
+/// folder's own `.gitignore` ([`open_group_space`]) still keeps the status clean.
+pub fn exclude_group_files(scratch_root: &Path, tiles: bool) {
+    if !tiles {
+        return;
+    }
+    let git_dir = scratch_root.join(".git");
+    if !std::path::Path::is_dir(&git_dir) {
+        return;
+    }
+    for line in crate::groups::store::GROUPS_EXCLUDES {
+        if let Err(e) = add_exclude_line(&git_dir, line) {
+            log::warn!(target: "scratch_space", "could not exclude group files from the private repo: {e}");
+        }
+    }
+}
+
+fn add_exclude_line(git_dir: &Path, line: &str) -> std::io::Result<()> {
+    let exclude = git_dir.join("info").join("exclude");
+    let mut current = match std::fs::read_to_string(&exclude) {
+        Ok(text) => text,
+        Err(e) if std::io::Error::kind(&e) == std::io::ErrorKind::NotFound => {
+            std::string::String::new()
+        }
+        Err(e) => return Err(e),
+    };
+    if current.lines().any(|existing| existing.trim() == line) {
+        return Ok(());
+    }
+    if !str::is_empty(&current) && !current.ends_with('\n') {
+        current.push('\n');
+    }
+    current.push_str(line);
+    current.push('\n');
+    std::fs::create_dir_all(git_dir.join("info"))?;
+    crate::content_engine::write_tmp_fsync_rename(&exclude, current.as_bytes())
+        .map_err(|e| std::io::Error::other(e.to_string()))
+}
+
+/// Open `org_slug`'s space for a group write, with the tiles flag on: the space exists, the
+/// scratch repo excludes group files, and the group folder holds a `.gitignore` of `*` (which
+/// ignores itself too), so the repo's status stays clean even when the exclude can't be written.
+/// Returns the group folder, or `None` with the flag off, having written nothing.
+pub fn open_group_space(
+    codesense_home: &Path,
+    principal: &Principal,
+    org_slug: &str,
+    tiles: bool,
+) -> Result<Option<PathBuf>, ScratchError> {
+    if !tiles {
+        return Ok(None);
+    }
+    let (space, _) = ensure_org_space(codesense_home, principal, org_slug)?;
+    exclude_group_files(&scratch_root(codesense_home, principal), tiles);
+    let dir = crate::groups::store::groups_dir(&space);
+    let io = |e: std::io::Error| ScratchError::Io(format!("cannot open the group folder: {e}"));
+    std::fs::create_dir_all(&dir).map_err(io)?;
+    let ignore = dir.join(".gitignore");
+    // A symlink is never read or written through: it is replaced by a fresh file (the rename
+    // swaps the link itself), so a link to a user's file leaves that file alone.
+    let is_current = std::fs::symlink_metadata(&ignore)
+        .is_ok_and(|meta| std::fs::Metadata::is_file(&meta))
+        && std::fs::read_to_string(&ignore).is_ok_and(|text| text == GROUPS_GITIGNORE);
+    if !is_current {
+        crate::content_engine::write_tmp_fsync_rename(&ignore, GROUPS_GITIGNORE.as_bytes())
+            .map_err(|e| io(std::io::Error::other(e.to_string())))?;
+    }
+    Ok(Some(dir))
+}
+
+/// The group folder's `.gitignore`: everything in it, itself included.
+const GROUPS_GITIGNORE: &str = "*\n";
+
 /// The private repo has no publish target; all of its readers compare against HEAD.
 pub fn is_private_repo(repo: &git2::Repository) -> bool {
     repo.config()
