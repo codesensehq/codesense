@@ -3282,6 +3282,24 @@ mod tests {
         }
 
         fn reserve_pool(&self, sidecar: bool, pool: bool) -> LocalEffectClaim {
+            self.admission
+                .effects
+                .reserve_spawn(self.live_target(sidecar), &self.session, pool)
+                .unwrap_or_else(|e| panic!("reserve sidecar={sidecar}: {e}"))
+        }
+
+        /// Reserves as the product spawn does: waits up to `WAIT` for the
+        /// previous lifetime's exit, removal and settlements.
+        fn reserve_until(&self, sidecar: bool) -> Result<LocalEffectClaim, String> {
+            self.admission.effects.reserve_spawn_until(
+                self.live_target(sidecar),
+                &self.session,
+                false,
+                std::time::Instant::now() + codesense_session_server::testing::WAIT,
+            )
+        }
+
+        fn live_target(&self, sidecar: bool) -> super::super::machines::RuntimeMemberTarget {
             use super::super::machines::{
                 RuntimeAdmissionState, RuntimeMemberSlot, RuntimeMemberTarget,
             };
@@ -3296,22 +3314,15 @@ mod tests {
                 .rows
                 .into_iter()
                 .find(|row| row.member.slot == slot)
-                .unwrap();
+                .unwrap_or_else(|| panic!("no admission row for {slot:?}"));
             let RuntimeAdmissionState::Live { namespace } = row.state else {
-                panic!("live")
+                panic!("{slot:?} is not live")
             };
-            self.admission
-                .effects
-                .reserve_spawn(
-                    RuntimeMemberTarget {
-                        member: row.member,
-                        namespace,
-                        admission_revision: row.revision,
-                    },
-                    &self.session,
-                    pool,
-                )
-                .unwrap()
+            RuntimeMemberTarget {
+                member: row.member,
+                namespace,
+                admission_revision: row.revision,
+            }
         }
 
         fn register(
@@ -5389,7 +5400,7 @@ mod tests {
                     .app
                     .state::<crate::terminal::session_server::SessionServerState>()
                     .connected()
-                    .unwrap()
+                    .unwrap_or_else(|| panic!("sidecar={sidecar}: session server connected"))
             } else {
                 fixture.local.clone()
             };
@@ -5420,23 +5431,26 @@ mod tests {
                         Ok(())
                     }),
                 )
-                .unwrap();
-            assert!(codesense_session_server::testing::wait_until(|| fixture
-                .admission
-                .effects
-                .0
-                .lock()
-                .unwrap()
-                .claims
-                .get(&(old.target.member.slot, old.session.clone()))
-                .is_some_and(|record| record.exit_complete)));
+                .unwrap_or_else(|e| panic!("sidecar={sidecar}: open tab: {e:?}"));
+            assert!(
+                codesense_session_server::testing::wait_until(|| fixture
+                    .admission
+                    .effects
+                    .0
+                    .lock()
+                    .unwrap_or_else(|e| panic!("sidecar={sidecar}: effects lock: {e:?}"))
+                    .claims
+                    .get(&(old.target.member.slot, old.session.clone()))
+                    .is_some_and(|record| record.exit_complete)),
+                "sidecar={sidecar}: old lifetime records its natural Exit"
+            );
             assert!(
                 fixture
                     .admission
                     .effects
                     .reserve_spawn(old.target.clone(), &old.session, false)
                     .is_err(),
-                "natural Exit alone does not reap the retained tab"
+                "sidecar={sidecar}: natural Exit alone does not reap the retained tab"
             );
             let backend = pty_backend::resolve_session_reference(
                 fixture.app.handle(),
@@ -5448,39 +5462,60 @@ mod tests {
                 )),
                 false,
             )
-            .unwrap();
+            .unwrap_or_else(|e| panic!("sidecar={sidecar}: resolve backend: {e:?}"));
             let path = mcp_scope::mcp_scope_session_dir(&fixture.session);
             let replacement = Mutex::new(None);
             let after =
                 pty_backend::respawn_tab_admitted(fixture.app.handle(), backend, &session, |_| {
                     assert!(
                         !path.exists(),
-                        "exact old resource is removed before new projection"
+                        "sidecar={sidecar}: exact old resource is removed before new projection"
                     );
-                    let next = fixture.reserve(sidecar);
+                    let next = fixture
+                        .reserve_until(sidecar)
+                        .unwrap_or_else(|e| panic!("sidecar={sidecar}: reserve replacement: {e}"));
                     create_owned_resources(&fixture, &next);
                     fixture.spawn(sidecar);
-                    *replacement.lock().unwrap() = Some(next);
+                    *replacement
+                        .lock()
+                        .unwrap_or_else(|e| panic!("sidecar={sidecar}: replacement lock: {e:?}")) =
+                        Some(next);
                     Ok(())
                 })
-                .unwrap();
-            assert_eq!(before.session, after.session);
-            assert_eq!(before.name, after.name);
-            let next = replacement.into_inner().unwrap().unwrap();
-            assert!(!mcp_scope::remove_owned_scope(&old));
-            assert!(path.join(".mcp.json").exists());
-            assert!(domain
-                .layout_snapshot(&viewer, &ClientBootId::new("test"))
-                .is_ok());
+                .unwrap_or_else(|e| panic!("sidecar={sidecar}: respawn: {e:?}"));
+            assert_eq!(before.session, after.session, "sidecar={sidecar}");
+            assert_eq!(before.name, after.name, "sidecar={sidecar}");
+            let next = replacement
+                .into_inner()
+                .unwrap_or_else(|e| panic!("sidecar={sidecar}: replacement lock: {e:?}"))
+                .unwrap_or_else(|| panic!("sidecar={sidecar}: respawn reserved a replacement"));
+            assert!(
+                !mcp_scope::remove_owned_scope(&old),
+                "sidecar={sidecar}: old scope was already removed"
+            );
+            assert!(
+                path.join(".mcp.json").exists(),
+                "sidecar={sidecar}: replacement scope exists"
+            );
+            assert!(
+                domain
+                    .layout_snapshot(&viewer, &ClientBootId::new("test"))
+                    .is_ok(),
+                "sidecar={sidecar}: layout snapshot"
+            );
             fixture.kill(sidecar);
-            assert!(codesense_session_server::testing::wait_until(
-                || !path.exists()
-            ));
-            assert!(fixture
-                .app
-                .state::<agent_accounts::AgentAccountRuntimeState>()
-                .owned_provenance(&next)
-                .is_none());
+            assert!(
+                codesense_session_server::testing::wait_until(|| !path.exists()),
+                "sidecar={sidecar}: replacement scope removed after kill"
+            );
+            assert!(
+                codesense_session_server::testing::wait_until(|| fixture
+                    .app
+                    .state::<agent_accounts::AgentAccountRuntimeState>()
+                    .owned_provenance(&next)
+                    .is_none()),
+                "sidecar={sidecar}: replacement provenance cleared after kill"
+            );
         }
     }
 
