@@ -39,6 +39,28 @@ describe("two windows", () => {
     expect(await browser.getWindowHandles()).toContain(MAIN);
   });
 
+  it("a bare satellite reports ready: its registry entry stops being pending", async () => {
+    const id = freshId("ready");
+    const label = await open({ id });
+    // The satellite's own registry client pulls its slice and calls `window_ready`, which
+    // clears the `pending` flag `e2e_open_window` set when it created the entry.
+    let last: unknown;
+    try {
+      await browser.waitUntil(
+        async () => {
+          last = await invoke("window_get_slice", { label });
+          return (last as { ok: boolean; value?: { pending: boolean } }).value?.pending === false;
+        },
+        { timeout: 20_000, interval: 250 },
+      );
+    } catch {
+      throw new Error(`${label} never reported ready: ${JSON.stringify(last)}`);
+    }
+
+    await browser.closeWindow();
+    await browser.switchToWindow(MAIN);
+  });
+
   it("seeds the same probe twice", async () => {
     const first = await seed();
     expect(await seed()).toEqual(first);
