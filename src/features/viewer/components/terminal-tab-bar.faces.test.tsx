@@ -34,8 +34,8 @@ const TEAM_A = "acme:alpha";
 const TEAM_B = "acme:beta";
 const TEAM_C = "acme:gamma";
 
-/** A team pack with one face, `<team>:face`; only that team can resolve it. */
-const packOf = (teamKey: string) => {
+/** A team face set with one face, `<team>:face`; only that team can resolve it. */
+const faceSetOf = (teamKey: string) => {
   const id = teamKey.split(":")[1];
   return {
     id,
@@ -110,7 +110,7 @@ beforeEach(() => {
   commits = 0;
   packs.list.mockReset();
   packs.list.mockImplementation((teamKey: string) =>
-    Promise.resolve({ packs: [packOf(teamKey)], warnings: [] }),
+    Promise.resolve({ packs: [faceSetOf(teamKey)], warnings: [] }),
   );
   useAvatarPacksStore.setState({ byTeam: {} });
   useOrgStore.setState({ activeOrgSlug: "acme", activeTeamName: "alpha" });
