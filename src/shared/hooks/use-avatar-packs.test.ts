@@ -220,6 +220,26 @@ describe("one read per team", () => {
     expect(avatarPacksList).toHaveBeenCalledTimes(2);
   });
 
+  it("does not redraw a team's readers when its read fails again the same way", async () => {
+    avatarPacksList.mockRejectedValue(new Error("not synced"));
+    let renders = 0;
+    const first = renderHook(() => {
+      renders++;
+      return useAvatarPacks("acme:ops");
+    });
+    await waitFor(() => expect(first.result.current.warnings).toEqual(["not synced"]));
+    const before = renders;
+    // Another caller mounting reads the failed team again, and it fails the same way.
+    renderHook(() => useAvatarPacks("acme:ops"));
+    await waitFor(() => expect(avatarPacksList).toHaveBeenCalledTimes(2));
+    await act(async () => {});
+    expect(renders).toBe(before);
+    // A different failure is news.
+    avatarPacksList.mockRejectedValue(new Error("offline"));
+    renderHook(() => useAvatarPacks("acme:ops"));
+    await waitFor(() => expect(first.result.current.warnings).toEqual(["offline"]));
+  });
+
   it("forgets the teams neither listed nor active", async () => {
     avatarPacksList.mockResolvedValue({ packs: [], warnings: [] });
     const { rerender } = renderHook(({ keys }) => useTeamAvatarPacks(keys), {

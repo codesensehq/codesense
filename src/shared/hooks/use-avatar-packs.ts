@@ -68,7 +68,7 @@ const failedReads = new Map<string, number>();
 /** Each team's read in flight, so a team being read is not asked for again. */
 const inFlight = new Map<string, Promise<void>>();
 
-export const useAvatarPacksStore = create<AvatarPacksState>((set) => ({
+export const useAvatarPacksStore = create<AvatarPacksState>((set, get) => ({
   byTeam: {},
   load: (teamKey) => {
     const seq = ++lastSeq;
@@ -89,11 +89,11 @@ export const useAvatarPacksStore = create<AvatarPacksState>((set) => ({
       (e: unknown) => {
         if (readSeqs.get(teamKey) !== seq) return;
         failedReads.set(teamKey, (failedReads.get(teamKey) ?? 0) + 1);
-        store({
-          ...EMPTY_TEAM,
-          warnings: [e instanceof Error ? e.message : String(e)],
-          failed: true,
-        });
+        const warning = e instanceof Error ? e.message : String(e);
+        // The same failure again leaves the team as it was: no reader redraws for it.
+        const prev = get().byTeam[teamKey];
+        if (prev?.failed && prev.warnings.length === 1 && prev.warnings[0] === warning) return;
+        store({ ...EMPTY_TEAM, warnings: [warning], failed: true });
       },
     );
     const done = read.finally(() => {
@@ -290,13 +290,28 @@ const RETRY_MAX_MS = 60_000;
 /** Read the active team again after a failed read, waiting longer after each failure in a row.
  *  Every other team is read again only when it is next needed. */
 function useRetryFailedRead(teamKey: string, entry: TeamAvatarPacks | undefined): void {
+  const failed = entry?.failed === true;
   useEffect(() => {
-    if (!entry?.failed || teamKey === NO_TEAM_SENTINEL) return;
-    const failures = Math.max(1, failedReads.get(teamKey) ?? 1);
-    const wait = Math.min(RETRY_MAX_MS, RETRY_FIRST_MS * 2 ** (failures - 1));
-    const timer = setTimeout(() => ensureLoaded(teamKey), wait);
-    return () => clearTimeout(timer);
-  }, [teamKey, entry]);
+    if (!failed || teamKey === NO_TEAM_SENTINEL) return;
+    // A read failing the same way leaves the entry as it was, so each retry schedules the next.
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const retry = () => {
+      const failures = Math.max(1, failedReads.get(teamKey) ?? 1);
+      const wait = Math.min(RETRY_MAX_MS, RETRY_FIRST_MS * 2 ** (failures - 1));
+      timer = setTimeout(() => {
+        ensureLoaded(teamKey);
+        void inFlight.get(teamKey)?.then(() => {
+          if (!stopped && useAvatarPacksStore.getState().byTeam[teamKey]?.failed) retry();
+        });
+      }, wait);
+    };
+    retry();
+    return () => {
+      stopped = true;
+      clearTimeout(timer);
+    };
+  }, [teamKey, failed]);
 }
 
 /** A stable identity for one mounted caller of the hooks. */
