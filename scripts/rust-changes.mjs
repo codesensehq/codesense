@@ -28,6 +28,7 @@ export const RUST_PATHS = [
   "patches/",
   "release/scanners.lock",
   "scripts/build-",
+  "scripts/clippy-webdriver-module.mjs",
   "scripts/fetch-bundled.sh",
   "scripts/fetch-git-ai.sh",
   "scripts/fetch-pinned.sh",

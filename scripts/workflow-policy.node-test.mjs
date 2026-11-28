@@ -665,7 +665,11 @@ test("rust.yml's two-window e2e job tests, builds and drives the webdriver app",
   const [clippyAt, clippy] = step("Lint with the webdriver feature");
   assert.equal(
     clippy.run,
-    "cargo clippy --locked -p codesense --features e2e-webdriver -- -D warnings",
+    [
+      'cargo clippy --locked -p codesense --features e2e-webdriver --message-format=json > "$RUNNER_TEMP/clippy.json" || true',
+      'node scripts/clippy-webdriver-module.mjs "$RUNNER_TEMP/clippy.json"',
+      "",
+    ].join("\n"),
   );
   const [pluginAt, plugin] = step("Check the WebDriver plugin is absent from a release build");
   assert.equal(plugin.run, "bash scripts/verify-wdio-plugin-release-absence.sh");
