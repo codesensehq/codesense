@@ -5,7 +5,7 @@ import type { SampleDay } from "../sample-day";
 import type { HandlerRegistry } from "../mock-router";
 
 /** One row of the `needsYou` topic, as the host publishes it. */
-export type NeedsYouRow = {
+type NeedsYouRow = {
   id: string;
   kind: "question" | "permission" | "merge" | "capped" | "failed";
   session: string;
@@ -39,7 +39,9 @@ function questionText(card: { summary?: string | null; text: string }): string {
     .replace(/\*\*|__/g, "")
     .replace(/\s+/g, " ")
     .trim();
-  return line.length > 200 ? `${line.slice(0, 199)}…` : line;
+  // Counted in code points, as Rust counts chars, so an emoji is one and never split.
+  const chars = Array.from(line);
+  return chars.length > 200 ? `${chars.slice(0, 199).join("")}…` : line;
 }
 
 const AGENT_KINDS: Record<string, NeedsYouRow["kind"]> = {
@@ -50,8 +52,9 @@ const AGENT_KINDS: Record<string, NeedsYouRow["kind"]> = {
 };
 
 /** The day's needs-you set as topic rows, derived from its agents and Inbox as the host derives
- *  it: a card is placed by the team whose Inbox holds it, an agent's item by its own team. */
-export function needsYouRows(day: SampleDay = SAMPLE_DAY): NeedsYouRow[] {
+ *  it: a card is placed by the team whose Inbox holds it, an agent's item by its own team. An
+ *  ended agent stays only while it is marked failed or crashed, and asks nothing else. */
+function needsYouRows(day: SampleDay = SAMPLE_DAY): NeedsYouRow[] {
   const agents = new Map(day.agents.map((agent) => [agent.session, agent]));
   const rows: NeedsYouRow[] = [];
   for (const card of day.inbox) {
@@ -69,9 +72,10 @@ export function needsYouRows(day: SampleDay = SAMPLE_DAY): NeedsYouRow[] {
     });
   }
   for (const agent of day.agents) {
-    if (agent.state === "ended") continue;
+    const ended = agent.state === "ended";
     const place = { session: agent.session, org: agent.org, team: agent.team };
     const kind = AGENT_KINDS[agent.signals.needsYouKind ?? ""];
+    if (ended && kind !== "failed") continue;
     if (kind)
       rows.push({
         id: `agent:${agent.session}:${kind}`,
@@ -82,7 +86,7 @@ export function needsYouRows(day: SampleDay = SAMPLE_DAY): NeedsYouRow[] {
           ? { question: agent.signals.question }
           : {}),
       });
-    if (agent.capped)
+    if (agent.capped && !ended)
       rows.push({
         id: `agent:${agent.session}:capped`,
         kind: "capped",
@@ -94,13 +98,16 @@ export function needsYouRows(day: SampleDay = SAMPLE_DAY): NeedsYouRow[] {
 }
 
 /** Whether a view key admits a row: `all` admits every row, `team:<org>/<team>` its own. */
-export function admits(viewKey: string, row: NeedsYouRow): boolean {
+function admits(viewKey: string, row: NeedsYouRow): boolean {
   if (viewKey === "all") return true;
   return row.org !== null && row.team !== null && viewKey === `team:${row.org}/${row.team}`;
 }
 
-/** The mock backend's `needsYou` topic, served from the 14:02 sample day. */
-export function needsYouHandlers(fallback: HandlerRegistry): HandlerRegistry {
+/** The mock backend's `needsYou` topic, served from the 14:02 sample day or another `day`. */
+export function needsYouHandlers(
+  fallback: HandlerRegistry,
+  day: SampleDay = SAMPLE_DAY,
+): HandlerRegistry {
   return {
     live_hub_subscribe: (args) => {
       if (args.topic !== "needsYou") return fallback.live_hub_subscribe(args);
@@ -109,7 +116,7 @@ export function needsYouHandlers(fallback: HandlerRegistry): HandlerRegistry {
         topic: "needsYou",
         viewKey,
         rev: 1,
-        snapshot: needsYouRows().filter((row) => admits(viewKey, row)),
+        snapshot: needsYouRows(day).filter((row) => admits(viewKey, row)),
       };
       return snapshot;
     },
