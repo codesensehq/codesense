@@ -3282,6 +3282,24 @@ mod tests {
         }
 
         fn reserve_pool(&self, sidecar: bool, pool: bool) -> LocalEffectClaim {
+            self.admission
+                .effects
+                .reserve_spawn(self.live_target(sidecar), &self.session, pool)
+                .unwrap()
+        }
+
+        /// Reserves as the product spawn does: waits up to `WAIT` for the
+        /// previous lifetime's exit, removal and settlements.
+        fn reserve_until(&self, sidecar: bool) -> Result<LocalEffectClaim, String> {
+            self.admission.effects.reserve_spawn_until(
+                self.live_target(sidecar),
+                &self.session,
+                false,
+                std::time::Instant::now() + codesense_session_server::testing::WAIT,
+            )
+        }
+
+        fn live_target(&self, sidecar: bool) -> super::super::machines::RuntimeMemberTarget {
             use super::super::machines::{
                 RuntimeAdmissionState, RuntimeMemberSlot, RuntimeMemberTarget,
             };
@@ -3300,18 +3318,11 @@ mod tests {
             let RuntimeAdmissionState::Live { namespace } = row.state else {
                 panic!("live")
             };
-            self.admission
-                .effects
-                .reserve_spawn(
-                    RuntimeMemberTarget {
-                        member: row.member,
-                        namespace,
-                        admission_revision: row.revision,
-                    },
-                    &self.session,
-                    pool,
-                )
-                .unwrap()
+            RuntimeMemberTarget {
+                member: row.member,
+                namespace,
+                admission_revision: row.revision,
+            }
         }
 
         fn register(
@@ -5457,7 +5468,7 @@ mod tests {
                         !path.exists(),
                         "exact old resource is removed before new projection"
                     );
-                    let next = fixture.reserve(sidecar);
+                    let next = fixture.reserve_until(sidecar).unwrap();
                     create_owned_resources(&fixture, &next);
                     fixture.spawn(sidecar);
                     *replacement.lock().unwrap() = Some(next);
