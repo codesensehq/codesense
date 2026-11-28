@@ -76,7 +76,8 @@ function openWaiting(): void {
 }
 
 /** Opens `key` in its origin team, or queues it while that team is loading. A queued item
- *  is dropped, with a warn, if its team turns out unavailable or there are no teams. */
+ *  is closed, with the removed-team notice, if its team turns out unavailable or there are
+ *  no teams. */
 export function openWhenTeamReady(key: ItemKey, preview = false): void {
   const repoPath = repoPathForItem(key);
   if (repoPath !== null) {

@@ -22,7 +22,7 @@ vi.mock("@/tauri/commands", () => ({
 }));
 
 const closeCurrentWindow = vi.hoisted(() => vi.fn());
-vi.mock("@/shared/lib/current-window", () => ({ closeCurrentWindow }));
+vi.mock("@/shared/lib/current-window", () => ({ closeCurrentWindow, isMainWindow: () => false }));
 const warn = vi.hoisted(() => vi.fn());
 vi.mock("@/shared/lib/logger", () => ({
   logger: { warn, info: vi.fn(), debug: vi.fn(), error: vi.fn() },
