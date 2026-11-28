@@ -17,6 +17,7 @@ import { render, screen, waitFor, act, fireEvent } from "@testing-library/react"
 
 const {
   mockListen,
+  mockHandleListen,
   mockShow,
   mockStartWatching,
   mockStopWatching,
@@ -29,6 +30,9 @@ const {
 } = vi.hoisted(() => ({
   mockListen: vi.fn<(event: string, cb: (...args: unknown[]) => void) => Promise<() => void>>(() =>
     Promise.resolve(() => {}),
+  ),
+  mockHandleListen: vi.fn<(event: string, cb: (...args: unknown[]) => void) => Promise<() => void>>(
+    () => Promise.resolve(() => {}),
   ),
   mockShow: vi.fn(() => Promise.resolve()),
   mockStartWatching: vi.fn(() => Promise.resolve()),
@@ -98,9 +102,11 @@ vi.mock("@/features/settings/lib/open-settings-tab", () => ({
 vi.mock("@tauri-apps/api/event", () => ({
   listen: (...a: Parameters<typeof mockListen>) => mockListen(...a),
 }));
-// The rendered-document bridge listens on the main webview window.
+// The rendered-document bridge and the menu listener listen on the main webview window.
 vi.mock("@tauri-apps/api/webviewWindow", () => ({
-  getCurrentWebviewWindow: () => ({ listen: vi.fn(() => Promise.resolve(() => {})) }),
+  getCurrentWebviewWindow: () => ({
+    listen: (...a: Parameters<typeof mockHandleListen>) => mockHandleListen(...a),
+  }),
 }));
 vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: () => ({
@@ -514,6 +520,7 @@ beforeEach(() => {
     avatar_url: null,
   };
   mockListen.mockImplementation(() => Promise.resolve(() => {}));
+  mockHandleListen.mockImplementation(() => Promise.resolve(() => {}));
   mockLoadPersistedState.mockImplementation(() => Promise.resolve());
   // Mirror the post-init app state so tests that inspect gate logic
   // see the same store shape as a live session (stateLoaded=true is
@@ -604,13 +611,14 @@ describe("team landing page", () => {
 
 // ===== AUTH-EXPIRED EVENT LISTENER =====
 
-describe("menu:action event listener (C.16)", () => {
-  it("registers a listener for menu:action events", async () => {
+describe("menu:action listener on the webview handle (C.16)", () => {
+  it("registers menu:action on this window's webview handle, not globally", async () => {
     setDefaultStoreValues();
     await act(async () => {
       render(<App />);
     });
-    expect(mockListen).toHaveBeenCalledWith("menu:action", expect.any(Function));
+    expect(mockHandleListen).toHaveBeenCalledWith("menu:action", expect.any(Function));
+    expect(mockListen).not.toHaveBeenCalledWith("menu:action", expect.any(Function));
   });
 
   it("rebuilds the native menu (with the right-pane Panels entries) on mount", async () => {
@@ -626,7 +634,7 @@ describe("menu:action event listener (C.16)", () => {
 
   it("dispatches a global action by id (Settings)", async () => {
     let menuCb: ((e: { payload: string }) => void) | null = null;
-    mockListen.mockImplementation((event: string, cb: (e: { payload: string }) => void) => {
+    mockHandleListen.mockImplementation((event: string, cb: (e: { payload: string }) => void) => {
       if (event === "menu:action") menuCb = cb;
       return Promise.resolve(() => {});
     });
@@ -647,7 +655,7 @@ describe("menu:action event listener (C.16)", () => {
 
   it("no-ops when a repo-scoped action fires with no repo active", async () => {
     let menuCb: ((e: { payload: string }) => void) | null = null;
-    mockListen.mockImplementation((event: string, cb: (e: { payload: string }) => void) => {
+    mockHandleListen.mockImplementation((event: string, cb: (e: { payload: string }) => void) => {
       if (event === "menu:action") menuCb = cb;
       return Promise.resolve(() => {});
     });
@@ -666,7 +674,7 @@ describe("menu:action event listener (C.16)", () => {
 
   it("ignores unknown action ids", async () => {
     let menuCb: ((e: { payload: string }) => void) | null = null;
-    mockListen.mockImplementation((event: string, cb: (e: { payload: string }) => void) => {
+    mockHandleListen.mockImplementation((event: string, cb: (e: { payload: string }) => void) => {
       if (event === "menu:action") menuCb = cb;
       return Promise.resolve(() => {});
     });

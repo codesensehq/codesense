@@ -454,9 +454,14 @@ pub fn run() {
             // A move whose source or target this was ends as `gone`.
             let registry = tauri::Manager::state::<windows::registry::WindowRegistry>(window);
             windows::moves::window_gone(tauri::Manager::app_handle(window), &registry, label);
+            let focus = tauri::Manager::state::<windows::focus::FocusTracker>(window);
+            windows::focus::FocusTracker::clear_window_focus(&focus, label);
         }
         if let tauri::WindowEvent::Focused(focused) = event {
             on_window_focus_changed(window.app_handle(), *focused);
+            // The window a native menu click goes to (`windows::focus`).
+            let focus = tauri::Manager::state::<windows::focus::FocusTracker>(window);
+            windows::focus::FocusTracker::record_window_focus(&focus, window.label(), *focused);
         }
 
         // SW-AU-34: close-to-background. Closing the window keeps the process — and
@@ -635,6 +640,7 @@ pub fn run() {
         .manage(commands::team_resolution_cache::TeamResolutionCache::default())
         // Every window and the items satellites hold; created with `main`'s entry.
         .manage(windows::registry::WindowRegistry::new())
+        .manage(<windows::focus::FocusTracker as Default>::default())
         .setup(move |app| {
             // First, so the secret store probe has the whole of setup to finish: it runs on a
             // background thread, because `.setup()` never blocks on the session bus.

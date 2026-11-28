@@ -27,13 +27,15 @@ const RAW_LISTENERS = new Set(["listen", "once"]);
 /** The `current-window.ts` handle getters whose `.listen`/`.once` register on that webview alone. */
 const HANDLE_GETTERS = new Set(["currentWindow", "currentWebview", "currentWebviewWindow"]);
 /** The files that may register on a handle: webview-scoped, and either gated to `main` by hand,
- *  a satellite's own registry client, or the move commands' abort toast (sent to the source). */
+ *  a satellite's own registry client, the move commands' abort toast (sent to the source), or
+ *  the menu listener (Rust sends each click to one window). */
 const HANDLE_LISTENERS = new Set([
   "shared/hooks/use-rendered-document-bridge.ts",
   "shared/windows/use-main-window-registry.ts",
   "shared/windows/use-main-window-moves.ts",
   "shared/windows/satellite-registry.ts",
   "shared/windows/move-commands.ts",
+  "shared/windows/menu-listener.ts",
 ]);
 
 interface Site {

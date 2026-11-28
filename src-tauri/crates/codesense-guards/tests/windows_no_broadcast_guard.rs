@@ -5,6 +5,10 @@
 //!   affected labels only. A broadcast (`emit`, `emit_str`, or `emit_filter`, which
 //!   reaches every window a filter lets through) would hand one window's slice, and
 //!   `main`'s owner map, to every window. The scan ignores comments.
+//! - **Menu clicks go to one window.** `src/menu.rs` and `src/windows/focus.rs` send
+//!   `menu:action` with `emit_to` to the window `windows::focus::menu_target` picks; a
+//!   broadcast would run one click in every window. This also covers the macOS-only
+//!   `menu::on_event`, which no Linux test builds.
 //! - **Private items.** `WindowEntry::items` is private, so only `registry.rs` can
 //!   change which window owns an item; the compiler refuses any other writer.
 //!
@@ -15,6 +19,9 @@ use codesense_guards::guard_support::locate;
 use std::fs;
 
 const REGISTRY: &str = "windows/registry.rs";
+
+/// The files that send `menu:action`, which never broadcast.
+const MENU_SENDERS: [&str; 2] = ["menu.rs", "windows/focus.rs"];
 
 /// The broadcast calls of tauri's `Emitter`.
 const BROADCASTS: [&str; 3] = ["emit", "emit_str", "emit_filter"];
@@ -71,6 +78,20 @@ fn the_registry_sends_with_emit_to() {
 }
 
 #[test]
+fn menu_actions_are_never_broadcast() {
+    for file in MENU_SENDERS {
+        let source = fs::read_to_string(locate(file)).expect("read a menu sender");
+        let found = broadcasts(&source);
+        assert!(
+            found.is_empty(),
+            "{file} broadcasts; send `menu:action` with `windows::focus::emit_menu_action`: {found:?}"
+        );
+    }
+    let focus = fs::read_to_string(locate("windows/focus.rs")).expect("read windows/focus.rs");
+    assert!(focus.contains("emit_to("));
+}
+
+#[test]
 fn window_entry_items_are_private() {
     let decl =
         field_decl(&registry_source(), "WindowEntry", "items").expect("WindowEntry declares items");
@@ -83,6 +104,7 @@ fn window_entry_items_are_private() {
 #[test]
 fn self_test_a_planted_broadcast_fails() {
     for planted in [
+        "app.emit(\"menu:action\", id)",
         "app.emit(\"window:slice\", slice)",
         "app.emit_str(\"window:slice\", s)",
         "app.emit_filter(\"window:slice\", s, |_| true)",

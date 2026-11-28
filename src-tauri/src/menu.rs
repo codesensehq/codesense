@@ -28,9 +28,8 @@ use std::collections::HashMap;
 use tauri::{AppHandle, Runtime};
 
 #[cfg(target_os = "macos")]
-use tauri::{
-    menu::{CheckMenuItemBuilder, Menu, MenuBuilder, MenuEvent, MenuItemBuilder, SubmenuBuilder},
-    Emitter,
+use tauri::menu::{
+    CheckMenuItemBuilder, Menu, MenuBuilder, MenuEvent, MenuItemBuilder, SubmenuBuilder,
 };
 
 /// SW-RP-1: one entry in the registry-driven `View → Panels` submenu. The
@@ -300,9 +299,9 @@ pub fn build_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
     build_menu_internal(app, &HashMap::new(), &[], &[])
 }
 
-/// Menu event forwarder. Pure dispatch — emits `menu:action` with the
-/// item id as payload. Business logic lives on the frontend side
-/// (`SHORTCUT_ACTIONS[].run()`).
+/// Menu event forwarder. Pure dispatch — sends `menu:action` with the
+/// item id as payload to the one window `windows::focus::menu_target` picks.
+/// Business logic lives on the frontend side (`SHORTCUT_ACTIONS[].run()`).
 #[cfg(target_os = "macos")]
 pub fn on_event<R: Runtime>(app: &AppHandle<R>, event: MenuEvent) {
     let id = event.id().0.clone();
@@ -311,9 +310,12 @@ pub fn on_event<R: Runtime>(app: &AppHandle<R>, event: MenuEvent) {
         return;
     }
     log::info!(target: "menu", "menu item clicked: {id}");
-    if let Err(e) = app.emit("menu:action", id) {
-        log::warn!(target: "menu", "failed to emit menu:action: {e}");
-    }
+    crate::windows::focus::emit_menu_action(
+        app,
+        &*tauri::Manager::state::<crate::windows::focus::FocusTracker>(app),
+        &tauri::Manager::state::<crate::windows::registry::WindowRegistry>(app),
+        id,
+    );
 }
 
 /// Rebuild the macOS menu with the user's current shortcut overrides.
