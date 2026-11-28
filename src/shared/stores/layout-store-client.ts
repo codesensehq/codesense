@@ -13,6 +13,11 @@
  * gesture. Any reply other than the next rev means another writer was folded in, so the window
  * re-reads the head and shows it.
  *
+ * Another writer's change (an agent's ops) arrives through the host's live hub: the window
+ * watches each file it shows on the host-only `group` topic and each org's index on `groups`,
+ * and applies a newer head to that layout's slice alone, with its pending resizes on top. A
+ * head the window already shows changes nothing in the store, so no mounted tile re-renders.
+ *
  * With the flag on, `app-state.json` keeps the roots it held at launch as a read-only fallback:
  * `savedRoot` hands them back to the store's persist, so its bytes for them never change. With
  * the flag off nothing here reads or writes a group file, and `app-state.json` saves the layout
@@ -30,6 +35,7 @@ import {
   type SavedMosaicNode,
 } from "@/shared/tiling/mosaic-tree";
 import { groupCommit, groupRead, type GroupFileRef } from "@/tauri/commands";
+import type { HubRow } from "@/features/dashboard/lib/live-hub";
 import type { ViewerState } from "./viewer-store";
 
 /** The layout a group file holds: a team's foreground (`railKey` null when flat, else the
@@ -150,6 +156,10 @@ let lane: Promise<void> = Promise.resolve();
 let seed: Seed | null = null;
 /** The roots `app-state.json` held at launch, by `slotKey`; set once the flag reads on. */
 let launchRoots: Map<string, unknown> | null = null;
+/** Stops each live-hub watch the client holds. */
+let watches: Array<() => void> = [];
+/** The orgs whose `groups` view is watched. */
+let watchedOrgs = new Set<string>();
 
 /** A saved layout slot: the store slice that holds it (a rail's slice names its team too) and
  *  its key there. */
@@ -220,7 +230,64 @@ async function fileFor(target: LayoutTarget): Promise<LayoutFile> {
   };
   await readHead(f);
   files.set(key, f);
+  await watchFile(f);
   return f;
+}
+
+/** Watches the host's view of `f`'s file and, once per org, of its org's index. The hub is
+ *  loaded on first use: the window store reaches this module before the hub is built. */
+async function watchFile(f: LayoutFile): Promise<void> {
+  const { liveHub } = await import("@/features/dashboard/lib/live-hub");
+  watches.push(
+    liveHub.watch("group", `${f.org}:${f.file.id}`, (view) => {
+      void inLane(() => applyFile(f, view.snapshot[0]));
+    }),
+  );
+  if (watchedOrgs.has(f.org)) return;
+  watchedOrgs.add(f.org);
+  const org = f.org;
+  watches.push(
+    liveHub.watch("groups", org, (view) => {
+      void inLane(() => applyIndex(org, view.snapshot));
+    }),
+  );
+}
+
+/** Shows `f`'s head with its pending resizes on top, unless that is `before`, what the store
+ *  already shows. */
+function reshow(f: LayoutFile, before: MosaicNode | null): void {
+  const after = applyAll(f.tree, [...f.pending.values()]);
+  f.shown = after === KIT_OP_FAILED ? f.tree : after;
+  if (!sameTree(before, f.shown)) show(f);
+}
+
+/** Applies the `group` view's row for `f`: a newer file, or no file (re-read). A row the store
+ *  can't read keeps what the window shows. */
+async function applyFile(f: LayoutFile, row: HubRow | undefined): Promise<void> {
+  if (row && "unreadable" in row) return;
+  const before = f.shown;
+  const file = row?.file as { rev: number; root: unknown } | undefined;
+  if (!file) {
+    if (f.rev === 0) return;
+    await readHead(f);
+  } else {
+    if (file.rev <= f.rev) return;
+    f.rev = file.rev;
+    f.tree = parseMosaicNode(file.root);
+  }
+  reshow(f, before);
+}
+
+/** Re-reads each file of `org` whose index row is past the rev the window holds. */
+async function applyIndex(org: string, rows: HubRow[]): Promise<void> {
+  for (const f of files.values()) {
+    if (f.org !== org) continue;
+    const row = rows.find((r) => r.id === f.file.id);
+    if (typeof row?.rev !== "number" || row.rev <= f.rev) continue;
+    const before = f.shown;
+    await readHead(f);
+    reshow(f, before);
+  }
 }
 
 /** The store's slices with `target` showing `root`. */
@@ -256,7 +323,7 @@ function seeded(
 }
 
 function show(f: LayoutFile) {
-  const root = f.tree;
+  const root = f.shown;
   seed?.((s) => seeded(s, f.target, root));
 }
 
@@ -383,9 +450,12 @@ export function hydrateLayouts(
   });
 }
 
-/** Forgets every file and pending commit, so a test starts clean. */
+/** Forgets every file, pending commit and watch, so a test starts clean. */
 export function resetLayoutClientForTests(): void {
   for (const f of files.values()) if (f.timer !== null) clearTimeout(f.timer);
+  for (const stop of watches) stop();
+  watches = [];
+  watchedOrgs = new Set();
   files = new Map();
   lane = Promise.resolve();
   seed = null;

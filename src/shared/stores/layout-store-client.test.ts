@@ -17,9 +17,34 @@ const commands = vi.hoisted(() => ({
   groupCommit: vi.fn(),
 }));
 const flag = vi.hoisted(() => ({ on: true }));
+/** The host's live hub, with only its native `watch`: a frame subscription would throw. Each
+ *  watch is kept so a test can hand it a view. */
+const hub = vi.hoisted(() => {
+  type Watch = {
+    topic: string;
+    viewKey: string;
+    callback: (snapshot: {
+      topic: string;
+      viewKey: string;
+      rev: number;
+      snapshot: unknown[];
+    }) => void;
+    stopped: boolean;
+  };
+  const watches: Watch[] = [];
+  const watch = vi.fn((topic: string, viewKey: string, callback: Watch["callback"]) => {
+    const w: Watch = { topic, viewKey, callback, stopped: false };
+    watches.push(w);
+    return () => {
+      w.stopped = true;
+    };
+  });
+  return { watches, watch };
+});
 
 vi.mock("@/tauri/commands", () => commands);
 vi.mock("@/shared/lib/tiles-enabled", () => ({ tilesEnabled: () => Promise.resolve(flag.on) }));
+vi.mock("@/features/dashboard/lib/live-hub", () => ({ liveHub: { watch: hub.watch } }));
 
 import {
   buildOps,
@@ -87,6 +112,8 @@ function emptyState(): LayoutSlices {
 beforeEach(() => {
   flag.on = true;
   resetLayoutClientForTests();
+  hub.watches.length = 0;
+  hub.watch.mockClear();
   commands.groupRead.mockReset().mockResolvedValue({ rev: 3, tree: wire(TREE) });
   let rev = 3;
   commands.groupCommit.mockReset().mockImplementation(async () => ({ rev: ++rev }));
@@ -173,6 +200,7 @@ describe("saving a layout", () => {
     expect(commands.groupRead).not.toHaveBeenCalled();
     expect(commands.groupCommit).not.toHaveBeenCalled();
     expect(set).not.toHaveBeenCalled();
+    expect(hub.watch).not.toHaveBeenCalled();
   });
 });
 
@@ -398,5 +426,142 @@ describe("one tree whichever way the flag goes", () => {
     await hydrateLayouts(stateWith(tree), () => {}, appState);
     const live = setNodeSizes(tree, [], [10, 90]);
     expect(savedRoot("tabGridLayout", GRID.workspaceKey, live)).toEqual(serializeMosaicNode(live));
+  });
+});
+
+/** Hands every live watch on `topic` and `viewKey` the view holding `rows`. */
+async function deliver(topic: string, viewKey: string, rows: unknown[]) {
+  const live = hub.watches.filter((w) => !w.stopped && w.topic === topic && w.viewKey === viewKey);
+  expect(live).toHaveLength(1);
+  live[0].callback({ topic, viewKey, rev: 1, snapshot: rows });
+  await settle();
+}
+
+/** The `group` view's row for `fileId` holding `root` at `rev`, as the host publishes it. */
+const groupRow = (fileId: string, rev: number, root: MosaicNode | null) => ({
+  id: fileId,
+  file: { version: 2, owner: "group", rev, root: wire(root) },
+  dropped: [],
+});
+
+describe("a group delta", () => {
+  const NEXT = setNodeSizes(TREE, [], [70, 30]);
+
+  /** Hydrates FG and GRID into a store; returns it, its setter and FG's file id. */
+  async function hydrated() {
+    const state = {
+      ...emptyState(),
+      tabGridLayout: { [`${TEAM}|ws-1`]: { preset: "grid", root: TREE } },
+    } as unknown as LayoutSlices;
+    const set = vi.fn((update: (s: LayoutSlices) => Partial<LayoutSlices>) =>
+      Object.assign(state, update(state)),
+    );
+    await hydrateLayouts(state, set);
+    await settle();
+    set.mockClear();
+    return { state, set, fg: (await layoutFileRef(FG)).file.id };
+  }
+
+  it("subscribes the host once per shown file and once per org, the only subscriber", async () => {
+    const { state, set } = await hydrated();
+    await hydrateLayouts(state, set);
+    saveLayout(FG, applyAll(TREE, [{ op: "swap", a: "ws-a", b: "ws-c" }]), {
+      op: "swap",
+      a: "ws-a",
+      b: "ws-c",
+    });
+    await flushGroupCommits();
+    const fg = (await layoutFileRef(FG)).file.id;
+    const grid = (await layoutFileRef(GRID)).file.id;
+    expect(hub.watches.map((w) => `${w.topic} ${w.viewKey}`).sort()).toEqual(
+      [`group acme:${fg}`, `group acme:${grid}`, "groups acme"].sort(),
+    );
+  });
+
+  it("from another writer reaches the shown layout, and the next commit builds on it", async () => {
+    const { state, fg } = await hydrated();
+    await deliver("group", `acme:${fg}`, [groupRow(fg, 4, NEXT)]);
+    expect(saved(state.foregroundLayout[TEAM].root)).toBe(saved(NEXT));
+    commands.groupCommit.mockResolvedValue({ rev: 5 });
+    saveLayout(FG, applyAll(NEXT, [{ op: "swap", a: "ws-a", b: "ws-c" }]), {
+      op: "swap",
+      a: "ws-a",
+      b: "ws-c",
+    });
+    await flushGroupCommits();
+    expect(commands.groupCommit.mock.calls[0][2]).toBe(4);
+    expect(commands.groupRead).toHaveBeenCalledTimes(2);
+  });
+
+  it("at or below the rev the window holds changes nothing", async () => {
+    const { set, fg } = await hydrated();
+    await deliver("group", `acme:${fg}`, [groupRow(fg, 3, NEXT)]);
+    expect(set).not.toHaveBeenCalled();
+  });
+
+  it("of the window's own commit re-reads nothing and leaves the store as it is", async () => {
+    const { set, fg } = await hydrated();
+    const next = applyAll(TREE, [{ op: "swap", a: "ws-a", b: "ws-c" }]);
+    saveLayout(FG, next, { op: "swap", a: "ws-a", b: "ws-c" });
+    await flushGroupCommits();
+    await deliver("group", `acme:${fg}`, [groupRow(fg, 4, next)]);
+    expect(set).not.toHaveBeenCalled();
+    expect(commands.groupRead).toHaveBeenCalledTimes(2);
+  });
+
+  it("with the tree already shown leaves the store untouched", async () => {
+    const { set, fg } = await hydrated();
+    await deliver("group", `acme:${fg}`, [groupRow(fg, 4, TREE)]);
+    expect(set).not.toHaveBeenCalled();
+  });
+
+  it("for one file leaves every other layout's slice as it was", async () => {
+    const { state, fg } = await hydrated();
+    const grid = state.tabGridLayout;
+    await deliver("group", `acme:${fg}`, [groupRow(fg, 4, NEXT)]);
+    expect(state.tabGridLayout).toBe(grid);
+  });
+
+  it("keeps a pending resize on top of the new head", async () => {
+    vi.useFakeTimers();
+    const { state, fg } = await hydrated();
+    const step: KitOp = { op: "resize", path: [1], sizes: [20, 80] };
+    saveLayout(FG, applyAll(TREE, [step]), step);
+    await settle();
+    await deliver("group", `acme:${fg}`, [groupRow(fg, 4, NEXT)]);
+    expect(saved(state.foregroundLayout[TEAM].root)).toBe(saved(applyAll(NEXT, [step])));
+    await vi.advanceTimersByTimeAsync(100);
+    await flushGroupCommits();
+    expect(commands.groupCommit.mock.calls[0][2]).toBe(4);
+    expect(commitOps(0)).toEqual([step]);
+  });
+
+  it("removing the file re-reads the head and shows it", async () => {
+    const { state, fg } = await hydrated();
+    commands.groupRead.mockResolvedValue(null);
+    await deliver("group", `acme:${fg}`, []);
+    expect(commands.groupRead).toHaveBeenCalledTimes(3);
+    expect(state.foregroundLayout[TEAM].root).toBeNull();
+  });
+
+  it("a groups row past the window's rev re-reads the head and shows it", async () => {
+    const { state, fg } = await hydrated();
+    commands.groupRead.mockResolvedValue({ rev: 5, tree: wire(NEXT) });
+    await deliver("groups", "acme", [{ id: fg, owner: "group", rev: 5 }]);
+    expect(commands.groupRead).toHaveBeenCalledTimes(3);
+    expect(saved(state.foregroundLayout[TEAM].root)).toBe(saved(NEXT));
+  });
+
+  it("a groups row at the window's rev re-reads nothing", async () => {
+    const { set, fg } = await hydrated();
+    await deliver("groups", "acme", [{ id: fg, owner: "group", rev: 3 }]);
+    expect(commands.groupRead).toHaveBeenCalledTimes(2);
+    expect(set).not.toHaveBeenCalled();
+  });
+
+  it("resetting the client stops every watch", async () => {
+    await hydrated();
+    resetLayoutClientForTests();
+    expect(hub.watches.every((w) => w.stopped)).toBe(true);
   });
 });

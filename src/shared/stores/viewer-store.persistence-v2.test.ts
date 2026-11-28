@@ -88,6 +88,8 @@ describe("host-aware viewer identity", () => {
 
 const tiles = vi.hoisted(() => ({ on: false }));
 vi.mock("@/shared/lib/tiles-enabled", () => ({ tilesEnabled: () => Promise.resolve(tiles.on) }));
+// With tiles on, the layout client watches its files on the host's hub.
+vi.mock("@/features/dashboard/lib/live-hub", () => ({ liveHub: { watch: () => () => {} } }));
 
 vi.mock("@/tauri/commands", () => ({
   groupRead: vi.fn().mockResolvedValue(null),
