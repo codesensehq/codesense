@@ -700,6 +700,19 @@ test("budget: record on m1 names a budget key the run didn't measure and still e
   assert.ok(!c.out.some((line) => line.startsWith("FAIL")), c.out.join("\n"));
 });
 
+test("budget: record on m1 exits 2 on a budget key that isn't timed in ms and leaves the file alone", (t) => {
+  const { write } = tmp(t);
+  const text = formatBaseline(
+    budgeted({ budget: { ...BUDGET, keys: ["open_warm", "fps_tiles"] } }),
+  );
+  const base = write("base.json", text);
+  const fps = { unit: "fps", samples: [60, 60, 60].map((value) => ({ fps: value })) };
+  const cur = write("cur.json", current({ open_warm: ms([156, 156, 156]), fps_tiles: fps }));
+  const c = capture();
+  assert.equal(run(["record", "--current", cur, "--runner", "m1", "--baseline", base], c.io), 2);
+  assert.equal(fs.readFileSync(base, "utf8"), text);
+});
+
 test("budget: exactly the budget passes (the test is strict), and under it the verdict is unchanged", () => {
   for (const top of [200, 170]) {
     const measured = current({ open_warm: ms([156, 156, 156, 156, top]) });
