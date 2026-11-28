@@ -669,3 +669,33 @@ test("budget: a budget key that isn't timed in ms is an input error", () => {
     (err) => err.exitCode === 2 && /fps_tiles/.test(err.message) && /ms/.test(err.message),
   );
 });
+
+test("budget: record on m1 prints the budget lines and still exits 0", (t) => {
+  const { write } = tmp(t);
+  const base = write("base.json", formatBaseline(budgeted()));
+  const cur = write("cur.json", current({ open_warm: ms([156, 156, 156, 156, 230]) }));
+  const c = capture();
+  assert.equal(run(["record", "--current", cur, "--runner", "m1", "--baseline", base], c.io), 0);
+  assert.ok(c.out.includes("FAIL open_warm p95 230ms > budget 200"), c.out.join("\n"));
+  assert.deepEqual(JSON.parse(fs.readFileSync(base, "utf8")).budget, BUDGET);
+  // Another runner's record prints no budget line.
+  const ci = capture();
+  assert.equal(
+    run(["record", "--current", cur, "--runner", "macos-15", "--baseline", base], ci.io),
+    0,
+  );
+  assert.ok(!ci.out.some((line) => line.includes("budget")), ci.out.join("\n"));
+});
+
+test("budget: record on m1 names a budget key the run didn't measure and still exits 0", (t) => {
+  const { write } = tmp(t);
+  const base = write(
+    "base.json",
+    formatBaseline(budgeted({ budget: { ...BUDGET, keys: ["open_warm", "open_cold"] } })),
+  );
+  const cur = write("cur.json", current({ open_warm: ms([156, 156, 156, 156, 160]) }));
+  const c = capture();
+  assert.equal(run(["record", "--current", cur, "--runner", "m1", "--baseline", base], c.io), 0);
+  assert.ok(c.out.includes("budget open_cold: not measured"), c.out.join("\n"));
+  assert.ok(!c.out.some((line) => line.startsWith("FAIL")), c.out.join("\n"));
+});

@@ -326,6 +326,16 @@ export function run(argv, io = { log: console.log, error: console.error, env: pr
       return result.exitCode;
     }
     const next = upsertSet(baseline, measured, opts.runner);
+    // record prints the budget but never gates on it; a partial run may leave a budget key out.
+    const { budget } = baseline;
+    const budgetLines =
+      budget?.runner === opts.runner
+        ? budget.keys.flatMap((key) => {
+            if (!measured.keys[key]) return [`budget ${key}: not measured`];
+            const over = overBudget(budget, measured, key);
+            return over ? [budgetLine(over, budget)] : [];
+          })
+        : [];
     fs.writeFileSync(opts.baseline, formatBaseline(next));
     const floorMs = baseline.compare.floor.ms;
     const { previous, kept, dropped, carried } = recordedKeys(baseline, measured, opts.runner);
@@ -347,6 +357,7 @@ export function run(argv, io = { log: console.log, error: console.error, env: pr
         `spread ${key} ${Math.round(ratio * 100)}% (${round1(range)} ${unit}): ${ok ? "can be compared" : "too noisy to compare"}`,
       );
     }
+    for (const line of budgetLines) io.log(line);
     return 0;
   } catch (err) {
     // Anything unexpected is an input or setup problem too, never a regression (exit 1).
