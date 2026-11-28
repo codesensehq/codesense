@@ -4,6 +4,7 @@ export default defineConfig({
   testDir: "./tests/frame-security",
   workers: 1,
   timeout: 20_000,
+  use: { trace: "retain-on-failure" },
   // Security specs must run, not skip: the guard reporter fails a run that skipped any test.
   reporter: [["list"], ["./tests/frame-security/support/fixture-guard.mjs"]],
   projects: [

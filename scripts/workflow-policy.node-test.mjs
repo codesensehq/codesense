@@ -2857,3 +2857,21 @@ test("exports guard: no other job may report a check named Exports guard or Expo
       ))
         assert.ok(!/^Exports (guard|strict pins)$/i.test(job.name ?? ""), file);
 });
+
+// The nightly's frame-media job continues past one known-red step, the native media specs on
+// macOS WebKit, so a red media step leaves the job green and doesn't page the nightly issue. No
+// other step or the job may continue on error, so setup failures still page.
+test("nightly.yml's frame-media job continues only past its media step", () => {
+  const job = parse(fs.readFileSync(path.join(directory, "nightly.yml"), "utf8")).jobs[
+    "frame-media"
+  ];
+  assert.ok(!("continue-on-error" in job), "job");
+  const media = job.steps.filter((step) => step.id === "media");
+  assert.equal(media.length, 1);
+  assert.equal(media[0].name, "Run the native media specs");
+  assert.equal(media[0]["continue-on-error"], true);
+  for (const step of job.steps)
+    if (step !== media[0]) assert.ok(!("continue-on-error" in step), step.name);
+  const upload = job.steps.find((step) => step.name === "Upload failure traces");
+  assert.equal(upload.if, "${{ !cancelled() && (failure() || steps.media.outcome == 'failure') }}");
+});
