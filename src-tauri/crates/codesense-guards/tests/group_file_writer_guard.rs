@@ -70,6 +70,16 @@ fn bare_groups(expr: &syn::Expr) -> Option<&syn::LitStr> {
     }
 }
 
+/// Whether `path` names the live hub's `groups::GROUPS` topic constant, which holds the string
+/// `groups`: `crate::live_hub::groups::GROUPS`, `super::groups::GROUPS` or `groups::GROUPS`.
+fn topic_const(path: &syn::Path) -> bool {
+    let mut last_two = path.segments.iter().rev().take(2);
+    matches!(
+        (last_two.next(), last_two.next()),
+        (Some(name), Some(module)) if name.ident == "GROUPS" && module.ident == "groups"
+    )
+}
+
 /// Whether `text` names a path into a group folder. A Rust source path such as
 /// `src/groups/shape.rs` (a generated file's header names its source) is not one.
 fn group_literal(text: &str) -> bool {
@@ -232,11 +242,9 @@ impl<'ast> Visit<'ast> for Scan<'_> {
             self.flag(lit.span(), format!("`{method}(\"groups\")`"));
         }
         let held = call.args.first().and_then(|arg| match arg {
-            syn::Expr::Path(path) => path
-                .path
-                .segments
-                .last()
-                .filter(|last| self.held.iter().any(|name| last.ident == name)),
+            syn::Expr::Path(path) => path.path.segments.last().filter(|last| {
+                self.held.iter().any(|name| last.ident == name) || topic_const(&path.path)
+            }),
             _ => None,
         });
         if let (true, Some(last)) = (joins, held) {
@@ -365,6 +373,8 @@ fn planted_writers_are_caught() {
         r#"fn f(d: &std::path::Path) { let _ = d.join(std::path::Path::new("groups")); }"#,
         r#"fn f(d: &std::path::Path) { let _ = d.join("groups".to_string()); }"#,
         r#"fn f() { let g = String::from("groups"); }"#,
+        r#"fn f(d: &std::path::Path) { let _ = d.join(crate::live_hub::groups::GROUPS); }"#,
+        r#"fn f(d: &mut std::path::PathBuf) { d.push(groups::GROUPS); }"#,
     ];
     for src in planted {
         assert!(!violations("elsewhere.rs", src).is_empty(), "missed: {src}");
