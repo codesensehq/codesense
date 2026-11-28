@@ -1062,7 +1062,7 @@ const TileFrameContent = memo(function TileFrameContent({ teamKey, view }: TileF
             teamKey={teamKey}
             isFocused={isFocused}
             focusIndicator={focusIndicator}
-            // SW-EW-34 v2 (D8): drop the redundant id block on a lone console
+            // Drop the redundant id block on a lone console
             // tile — a console top switcher owns identity there.
             // SLW-FX-18: …but ONLY for kinds that have no per-tile identity to
             // show. The switcher that shipped to main (`IdentityMenu`)
@@ -1104,7 +1104,7 @@ const TileFrameContent = memo(function TileFrameContent({ teamKey, view }: TileF
                 ? (newStatus) => view.onStoryStatusChange!(ws.id, newStatus)
                 : undefined
             }
-            // SW-EW-46: the tab-grid dial surface (only meaningful while expanded).
+            // The tab-grid dial surface (only meaningful while expanded).
             panedTabIds={panedTabIds}
             gridActive={showGrid}
             canGrid={canGrid}
