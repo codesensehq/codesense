@@ -11,8 +11,9 @@
  * the head and replays the ops on it, unless an agent's write touched the same tiles
  * (`collided`): then the window shows the head and drops the ops, and the person repeats the
  * gesture. A replay that conflicts again is replayed on the newer head, three times at most,
- * then dropped and logged; a commit that fails outright re-reads the head and shows it. Any reply other than the next rev means another writer was folded in, so the window
- * re-reads the head and shows it.
+ * then dropped and logged; a commit that fails outright re-reads the head and shows it. Any
+ * reply other than the next rev means another writer was folded in, so the window re-reads the
+ * head and shows it.
  *
  * Another writer's change (an agent's ops) arrives through the host's live hub: the window
  * watches each file it shows on the host-only `group` topic and each org's index on `groups`,
