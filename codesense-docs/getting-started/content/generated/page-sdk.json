@@ -25876,10 +25876,10 @@
   "sources": {
     "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts": "3345f7e99f42161582cb5ba096ca14f684ea8bc965aac99933bcd522d351f14f",
     "src-tauri/src/verbs/registry.generated.json": "65fea72cbaea6c0bbeb94b03039a69c009fd2a8a032d559b16f4165d302aa15d",
-    "src-tauri/src/verbs/registry.rs": "ff4b3e587eed6621618777c80cdb12e240aebc77908b119a85c601f173844dce",
+    "src-tauri/src/verbs/registry.rs": "4b01c52ffd138e8f4a1926c1ae794066ca8ad6afe0c099b48647189a16366999",
     "src-tauri/src/records/binding.rs": "f6bb288c03608c270bce422c59582ec59b4eb6132d759b6f2760db242217ddd5",
     "src-tauri/src/records/schema.rs": "36ed3b3ae3547e1e622f007c2480d3fad19c463e3b3636242fb94edcb4286a29",
-    "src-tauri/src/http/routes/viewer.rs": "cb3b267840ff535fcdf4bf56677a6885cd05d5abae2f838e99fc02ce25779657",
+    "src-tauri/src/http/routes/viewer.rs": "66adb3d2e2813f24bac1bfcdc84d75b119ac52f64444b343a5ab241e84df67cc",
     "src-tauri/src/context_query/model.rs": "4e81c3eaa7ed4ea0dc93fe5017c7defe77655b124f0d5bc447557b646f42d345"
   }
 }
