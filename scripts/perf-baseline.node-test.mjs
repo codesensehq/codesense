@@ -637,3 +637,35 @@ test("budget: another runner, or a file with no block, compares exactly as befor
   assert.equal(m1.exitCode, 0);
   assert.equal(m1.verdict, "perf compare m1: PASS 1/1 (tol 20%, 5 runs)");
 });
+
+test("budget: a malformed block is an input error", () => {
+  const measured = current({ open_warm: ms([156, 156, 156]) });
+  for (const budget of [
+    null,
+    "m1",
+    { ...BUDGET, runner: 1 },
+    { ...BUDGET, p95Ms: "200" },
+    { ...BUDGET, p95Ms: 0 },
+    { ...BUDGET, p95Ms: -5 },
+    { ...BUDGET, p95Ms: Infinity },
+    { ...BUDGET, keys: [] },
+    { ...BUDGET, keys: "open_warm" },
+    { ...BUDGET, keys: ["open_warm", 3] },
+  ]) {
+    assert.throws(
+      () => compare(budgeted({ budget }), measured, { runner: "macos-15" }),
+      (err) => err.exitCode === 2 && /budget/.test(err.message),
+      JSON.stringify(budget),
+    );
+  }
+});
+
+test("budget: a budget key that isn't timed in ms is an input error", () => {
+  const file = budgeted({ budget: { ...BUDGET, keys: ["open_warm", "fps_tiles"] } });
+  const fps = { unit: "fps", samples: [60, 60, 60].map((value) => ({ fps: value })) };
+  assert.throws(
+    () =>
+      compare(file, current({ open_warm: ms([156, 156, 156]), fps_tiles: fps }), { runner: "m1" }),
+    (err) => err.exitCode === 2 && /fps_tiles/.test(err.message) && /ms/.test(err.message),
+  );
+});

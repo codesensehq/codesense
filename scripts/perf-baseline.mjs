@@ -109,6 +109,19 @@ function checkBaseline(file) {
   if (file.sets.some((set) => !set || typeof set !== "object" || typeof set.runner !== "string")) {
     throw new InputError("every baseline set needs a runner");
   }
+  if (file.budget !== undefined) {
+    const { runner, p95Ms, keys } = file.budget ?? {};
+    if (
+      typeof runner !== "string" ||
+      !Number.isFinite(p95Ms) ||
+      p95Ms <= 0 ||
+      !Array.isArray(keys) ||
+      !keys.length ||
+      keys.some((key) => typeof key !== "string")
+    ) {
+      throw new InputError("the baseline's budget needs {runner, p95Ms above 0, keys: [name, …]}");
+    }
+  }
 }
 
 /** Whether `runner`'s set may hold `key`: every key for m1, all but the M1-only keys elsewhere. */
@@ -159,7 +172,8 @@ export function upsertSet(baseline, measured, runner) {
 
 /** A budget key's current p95 when it is over the budget, else null. */
 function overBudget(budget, measured, key) {
-  const { values } = measuredKey(measured, key);
+  const { unit, values } = measuredKey(measured, key);
+  if (unit !== "ms") throw new InputError(`budget ${key}: unit ${unit}, the budget is in ms`);
   const p95 = percentile(values, 0.95);
   return p95 > budget.p95Ms ? { key, p95 } : null;
 }
