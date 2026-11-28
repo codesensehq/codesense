@@ -459,7 +459,7 @@ impl GroupStore {
         if let Some(entry) = BTreeMap::get(&index.windows, label) {
             for key in &entry.pins {
                 if Result::is_ok(&tile_key(key, Layer::Private)) {
-                    pins.push(String::clone(key));
+                    pins.push(key.clone());
                 }
             }
         }
