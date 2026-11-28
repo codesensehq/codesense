@@ -46,3 +46,17 @@ test("a foreign message is recorded and the count request is not @p0", async ({ 
   const types = received.map((message) => (message.data as { type?: string } | null)?.type);
   expect(types).not.toContain("probe:count");
 });
+
+test("a hub delta the probe hears is logged @p0", async ({ page }) => {
+  const probe = await mountProbe(page);
+  await expect.poll(async () => (await probe.counts()).deltas.length).toBe(0);
+  // The frame subscribes after it loads, so fire until it has heard one.
+  await expect
+    .poll(async () => {
+      await page.evaluate(() =>
+        (window as unknown as { __liveHubFixture: { fire: () => void } }).__liveHubFixture.fire(),
+      );
+      return (await probe.counts()).deltas.length;
+    })
+    .toBeGreaterThan(0);
+});

@@ -7,7 +7,7 @@
   </head>
   <body style="font: 13px system-ui; margin: 12px">
     <h3>Probe dashboard</h3>
-    <p>Loads this document: <output id="in-frame">0</output>; loads stored for this frame: <output id="stored">0</output></p>
+    <p>Loads this document: <output id="in-frame">0</output>; loads stored for this frame: <output id="stored">0</output>; hub deltas: <output id="deltas">0</output></p>
     <script>
       // A test fixture (tests/e2e-mock/tiles/fixtures/probe.ts): it counts its own loads three ways.
       //  - inFrame: a counter in this document, so it reads 1 again after any reload or remount;
@@ -15,22 +15,30 @@
       //    remount (each frame gets its own origin, whose storage starts empty);
       //  - the host page: each load posts probe:load with the pane's key to window.top, where
       //    probe.ts counts it, so a remount is caught too.
-      // It records every message it receives, other than its own count request, and answers that
-      // request with all three.
+      // It records every message it receives, other than its own count request, logs each hub
+      // delta its `sessions` subscription hears (where the bridge is present), and answers that
+      // request with all of them.
       (() => {
         const key = `probe:${location.pathname}`;
         const received = [];
+        const deltas = [];
         let inFrame = 0;
         const stored = () => Number(sessionStorage.getItem(key) ?? 0);
         addEventListener("message", (event) => {
           if (event.data?.type === "probe:count") {
             event.source?.postMessage(
-              { type: "probe:counts", key, inFrame, stored: stored(), received },
+              { type: "probe:counts", key, inFrame, stored: stored(), received, deltas },
               "*",
             );
             return;
           }
           received.push({ origin: event.origin, data: event.data });
+        });
+        window.codesense?.subscribe?.("sessions", {
+          onChange: (_value, delta) => {
+            if (delta) deltas.push({ rev: delta.rev ?? null, at: Date.now() });
+            document.getElementById("deltas").textContent = String(deltas.length);
+          },
         });
         addEventListener("load", () => {
           inFrame += 1;
