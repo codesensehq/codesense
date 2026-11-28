@@ -4302,8 +4302,10 @@ pub(crate) mod agent_opens {
         use super::*;
 
         /// The port a dashboard's launch opens through, over the test host. Its active team
-        /// is another org's team, never the page's: the page's team has to come from the
-        /// launch itself.
+        /// is another org's team, never the page's. With a Team caller the open swaps that
+        /// pair for the caller's view and takes the org from the caller and the team from
+        /// `launch`, so this fails only if the swap and `launch` passing `team` regress
+        /// together.
         struct PagePort(Arc<FakeHost>, ActiveTeam);
 
         #[async_trait::async_trait]
