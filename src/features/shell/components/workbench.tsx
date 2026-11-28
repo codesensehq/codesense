@@ -64,6 +64,7 @@ import { selectRenderableLayout } from "../right-pane/right-pane-layout";
 import { isPanelOverlayShown } from "../right-pane/panel-maximize-boundary";
 
 import { NoTeamTabHost } from "./no-team-tab-host";
+import { TileHostMount } from "./tile-host-mount";
 import { TeamCrashFallback } from "./root-crash-fallback";
 import { tileZonePriorityCollision } from "./tile-zone-collision";
 
@@ -260,7 +261,7 @@ export function Workbench() {
               CLI shows as a pane. */}
             <div
               data-testid="workbench-viewer-region"
-              className="flex flex-col overflow-hidden min-h-0"
+              className="relative flex flex-col overflow-hidden min-h-0"
               style={
                 isConsole
                   ? { display: "none" }
@@ -319,6 +320,7 @@ export function Workbench() {
                   )}
                 </div>
               ))}
+              <TileHostMount teamKey={activeTeamKey} />
             </div>
 
             {/* SW-FX-8: the split divider is drawn in the pane layout whether the CLI shows or is

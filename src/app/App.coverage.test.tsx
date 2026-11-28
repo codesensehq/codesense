@@ -129,6 +129,8 @@ vi.mock("@/tauri/commands", () => ({
     owners: {},
   }),
   windowReady: vi.fn(() => Promise.resolve()),
+  // The tiles flag, off: the workbench's tile host mount reads it once.
+  getTilesEnabled: vi.fn().mockResolvedValue(false),
   // A move hands main's tab off and main acks it.
   windowHandOffAck: vi.fn().mockResolvedValue("ignored"),
   // Each team draws its agents with its own faces.
