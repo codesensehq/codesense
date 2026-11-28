@@ -1,0 +1,85 @@
+# What counts as a needs-you or permission predicate, and which files are test code. Both
+# guards read this file: src-tauri/crates/codesense-guards/tests/needs_you_predicates_guard.rs
+# for Rust, and src/shared/lib/needs-you-predicates.guard.test.ts for the frontend and docs.
+#
+# A line is `<rule> <value>`; the value runs to the end of the line.
+#   literal  text a line contains once its spaces are dropped and ' reads as "
+#   arm      a state named in a match arm: on a line with `=>`, followed by `|` or `=>`
+#            or preceded by `|`
+#   ident    an identifier, matched whole
+#   prefix   with stem: an identifier that starts with a prefix and then names a stem,
+#            camelCase (`isNeedsMark`) or snake_case (`is_needs_mark`)
+#   test-name, test-name-suffix, test-name-part, test-dir: a file that is test code, by
+#            its whole name, the end of its name, part of its name, or a directory
+#   hit, miss: example lines each guard must and must not flag
+
+literal "needs-permission"
+literal "needs-you"
+literal "needs_you"
+literal =="needs"
+literal !="needs"
+literal "needs"==
+literal "needs"!=
+literal case"needs"
+literal =="permission"
+literal !="permission"
+literal "permission"==
+literal "permission"!=
+literal case"permission"
+
+arm "needs"
+arm "permission"
+
+ident needsYouKind
+ident needs_you_kind
+ident NeedsPermission
+ident needsYouBySender
+ident needsMailBySender
+ident needsBySender
+ident ASK_USER_STATE
+ident kindOf
+ident needsYouCount
+ident needs_you_count
+ident needsYouTotal
+ident needs_you_total
+ident needs_you_run
+ident record_needs_you
+
+prefix is
+prefix has
+prefix select
+prefix get
+prefix count
+prefix use
+stem Needs
+
+test-name tests.rs
+test-name-suffix _tests.rs
+test-name-part .test.
+test-name-part .spec.
+test-dir /tests/
+test-dir /evals/
+
+hit if (row.needsYouKind === null) return;
+hit matches!(state, AgentState::NeedsPermission)
+hit const waiting = selectNeedsYouKind(state);
+hit function isNeedsMark(mark: StatusMarkKind | undefined): boolean {
+hit fn is_needs_you(state: &str) -> bool {
+hit let count = needs_you_count(&inbox, team);
+hit kind: "needs-you",
+hit kind: 'needs-you',
+hit if (state === "needs") return;
+hit if (state==='needs') return;
+hit if state != "needs" {
+hit case "needs":
+hit case 'permission':
+hit return mark === "question" || mark === "permission";
+hit "question" | "permission" | "blocked" => 5,
+hit "needs" => true,
+miss const needsYouHandlers = {};
+miss // what needs you
+miss let NeedsPermissionish = 1;
+miss type Group = "working" | "needs" | "idle";
+miss if (mode === "permissions") return;
+miss const needsRefresh = true;
+miss fn needs_attention_reason(self) -> Option<&'static str> {

@@ -1,0 +1,8 @@
+{
+  "about": "Per-release ceilings on the guard allow-lists. `current` is the release in progress, moved on by that release's first change. Each list's guard fails unless the list matches its ceilings for `current` exactly, and a ceiling never rises from one release to the next, so a change that shrinks a list lowers its ceilings for `current` and every later release, which locks the removal in. needsYouPredicates is the number of entries in src-tauri/crates/codesense-guards/tests/needs_you_predicates_allowlist.txt and needsYouPredicatesHits the sum of their pinned counts.",
+  "current": "R0",
+  "ceilings": {
+    "needsYouPredicates": { "R0": 109, "R1": 109, "R2a": 109, "R2b": 109, "R3a": 109, "R3b": 109 },
+    "needsYouPredicatesHits": { "R0": 407, "R1": 407, "R2a": 407, "R2b": 407, "R3a": 407, "R3b": 407 }
+  }
+}
