@@ -546,7 +546,7 @@ test("the committed baseline has the M1 set, the compare block and no targets", 
   if (ci) assert.ok(!ci.keys.team_switch, "CI never records team_switch");
 });
 
-test("case 12: the committed M1 numbers pass compare against themselves", (t) => {
+test("case 12: the committed M1 numbers pass compare against themselves; the cold open is over budget", (t) => {
   const file = JSON.parse(fs.readFileSync(FIXTURE, "utf8"));
   const m1 = file.sets.find((set) => set.runner === "m1");
   const keys = Object.fromEntries(
@@ -566,8 +566,14 @@ test("case 12: the committed M1 numbers pass compare against themselves", (t) =>
   const c = capture();
   assert.equal(
     run(["compare", "--current", cur, "--runner", "m1", "--baseline", FIXTURE], c.io),
-    0,
+    1,
   );
+  // Every relative row passes; only the budget fails, on the cold open alone (p95 361 > 200).
+  assert.ok(c.out.slice(0, file.compare.keys.length).every((line) => line.startsWith("PASS ")));
+  assert.deepEqual(c.out.slice(file.compare.keys.length), [
+    "FAIL open_other_team_agent_cold p95 361ms > budget 200",
+    "perf compare m1: FAIL budget: open_other_team_agent_cold p95 361ms",
+  ]);
 });
 
 // --- the open-time budget --------------------------------------------------------------------

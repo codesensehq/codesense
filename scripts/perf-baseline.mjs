@@ -157,6 +157,26 @@ export function upsertSet(baseline, measured, runner) {
   return { ...baseline, sets };
 }
 
+/** A budget key's current p95 when it is over the budget, else null. */
+function overBudget(budget, measured, key) {
+  const { values } = measuredKey(measured, key);
+  const p95 = percentile(values, 0.95);
+  return p95 > budget.p95Ms ? { key, p95 } : null;
+}
+
+/**
+ * The budget keys whose current p95 is over `budget.p95Ms`: none with no budget block or for a
+ * runner other than `budget.runner`. Reads the current samples only, so a key needs no set entry.
+ */
+export function budgetFailures(baseline, measured, runner) {
+  const { budget } = baseline;
+  if (!budget || budget.runner !== runner) return [];
+  return budget.keys.map((key) => overBudget(budget, measured, key)).filter(Boolean);
+}
+
+const budgetLine = ({ key, p95 }, budget) =>
+  `FAIL ${key} p95 ${round1(p95)}ms > budget ${budget.p95Ms}`;
+
 const signed = (ratio) => `${ratio >= 0 ? "+" : ""}${Math.round(ratio * 100)}%`;
 
 /**
@@ -203,12 +223,25 @@ export function compare(baseline, measured, { runner }) {
         row.p50,
       )}, limit ${round1(row.limit)}, ${signed(row.change)}, ${row.endState})`,
   );
-  const verdict = failed.length
+  const over = budgetFailures(baseline, measured, runner);
+  const overText = over.map(({ key, p95 }) => `${key} p95 ${round1(p95)}ms`).join(", ");
+  let verdict = failed.length
     ? `perf compare ${runner}: FAIL ${failed.length}/${rows.length}: ${failed
         .map((row) => `${row.key} ${signed(row.change)}`)
         .join(", ")}`
     : `perf compare ${runner}: PASS ${rows.length}/${rows.length} (tol ${baseline.compare.tolerancePercent}%, ${measured.runs} runs)`;
-  return { exitCode: failed.length ? 1 : 0, lines: [...lines, verdict], verdict, rows };
+  if (over.length) {
+    verdict = failed.length
+      ? `${verdict}; over budget: ${overText}`
+      : `perf compare ${runner}: FAIL budget: ${overText}`;
+  }
+  const budgetLines = over.map((each) => budgetLine(each, baseline.budget));
+  return {
+    exitCode: failed.length || over.length ? 1 : 0,
+    lines: [...lines, ...budgetLines, verdict],
+    verdict,
+    rows,
+  };
 }
 
 function summaryTable(result) {
