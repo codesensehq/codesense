@@ -3645,6 +3645,64 @@ mod call_time_read {
         assert_eq!(row.session.as_deref(), Some("s-w"));
     }
 
+    /// A launch's recorded team beats the active team on the row, and when the session
+    /// ends its release announces once, so the next read no longer lists it.
+    #[test]
+    fn a_recorded_launch_team_beats_the_active_team_until_the_ended_session_is_released() {
+        use crate::commands::dashboard_launch::LaunchTeam;
+        use std::sync::mpsc;
+        use tauri::Listener;
+        let source = FakeSessions::new(StubProbe::default());
+        bind(&source.launch, "w", "s-w");
+        let launched_in = LaunchTeam {
+            org: "acme".into(),
+            team: "design".into(),
+        };
+        let active = LaunchTeam {
+            org: "acme".into(),
+            team: "family".into(),
+        };
+        source
+            .launch
+            .set_launch_team_if_absent("w", launched_in.clone());
+        source.hub.model.lock().unwrap().active_team = Some(active);
+        let (rows, _) = read_now(&source, None).unwrap();
+        let row = rows.iter().find(|row| row.handle == "w").unwrap();
+        assert_eq!(row.team.as_ref(), Some(&launched_in));
+
+        let app = tauri::test::mock_builder()
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .unwrap();
+        let (send, changed) = mpsc::channel();
+        app.listen(
+            crate::commands::dashboard_launch::SESSION_STATE_CHANGED,
+            move |_| {
+                let _ = send.send(());
+            },
+        );
+        assert!(
+            crate::commands::dashboard_launch::release_for_session_and_notify(
+                app.handle(),
+                &source.launch,
+                "s-w"
+            )
+            .is_some()
+        );
+        assert!(changed.recv_timeout(Duration::from_secs(3)).is_ok());
+        let (rows, _) = read_now(&source, None).unwrap();
+        assert!(rows.iter().all(|row| row.handle != "w"));
+        // A second release finds nothing and announces nothing: one event in all.
+        assert!(
+            crate::commands::dashboard_launch::release_for_session_and_notify(
+                app.handle(),
+                &source.launch,
+                "s-w"
+            )
+            .is_none()
+        );
+        assert!(changed.recv_timeout(Duration::from_millis(50)).is_err());
+    }
+
     #[test]
     fn a_read_asks_the_probe_once() {
         let source = FakeSessions::new(StubProbe::default());

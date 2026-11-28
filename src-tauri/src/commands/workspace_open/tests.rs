@@ -4295,6 +4295,123 @@ pub(crate) mod agent_opens {
         assert_eq!(opened["status"], "opened", "{opened}");
         assert_eq!(host.launches().len(), 1);
     }
+
+    /// The port a dashboard's launch opens through: the page's own org and team is the
+    /// active team (`page_active_team`, the one `ScopedPort` uses), over the test host.
+    struct PagePort(Arc<FakeHost>, crate::dashboard_publish::state::Scope);
+
+    #[async_trait::async_trait]
+    impl OpenWorkspacePort for PagePort {
+        async fn launch_story(
+            &self,
+            _: &str,
+            _: Option<&str>,
+            _: Option<&str>,
+            _: crate::commands::mcp_workspace::SessionView,
+        ) -> Result<crate::commands::mcp_workspace::LaunchOutcome, String> {
+            Err("target required".into())
+        }
+        async fn targeted(&self) -> Result<(ActiveTeam, Box<dyn OpenHost>), String> {
+            Ok((
+                crate::dashboard_publish::actions::page_active_team(&self.1),
+                Box::new(SharedHost(self.0.clone())),
+            ))
+        }
+        fn reveal(&self, _handle: &str, _focus: bool) {}
+    }
+
+    fn launch_action(
+        agent: &crate::agents::AgentKey,
+    ) -> crate::dashboard_publish::actions::Action {
+        serde_json::from_value(serde_json::json!({
+            "verb": "launchAgent", "who": "owner", "agent": agent.to_string(), "prompt": "go {id}"
+        }))
+        .unwrap()
+    }
+
+    fn page(team: &str) -> crate::dashboard_publish::state::Scope {
+        crate::dashboard_publish::state::Scope {
+            org: AGENT_ORG.into(),
+            team: team.into(),
+        }
+    }
+
+    /// A dashboard launch with no launcher records the page's org and team, on the story
+    /// route and on the team-workspace fallback, while another team also exists.
+    #[tokio::test]
+    async fn a_dashboard_launch_records_the_pages_team_on_both_routes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (host, port, key) = setup(tmp.path(), draft("triage", AgentCli::Claude));
+        let (host, _) = with_story(host, port, "SW-P", PARENT_TEAM);
+        let scope = page(AGENT_TEAM);
+        let port = PagePort(host.clone(), scope.clone());
+        let team_scope = team_caller(tmp.path(), AGENT_TEAM);
+        let caller = (tmp.path(), &alice(), &team_scope);
+        let expected = LaunchTeam {
+            org: AGENT_ORG.to_string(),
+            team: AGENT_TEAM.to_string(),
+        };
+        for (id, has_worktree) in [("SW-9", true), ("SW-FALLBACK", false)] {
+            let launched = crate::dashboard_publish::actions::launch(
+                &port,
+                &launch_action(&key),
+                id,
+                &scope,
+                "board",
+                has_worktree,
+                caller,
+            )
+            .await
+            .unwrap();
+            let handle = launched["handle"].as_str().unwrap();
+            assert_eq!(
+                host.registry.launch_team(handle),
+                Some(expected.clone()),
+                "{id} (worktree {has_worktree}): {launched}"
+            );
+        }
+        assert_eq!(host.launches().len(), 2);
+    }
+
+    /// A page whose team the caller can't launch into is refused, and nothing is launched.
+    /// `launch` folds every open error into "failed", so the unchanged `MISSING` is pinned
+    /// on the real open entry with the same port and caller.
+    #[tokio::test]
+    async fn a_dashboard_launch_into_a_team_it_cannot_launch_into_is_missing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (host, port, key) = setup(tmp.path(), draft("triage", AgentCli::Claude));
+        let (host, _) = with_story(host, port, "SW-P", PARENT_TEAM);
+        // The caller is the agent team's; the page names its parent.
+        let team_scope = team_caller(tmp.path(), AGENT_TEAM);
+        let scope = page(PARENT_TEAM);
+        let port = PagePort(host.clone(), scope.clone());
+        let caller = (tmp.path(), &alice(), &team_scope);
+        for has_worktree in [true, false] {
+            let refused = crate::dashboard_publish::actions::launch(
+                &port,
+                &launch_action(&key),
+                "SW-P",
+                &scope,
+                "board",
+                has_worktree,
+                caller,
+            )
+            .await;
+            assert_eq!(refused.unwrap_err(), "failed", "worktree {has_worktree}");
+        }
+        nothing_made(&host);
+        let error = open_workspace_call_for(
+            &port,
+            params(serde_json::json!({
+                "target": "team-workspace", "team": PARENT_TEAM, "name": "SW-P"
+            })),
+            Some(caller),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error, crate::context_repo::caller_scope::MISSING);
+        nothing_made(&host);
+    }
 }
 
 /// "Describe it to an agent" (agents and routines) launches through the real open path with
