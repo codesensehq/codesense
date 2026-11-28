@@ -374,7 +374,7 @@ fn is_device_name(id: &str) -> bool {
         id.strip_prefix(prefix)
             .is_some_and(|n| n.len() == 1 && n.as_bytes()[0].is_ascii_digit())
     };
-    matches!(String::as_str(&id), "con" | "prn" | "aux" | "nul") || numbered("com") || numbered("lpt")
+    matches!(&*id, "con" | "prn" | "aux" | "nul") || numbered("com") || numbered("lpt")
 }
 
 /// Why a saved leaf is refused: its `id` and `workspaceId` differ, or the ref isn't valid in the
