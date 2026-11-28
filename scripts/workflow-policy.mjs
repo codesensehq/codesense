@@ -197,6 +197,14 @@ const SUPERSEDED = {
 // rust.yml's macOS result job may lead with always() in place of the path filter's !cancelled(),
 // so a cancelled run reports red rather than skipped. Only that job: it runs no build or tests.
 const RESULT_ALWAYS = { file: "rust.yml", job: "rust-macos", term: "always()" };
+// rust.yml's source guards also scan the front end (src/), so they run on every change: the job
+// has no if: or needs: (no path filter can skip it), and one step runs the guards crate's tests,
+// with no if: or continue-on-error of its own.
+const RUST_GUARDS = {
+  file: "rust.yml",
+  job: "rust-guards",
+  run: "cargo test --locked -p codesense-guards",
+};
 const SCORECARD_ACTIONS = new Set([
   "actions/checkout",
   "ossf/scorecard-action",
@@ -329,6 +337,23 @@ export function workflowPolicy(text, file = "") {
       );
     for (const [name, needs] of Object.entries(TEST_BUILD.needs))
       if (workflow.jobs?.[name]?.needs !== needs) errors.push(`${name}: needs must be ${needs}`);
+  }
+  if (file === RUST_GUARDS.file) {
+    const job = workflow.jobs?.[RUST_GUARDS.job];
+    const steps = mapping(job) && Array.isArray(job.steps) ? job.steps : [];
+    const runs = steps.filter((step) => mapping(step) && step.run === RUST_GUARDS.run);
+    if (
+      !mapping(job) ||
+      Object.hasOwn(job, "if") ||
+      Object.hasOwn(job, "needs") ||
+      Object.hasOwn(job, "continue-on-error") ||
+      runs.length !== 1 ||
+      Object.hasOwn(runs[0], "if") ||
+      Object.hasOwn(runs[0], "continue-on-error")
+    )
+      errors.push(
+        `${RUST_GUARDS.job}: must have no if: or needs: and run ${RUST_GUARDS.run} in one unconditional step`,
+      );
   }
   if (file === REGENERATE_EXPORTS.file) {
     const inputs = mapping(workflow.on) ? workflow.on.workflow_dispatch?.inputs : null;
