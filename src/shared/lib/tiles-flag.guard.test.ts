@@ -4,11 +4,15 @@
  * the tile host is listed in `tiles-flag-sites.json`, and each listed file must await
  * `tilesEnabled()` in code: a mention in a comment or a string doesn't count. With the flag off
  * the app is today's app and no tile code writes any file.
+ *
+ * The same list holds the Rust sites, one `{file, fn, what}` entry per gated function. This test
+ * checks only their shape and never reads a `.rs` file; the cargo guard
+ * `tiles_flag_sites_guard.rs` checks their code and that every gated Rust function is listed.
  */
 import { existsSync, readdirSync, readFileSync } from "fs";
 import { join, relative, resolve } from "path";
 import ts from "typescript";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 const ROOT = resolve(__dirname, "../../..");
 const SITES = join(ROOT, "src/shared/lib/tiles-flag-sites.json");
@@ -103,6 +107,11 @@ function siteProblems(list: unknown, read: (file: string) => string | null): str
       return;
     }
     const keys = Object.keys(entry).sort();
+    const named = (entry as { file?: unknown }).file;
+    if (typeof named === "string" && named.endsWith(".rs")) {
+      problems.push(...rustSiteProblems(at, entry as Record<string, unknown>, keys, seen));
+      return;
+    }
     if (keys.join(",") !== "file,what") {
       problems.push(`${at}: must have exactly "file" and "what", has ${keys.join(", ")}`);
       return;
@@ -127,6 +136,46 @@ function siteProblems(list: unknown, read: (file: string) => string | null): str
       problems.push(`${file}: doesn't await tilesEnabled()`);
   });
   return problems;
+}
+
+/**
+ * What is wrong with Rust entry `entry`: its shape only. Cargo checks its code, so the file is
+ * never read here. `seen` holds the `file` + `fn` pairs listed so far.
+ */
+function rustSiteProblems(
+  at: string,
+  entry: Record<string, unknown>,
+  keys: string[],
+  seen: Set<string>,
+): string[] {
+  if (keys.join(",") !== "file,fn,what") {
+    return [
+      `${at}: a Rust entry must have exactly "file", "fn" and "what", has ${keys.join(", ")}`,
+    ];
+  }
+  const { file, fn, what } = entry as { file: string; fn: unknown; what: unknown };
+  const segments = file.split("/");
+  const name = segments[segments.length - 1];
+  const testFile =
+    name.endsWith("_tests.rs") || name === "tests.rs" || segments.slice(0, -1).includes("tests");
+  if (
+    !/^src-tauri\/src\/.+\.rs$/.test(file) ||
+    file.includes("\\") ||
+    segments.some((segment) => segment === "" || segment === "." || segment === "..") ||
+    testFile
+  ) {
+    return [`${at}: "file" must be a non-test .rs path under src-tauri/src/`];
+  }
+  if (typeof fn !== "string" || fn.trim() === "") {
+    return [`${at}: "fn" must name the gated function`];
+  }
+  if (typeof what !== "string" || what.trim() === "") {
+    return [`${at}: "what" must say what the site writes or mounts`];
+  }
+  const key = `${file} ${fn}`;
+  if (seen.has(key)) return [`${key}: listed twice`];
+  seen.add(key);
+  return [];
 }
 
 function readSite(file: string): string | null {
@@ -192,6 +241,60 @@ describe("every tile writer and the tile host check the tiles flag", () => {
       'entry 4: "file" must be a non-test .ts or .tsx path under src/',
       'entry 5: "what" must say what the site writes or mounts',
       "src/gone.ts: listed but missing",
+    ]);
+  });
+
+  it("checks a Rust entry's shape and never reads it", () => {
+    const read = vi.fn(() => null);
+    const good = { file: "src-tauri/src/groups/store.rs", fn: "GroupStore::commit", what: "x" };
+    expect(
+      siteProblems(
+        [good, { file: "src-tauri/src/groups/store.rs", fn: "GroupStore::load", what: "x" }],
+        read,
+      ),
+    ).toEqual([]);
+    expect(read).not.toHaveBeenCalled();
+    const at = (file: string) => ({ file, fn: "f", what: "x" });
+    expect(
+      siteProblems(
+        [
+          { file: "src-tauri/src/a.rs", what: "x" },
+          { file: "src-tauri/src/a.rs", fn: "", what: "x" },
+          { file: "src-tauri/src/a.rs", fn: " ", what: "x" },
+          { file: "src-tauri/src/a.rs", fn: "f", what: "x", extra: 1 },
+          at("src-tauri/crates/x/src/a.rs"),
+          at("src/a.rs"),
+          at("src-tauri/src/../a.rs"),
+          at("src-tauri/src/./a.rs"),
+          at("src-tauri/src\\a.rs"),
+          at("src-tauri/src/a_tests.rs"),
+          at("src-tauri/src/groups/tests.rs"),
+          at("src-tauri/src/tests/a.rs"),
+          { file: "src-tauri/src/a.rs", fn: "f", what: "" },
+          good,
+          { file: "src/a.ts", fn: "f", what: "x" },
+        ],
+        read,
+      ),
+    ).toEqual([
+      'entry 0: a Rust entry must have exactly "file", "fn" and "what", has file, what',
+      'entry 1: "fn" must name the gated function',
+      'entry 2: "fn" must name the gated function',
+      'entry 3: a Rust entry must have exactly "file", "fn" and "what", has extra, file, fn, what',
+      'entry 4: "file" must be a non-test .rs path under src-tauri/src/',
+      'entry 5: "file" must be a non-test .rs path under src-tauri/src/',
+      'entry 6: "file" must be a non-test .rs path under src-tauri/src/',
+      'entry 7: "file" must be a non-test .rs path under src-tauri/src/',
+      'entry 8: "file" must be a non-test .rs path under src-tauri/src/',
+      'entry 9: "file" must be a non-test .rs path under src-tauri/src/',
+      'entry 10: "file" must be a non-test .rs path under src-tauri/src/',
+      'entry 11: "file" must be a non-test .rs path under src-tauri/src/',
+      'entry 12: "what" must say what the site writes or mounts',
+      'entry 14: must have exactly "file" and "what", has file, fn, what',
+    ]);
+    expect(read).not.toHaveBeenCalled();
+    expect(siteProblems([good, good], read)).toEqual([
+      "src-tauri/src/groups/store.rs GroupStore::commit: listed twice",
     ]);
   });
 });
