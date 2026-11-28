@@ -6,6 +6,17 @@
 // features or stores; `tiling-kit.guard.test.ts` holds it to that.
 // ---------------------------------------------------------------------------
 
+export {
+  LAYOUT_UNDO_LIMIT,
+  nextLayoutRedo,
+  nextLayoutUndo,
+  recordLayoutChange,
+  redoLayoutChange,
+  undoLayoutChange,
+  type LayoutActor,
+  type LayoutSnapshot,
+  type LayoutStep,
+} from "./layout-undo";
 export * from "./mosaic-tree";
 export { MosaicView, type MosaicRenderProbe, type MosaicViewProps } from "./mosaic-view";
 export { ROOT_SPLIT_KEY, stabilizeTree, type StableNode, type StableTree } from "./stabilize-tree";

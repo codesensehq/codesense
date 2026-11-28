@@ -192,9 +192,9 @@ describe("shortcut labels on macOS", () => {
 });
 
 describe.each([
-  ["MacIntel", "⌘O", "⌘⇧"],
-  ["Win32", "Ctrl+O", "Ctrl+Shift+"],
-])("logic-bearing hints on %s", (platform, switcher, captured) => {
+  ["MacIntel", "⌘O", "⌃⌘⇧", "⌃⌘⌥→"],
+  ["Win32", "Ctrl+O", "Ctrl+Shift+", "Ctrl+Meta+Alt+→"],
+])("logic-bearing hints on %s", (platform, switcher, captured, ctrlChord) => {
   beforeEach(() => setPlatform(platform));
 
   it("the wide notes list's search names the note switcher", () => {
@@ -229,5 +229,16 @@ describe.each([
       });
     });
     expect(screen.getByTestId("shortcut-row-settings.open-capture")).toHaveTextContent(captured);
+  });
+
+  it("Settings → Shortcuts shows a saved ⌃ chord with its ⌃", () => {
+    useShortcutsStore.setState({
+      shortcuts: { "settings.open": "Ctrl+CmdOrCtrl+Alt+ArrowRight" },
+      stateLoaded: true,
+    });
+    render(<ShortcutsSection query="" />);
+    expect(
+      document.body.querySelector('[data-testid="shortcut-row-settings.open-current"]'),
+    ).toHaveTextContent(ctrlChord);
   });
 });

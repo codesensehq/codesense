@@ -12,6 +12,7 @@ import { buildTeamKey } from "@/shared/lib/team-key";
 import { ROW_POPUP_ATTR, TERMINAL_POPUP_ATTR } from "@/shared/lib/focus-utils";
 import { matchShortcut, useShortcutHandler } from "./use-shortcut-handler";
 import { hasCmd } from "@/shared/lib/shortcuts/keystroke";
+import { restorePlatform, setPlatform } from "@/test/platform";
 
 it("the real split action yields to a forwarded page field", () => {
   const gate = {
@@ -24,6 +25,40 @@ it("the real split action yields to a forwarded page field", () => {
   expect(matchShortcut(key, {}, gate, false, true)).toBeUndefined();
   expect(matchShortcut(key, {}, gate, true, false)).toBeUndefined();
   expect(matchShortcut(key, {}, gate, false, false)?.id).toBe("viewer.split-terminal");
+});
+
+describe("a ⌃ chord beside a plain ⌘ binding on the same key", () => {
+  const gate = {
+    settingsPanelOpen: false,
+    hasActiveWorkspace: true,
+    hasTeam: true,
+    rowPopupFocused: false,
+  };
+  // settings.open comes first in the registry, so only the ⌃-first pass lets the later action win.
+  const shortcuts = {
+    "settings.open": "CmdOrCtrl+Shift+Y",
+    "nav.open-machines": "Ctrl+CmdOrCtrl+Shift+Y",
+  };
+  const press = (mods: KeyboardEventInit) =>
+    new KeyboardEvent("keydown", { key: "Y", code: "KeyY", shiftKey: true, ...mods });
+  afterEach(restorePlatform);
+
+  it("on macOS ⌘⌃ fires the ⌃ chord, ⌘ alone and ⌃ alone fire the plain one", () => {
+    setPlatform("MacIntel");
+    expect(matchShortcut(press({ metaKey: true, ctrlKey: true }), shortcuts, gate)?.id).toBe(
+      "nav.open-machines",
+    );
+    expect(matchShortcut(press({ metaKey: true }), shortcuts, gate)?.id).toBe("settings.open");
+    expect(matchShortcut(press({ ctrlKey: true }), shortcuts, gate)?.id).toBe("settings.open");
+  });
+
+  it("off macOS the ⌃ chord never fires and the plain binding matches as today", () => {
+    setPlatform("Win32");
+    expect(matchShortcut(press({ metaKey: true, ctrlKey: true }), shortcuts, gate)?.id).toBe(
+      "settings.open",
+    );
+    expect(matchShortcut(press({ ctrlKey: true }), shortcuts, gate)?.id).toBe("settings.open");
+  });
 });
 
 const TEST_TEAM_KEY = buildTeamKey("acme", "core");

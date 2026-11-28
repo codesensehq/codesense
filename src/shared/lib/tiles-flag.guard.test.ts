@@ -5,8 +5,8 @@
  * `tilesEnabled()` in code: a mention in a comment or a string doesn't count. With the flag off
  * the app is today's app and no tile code writes any file.
  */
-import { existsSync, readFileSync } from "fs";
-import { join, resolve } from "path";
+import { existsSync, readdirSync, readFileSync } from "fs";
+import { join, relative, resolve } from "path";
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
@@ -47,6 +47,45 @@ function awaitsTilesEnabled(file: string, text: string): boolean {
   };
   visit(source);
   return found;
+}
+
+/** The layout undo stack's entry points: only a flag-checked tile op may call them. */
+const LAYOUT_UNDO_EXPORTS = ["recordLayoutChange", "undoLayoutChange", "redoLayoutChange"];
+
+/** Whether the source names a layout undo export in code: a comment or a string doesn't count. */
+function referencesLayoutUndo(file: string, text: string): boolean {
+  const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
+  let found = false;
+  const visit = (node: ts.Node) => {
+    if (ts.isIdentifier(node) && LAYOUT_UNDO_EXPORTS.includes(node.text)) found = true;
+    if (!found) ts.forEachChild(node, visit);
+  };
+  visit(source);
+  return found;
+}
+
+/**
+ * The files outside the tiling kit that call the layout undo stack without being a listed site
+ * that awaits `tilesEnabled()`. `files` maps src-relative paths (`src/...`) to their text.
+ */
+function unguardedLayoutUndoCallers(
+  files: Record<string, string>,
+  listed: ReadonlySet<string>,
+): string[] {
+  return Object.entries(files)
+    .filter(([file]) => !file.startsWith("src/shared/tiling/") && !/\.test\.tsx?$/.test(file))
+    .filter(([file, text]) => referencesLayoutUndo(file, text))
+    .filter(([file, text]) => !listed.has(file) || !awaitsTilesEnabled(file, text))
+    .map(([file]) => file);
+}
+
+/** Every non-test .ts/.tsx file under src/, by its `src/...` path. */
+function sourceFiles(dir = join(ROOT, "src")): string[] {
+  return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) return sourceFiles(full);
+    return /\.tsx?$/.test(entry.name) ? [relative(ROOT, full).split("\\").join("/")] : [];
+  });
 }
 
 /**
@@ -153,6 +192,44 @@ describe("every tile writer and the tile host check the tiles flag", () => {
       'entry 4: "file" must be a non-test .ts or .tsx path under src/',
       'entry 5: "what" must say what the site writes or mounts',
       "src/gone.ts: listed but missing",
+    ]);
+  });
+});
+
+describe("the layout undo stack is called only from flag-checked tile ops", () => {
+  it("no file outside the kit calls it unless listed and awaiting tilesEnabled()", () => {
+    const list = JSON.parse(readFileSync(SITES, "utf8")) as { file: string }[];
+    const files = Object.fromEntries(
+      sourceFiles().map((file) => [file, readFileSync(join(ROOT, file), "utf8")]),
+    );
+    expect(unguardedLayoutUndoCallers(files, new Set(list.map((e) => e.file)))).toEqual([]);
+  });
+
+  it("fails an unlisted caller and a listed one that doesn't await the flag", () => {
+    const files = {
+      "src/features/viewer/ops/swap.ts": [
+        'import { recordLayoutChange } from "@/shared/tiling";',
+        "export function swap() { recordLayoutChange(a, b, by); }",
+      ].join("\n"),
+      "src/features/viewer/ops/undo-key.ts": [
+        'import { undoLayoutChange } from "@/shared/tiling";',
+        "export function run() { if (!tilesEnabled()) return; undoLayoutChange(now); }",
+      ].join("\n"),
+      "src/features/viewer/ops/redo-key.ts": [
+        'import { redoLayoutChange } from "@/shared/tiling";',
+        "export async function run() { if (!(await tilesEnabled())) return; redoLayoutChange(now); }",
+      ].join("\n"),
+      "src/features/viewer/ops/notes.ts": "// recordLayoutChange is called by the op itself\n",
+      "src/shared/tiling/layout-undo.ts": "export function recordLayoutChange() {}",
+      "src/features/viewer/ops/swap.test.ts": "recordLayoutChange(a, b, by);",
+    };
+    const listed = new Set([
+      "src/features/viewer/ops/undo-key.ts",
+      "src/features/viewer/ops/redo-key.ts",
+    ]);
+    expect(unguardedLayoutUndoCallers(files, listed)).toEqual([
+      "src/features/viewer/ops/swap.ts",
+      "src/features/viewer/ops/undo-key.ts",
     ]);
   });
 });

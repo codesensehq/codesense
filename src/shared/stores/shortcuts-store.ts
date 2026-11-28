@@ -9,6 +9,7 @@ import {
   formatKeystrokeDisplay,
   isReservedForDashboardCommand,
   isReservedKeystroke,
+  namesCtrl,
   parseKeystroke,
 } from "@/shared/lib/shortcuts/keystroke";
 import {
@@ -229,6 +230,14 @@ function canonicalChord(
     canonical = formatKeystroke(parseKeystroke(keystroke));
   } catch (e) {
     return { ok: false, reason: "invalid", detail: e instanceof Error ? e.message : String(e) };
+  }
+  // The frame shim's key formatter can't parse Ctrl, so a dashboard command stays off ⌃⌘.
+  if (isDashboardCommandActionId(actionId) && namesCtrl(canonical)) {
+    return {
+      ok: false,
+      reason: "reserved",
+      detail: "Dashboard commands can't use the Ctrl modifier with Cmd",
+    };
   }
   const reserved = isDashboardCommandActionId(actionId)
     ? isReservedForDashboardCommand(canonical)

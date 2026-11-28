@@ -84,3 +84,34 @@ describe("formatModifiersDisplay (the held modifiers before a key)", () => {
     expect(formatModifiersDisplay({ cmdOrCtrl: false, shift: false, alt: false })).toBe("");
   });
 });
+
+describe("formatModifiersDisplay with ⌃ held beside ⌘", () => {
+  const held = { ctrl: true, cmdOrCtrl: true, shift: true, alt: true };
+
+  it("draws ⌃ before the other glyphs on macOS", () => {
+    setPlatform("MacIntel");
+    expect(formatModifiersDisplay(held)).toBe("⌃⌘⇧⌥");
+    expect(formatModifiersDisplay({ ...held, shift: false })).toBe("⌃⌘⌥");
+  });
+
+  it.each(["Win32", "Linux x86_64"])("names Ctrl and Meta on %s", (platform) => {
+    setPlatform(platform);
+    expect(formatModifiersDisplay(held)).toBe("Ctrl+Meta+Shift+Alt+");
+  });
+
+  it("treats ctrl left out as not held", () => {
+    setPlatform("MacIntel");
+    expect(formatModifiersDisplay({ cmdOrCtrl: true, shift: false, alt: false })).toBe("⌘");
+    expect(formatModifiersDisplay({ ctrl: false, cmdOrCtrl: true, shift: false, alt: false })).toBe(
+      "⌘",
+    );
+  });
+});
+
+describe("formatControlDisplay beside the ⌃ modifier", () => {
+  it("is unchanged: a display-only Control key without ⌘", () => {
+    setPlatform("MacIntel");
+    expect(formatControlDisplay("Shift+Tab")).toBe("⌃⇧⇥");
+    expect(formatKeystrokeDisplay("Ctrl+CmdOrCtrl+Shift+Tab")).toBe("⌃⌘⇧⇥");
+  });
+});

@@ -29,6 +29,13 @@ describe("tiling kit exports", () => {
     "serializeMosaicNode",
     "swapLeaves",
     "evenSizes",
+    // The layout undo stack.
+    "recordLayoutChange",
+    "undoLayoutChange",
+    "redoLayoutChange",
+    "nextLayoutUndo",
+    "nextLayoutRedo",
+    "LAYOUT_UNDO_LIMIT",
     // Views.
     "MosaicView",
     "TileGroup",

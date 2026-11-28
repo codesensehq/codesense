@@ -95,7 +95,8 @@ export function terminalChord(
 ): string {
   if (!keystroke || isMac()) return keystroke;
   const parts = tryParse(keystroke);
-  if (!parts) return keystroke;
+  // A `Ctrl` (⌃⌘) chord never matches off macOS, so it stays as written.
+  if (!parts || parts.ctrl) return keystroke;
   if (parts.cmdOrCtrl && !parts.shift && !parts.alt && isBracketKey(parts.key)) return "";
   const lift = lifted(parts);
   // A chord that is not lifted stays as written.

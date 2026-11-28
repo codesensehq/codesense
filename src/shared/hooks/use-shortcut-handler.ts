@@ -1,9 +1,13 @@
 // SPDX-License-Identifier: MIT
 import { useEffect } from "react";
 
-import { matchesKeystroke, parseKeystroke } from "@/shared/lib/shortcuts/keystroke";
+import { matchesKeystroke, namesCtrl, parseKeystroke } from "@/shared/lib/shortcuts/keystroke";
 import { isTerminalBracketKey } from "@/shared/lib/shortcuts/terminal-chord";
-import { allShortcutActions, resolveBindings } from "@/shared/lib/shortcuts/registry";
+import {
+  allShortcutActions,
+  resolveBindings,
+  type ShortcutAction,
+} from "@/shared/lib/shortcuts/registry";
 import { isDispatchable, type DispatchGateState } from "@/shared/lib/shortcuts/is-dispatchable";
 import {
   isRowPopupFocused,
@@ -106,10 +110,20 @@ export function matchShortcut(
     editorTarget ||
     textFieldTarget ||
     (e.target instanceof Element && e.target.closest("input, textarea, select") !== null);
-  for (const action of allShortcutActions()) {
+  // In a terminal an action answers to its terminal chord, which keeps shell keys free.
+  const keystrokeOf = (action: ShortcutAction) => {
     const binding = bindings.get(action.id);
-    // In a terminal an action answers to its terminal chord, which keeps shell keys free.
-    const keystroke = terminal ? binding?.terminalKeystroke : binding?.keystroke;
+    return terminal ? binding?.terminalKeystroke : binding?.keystroke;
+  };
+  // A ⌃⌘ chord is tried first: a plain ⌘ binding also matches an event with ⌃ held.
+  const ctrlFirst: ShortcutAction[] = [];
+  const rest: ShortcutAction[] = [];
+  for (const action of allShortcutActions()) {
+    const keystroke = keystrokeOf(action);
+    (keystroke && namesCtrl(keystroke) ? ctrlFirst : rest).push(action);
+  }
+  for (const action of [...ctrlFirst, ...rest]) {
+    const keystroke = keystrokeOf(action);
     if (!keystroke) continue;
     // A dashboard command leaves a terminal only on a ⌘ chord, the same rule as
     // `macCmdOnly`: plain, ⌃, ⌥, function-key and Esc keys reach the PTY. In a text

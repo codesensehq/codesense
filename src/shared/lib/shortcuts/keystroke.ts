@@ -2,8 +2,8 @@
 /**
  * Keystroke parsing, matching, display, and reserved-key detection.
  *
- * Canonical format: `CmdOrCtrl+Shift+Alt+<key>` (segments joined by `+`,
- * modifier order is fixed). The `key` field matches `KeyboardEvent.key`
+ * Canonical format: `Ctrl+CmdOrCtrl+Shift+Alt+<key>` (segments joined by `+`,
+ * modifier order is fixed; each modifier is optional). The `key` field matches `KeyboardEvent.key`
  * values — letters are uppercased, symbols kept as-is (`","`, `"\\"`),
  * named keys kept verbatim (`"Enter"`, `"ArrowUp"`).
  *
@@ -12,9 +12,16 @@
  * accelerator convention, even though we do not use Tauri accelerators
  * in the menu (menu labels render without shortcut hints — see C.16
  * story for rationale).
+ *
+ * `Ctrl` is the ⌃ key held together with ⌘, for macOS chords such as ⌃⌥⌘→. It is
+ * only ever written beside `CmdOrCtrl`, matches only on macOS, and leaves every
+ * keystroke without it matching exactly as before (`hasMod` still folds Ctrl into
+ * `CmdOrCtrl` there).
  */
 
 export interface KeystrokeParts {
+  /** ⌃ held with ⌘ (macOS only); left out means not held. Never set without `cmdOrCtrl`. */
+  ctrl?: boolean;
   cmdOrCtrl: boolean;
   shift: boolean;
   alt: boolean;
@@ -117,6 +124,25 @@ export function hasMod(e: ModifierState): boolean {
   return !!(e.metaKey || e.ctrlKey);
 }
 
+/** Meta and Ctrl held together: the modifiers a `Ctrl` keystroke names. */
+export function hasCtrlAndCmd(e: ModifierState): boolean {
+  return !!(e.metaKey && e.ctrlKey);
+}
+
+/** Whether a binding names the ⌃ modifier; an unparseable one (such as a "+" key capture) does not. */
+export function namesCtrl(keystroke: string): boolean {
+  try {
+    return parseKeystroke(keystroke).ctrl === true;
+  } catch {
+    return false;
+  }
+}
+
+/** A keystroke that names Ctrl with Cmd while this OS has no such chord, so it could never fire. */
+export function isCtrlChordUnavailable(keystroke: string): boolean {
+  return !isMac() && namesCtrl(keystroke);
+}
+
 /** The Meta key itself: a macOS Cmd feature that stays Cmd-only. */
 export function hasCmd(e: ModifierState): boolean {
   return !!e.metaKey;
@@ -193,7 +219,9 @@ export function parseKeystroke(str: string): KeystrokeParts {
   let keySet = false;
 
   for (const seg of segments) {
-    if (seg === "CmdOrCtrl") {
+    if (seg === "Ctrl") {
+      parts.ctrl = true;
+    } else if (seg === "CmdOrCtrl") {
       parts.cmdOrCtrl = true;
     } else if (seg === "Shift") {
       parts.shift = true;
@@ -211,12 +239,16 @@ export function parseKeystroke(str: string): KeystrokeParts {
   if (!keySet) {
     throw new Error(`Invalid keystroke "${str}": missing key`);
   }
+  if (parts.ctrl && !parts.cmdOrCtrl) {
+    throw new Error(`Invalid keystroke "${str}": Ctrl needs CmdOrCtrl`);
+  }
   return parts;
 }
 
-/** Format parts back into canonical `CmdOrCtrl+Shift+Alt+X` form. */
+/** Format parts back into canonical `Ctrl+CmdOrCtrl+Shift+Alt+X` form. */
 export function formatKeystroke(parts: KeystrokeParts): string {
   const segments: string[] = [];
+  if (parts.ctrl) segments.push("Ctrl");
   if (parts.cmdOrCtrl) segments.push("CmdOrCtrl");
   if (parts.shift) segments.push("Shift");
   if (parts.alt) segments.push("Alt");
@@ -238,12 +270,15 @@ export function formatKeystrokeDisplay(str: string): string {
 
 /**
  * The modifiers of a chord, ready to prefix its key: `⌘⇧` on macOS,
- * `Ctrl+Shift+` elsewhere; `""` when none is held.
+ * `Ctrl+Shift+` elsewhere; `""` when none is held. ⌃ held with ⌘ comes first:
+ * `⌃⌘⌥` on macOS, `Ctrl+Meta+Alt+` elsewhere (where `CmdOrCtrl` alone is Ctrl).
  */
 export function formatModifiersDisplay(mods: Omit<KeystrokeParts, "key">): string {
-  if (isMac()) return `${mods.cmdOrCtrl ? "⌘" : ""}${mods.shift ? "⇧" : ""}${mods.alt ? "⌥" : ""}`;
+  if (isMac())
+    return `${mods.ctrl ? "⌃" : ""}${mods.cmdOrCtrl ? "⌘" : ""}${mods.shift ? "⇧" : ""}${mods.alt ? "⌥" : ""}`;
   const names: string[] = [];
-  if (mods.cmdOrCtrl) names.push("Ctrl");
+  if (mods.ctrl) names.push("Ctrl", "Meta");
+  else if (mods.cmdOrCtrl) names.push("Ctrl");
   if (mods.shift) names.push("Shift");
   if (mods.alt) names.push("Alt");
   return names.map((n) => `${n}+`).join("");
@@ -253,7 +288,7 @@ export function formatModifiersDisplay(mods: Omit<KeystrokeParts, "key">): strin
  * Render a chord held with the Control key itself, for a handler that reads
  * `e.ctrlKey` on every platform (`⌃G` on macOS, `Ctrl+G` elsewhere). Display
  * only: `str` is a canonical keystroke without `CmdOrCtrl` (`"G"`,
- * `"Shift+Tab"`), and no binding takes a Control modifier.
+ * `"Shift+Tab"`); a binding's ⌃ held with ⌘ is the `Ctrl` modifier instead.
  */
 export function formatControlDisplay(str: string): string {
   if (!str) return "";
@@ -282,13 +317,15 @@ export function formatModifierClick(mod: ClickModifier): string {
 /**
  * A keystroke as an `aria-keyshortcuts` value (`Meta+Shift+P` on macOS,
  * `Control+Shift+P` elsewhere), so assistive tech announces it apart from the
- * control's name. An empty input returns an empty string.
+ * control's name. A `Ctrl` keystroke names both keys (`Control+Meta+…`). An
+ * empty input returns an empty string.
  */
 export function ariaKeyshortcuts(str: string): string {
   if (!str) return "";
   const parts = parseKeystroke(str);
   const mods: string[] = [];
-  if (parts.cmdOrCtrl) mods.push(isMac() ? "Meta" : "Control");
+  if (parts.ctrl) mods.push("Control", "Meta");
+  else if (parts.cmdOrCtrl) mods.push(isMac() ? "Meta" : "Control");
   if (parts.shift) mods.push("Shift");
   if (parts.alt) mods.push("Alt");
   return [...mods, parts.key].join("+");
@@ -305,6 +342,9 @@ export function ariaKeyshortcuts(str: string): string {
  * from `event.code` so the captured rebind round-trips. Without this,
  * rebinding to `Cmd+Opt+]` would write `CmdOrCtrl+Alt+’` to settings
  * and the matcher would never fire against the user's keystroke.
+ *
+ * Meta and Ctrl held together build a `Ctrl` keystroke on every platform, so the
+ * capture UI can refuse one off macOS, where it never matches.
  */
 export function keystrokeFromEvent(event: KeyboardEvent): string | null {
   if (
@@ -322,8 +362,10 @@ export function keystrokeFromEvent(event: KeyboardEvent): string | null {
         (event.metaKey && isMac() ? alnumFromCode(event.code) : undefined) ??
         normalizedKey)
       : normalizedKey;
+  const ctrl = hasCtrlAndCmd(event);
   const parts: KeystrokeParts = {
-    cmdOrCtrl: isMac() ? event.metaKey : event.ctrlKey,
+    ctrl,
+    cmdOrCtrl: ctrl || (isMac() ? event.metaKey : event.ctrlKey),
     shift: event.shiftKey,
     alt: event.altKey,
     key,
@@ -332,8 +374,9 @@ export function keystrokeFromEvent(event: KeyboardEvent): string | null {
 }
 
 export interface MatchOptions {
-  /** On macOS, `CmdOrCtrl` means ⌘ only: a Control chord never matches. For keys
-   *  claimed from a terminal, where ⌃-chords are shell input (⌃T, ⌃F, ⌃K…). */
+  /** On macOS, `CmdOrCtrl` means ⌘ only: a Control chord never matches, and nor does a
+   *  `Ctrl` keystroke. For keys claimed from a terminal, where ⌃-chords are shell input
+   *  (⌃T, ⌃F, ⌃K…). */
   macCmdOnly?: boolean;
 }
 
@@ -356,10 +399,15 @@ export function matchesKeystroke(
   // check via `isMac()` breaks under Playwright (Desktop Chrome's UA
   // reports `Win32` regardless of host OS) and is also user-hostile
   // for users on remapped keyboards.
-  const actualCmdOrCtrl = hasMod(event);
-  if (actualCmdOrCtrl !== expected.cmdOrCtrl) return false;
-  if (options.macCmdOnly && expected.cmdOrCtrl && isMac() && (!event.metaKey || event.ctrlKey))
-    return false;
+  if (expected.ctrl) {
+    // ⌃ held with ⌘: macOS only, never from a terminal, and both keys held.
+    if (!isMac() || options.macCmdOnly || !hasCtrlAndCmd(event)) return false;
+  } else {
+    const actualCmdOrCtrl = hasMod(event);
+    if (actualCmdOrCtrl !== expected.cmdOrCtrl) return false;
+    if (options.macCmdOnly && expected.cmdOrCtrl && isMac() && (!event.metaKey || event.ctrlKey))
+      return false;
+  }
   if (event.shiftKey !== expected.shift) return false;
   if (event.altKey !== expected.alt) return false;
   if (normalizeKey(event.key) === expected.key) return true;
@@ -398,7 +446,7 @@ export function isReservedKeystroke(str: string): ReservedKeyReason | null {
   } catch {
     return null;
   }
-  if (!parts.cmdOrCtrl || parts.shift || parts.alt) return null;
+  if (!parts.cmdOrCtrl || parts.ctrl || parts.shift || parts.alt) return null;
 
   const primary = isMac() ? "⌘" : "Ctrl+";
   const osReservedPrefix = isMac() ? "macOS reserves" : "reserved by the OS:";

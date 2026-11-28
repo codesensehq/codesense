@@ -108,6 +108,16 @@ describe("useShortcutsStore — setShortcut", () => {
     expect(useShortcutsStore.getState().shortcuts["settings.open"]).toBeUndefined();
   });
 
+  it("refuses a Ctrl+Cmd chord for a dashboard command, which the frame cannot format", () => {
+    const dashboard = "dashboard:team:acme:dev/inbox/archive";
+    const result = useShortcutsStore.getState().setShortcut(dashboard, "Ctrl+CmdOrCtrl+Alt+A");
+    expect(result).toMatchObject({ ok: false, reason: "reserved" });
+    expect(useShortcutsStore.getState().shortcuts[dashboard]).toBeUndefined();
+    expect(
+      useShortcutsStore.getState().takeShortcut(dashboard, "Ctrl+CmdOrCtrl+Alt+A"),
+    ).toMatchObject({ ok: false, reason: "reserved" });
+  });
+
   it("rejects a conflicting keystroke and names the conflicting action", () => {
     // SW-SN-6: CmdOrCtrl+Shift+O is now nav.goto-heading (nav.switch-org moved to
     // CmdOrCtrl+Shift+G). Setting another action to Shift+O conflicts with it.
@@ -535,5 +545,40 @@ describe("binding collisions from overrides saved before a new default", () => {
     const warnings = mockWarn.mock.calls.filter(([, msg]) => String(msg).includes("bound to both"));
     expect(warnings).toHaveLength(1);
     expect(String(warnings[0][1])).toContain("viewer.reopen-closed-tab");
+  });
+});
+
+describe("a saved ⌃ chord", () => {
+  it("setShortcut keeps a Ctrl chord in canonical form", () => {
+    const result = useShortcutsStore
+      .getState()
+      .setShortcut("settings.open", "Alt+CmdOrCtrl+Ctrl+ArrowRight");
+    expect(result).toEqual({ ok: true });
+    expect(useShortcutsStore.getState().shortcuts["settings.open"]).toBe(
+      "Ctrl+CmdOrCtrl+Alt+ArrowRight",
+    );
+  });
+
+  it("setShortcut refuses a ⌃ chord without ⌘", () => {
+    const result = useShortcutsStore.getState().setShortcut("settings.open", "Ctrl+N");
+    expect(result).toMatchObject({ ok: false, reason: "invalid" });
+  });
+
+  it("loadPersistedState keeps a Ctrl override and drops a ⌃-only one", async () => {
+    mockLoadAppState.mockResolvedValue(
+      JSON.stringify({
+        shortcuts: {
+          shortcuts: {
+            "settings.open": "Ctrl+CmdOrCtrl+Shift+ArrowRight",
+            "nav.switch-workspace": "Ctrl+Shift+ArrowRight",
+          },
+        },
+      }),
+    );
+    useShortcutsStore.setState({ shortcuts: {}, stateLoaded: false });
+    await useShortcutsStore.getState().loadPersistedState();
+    expect(useShortcutsStore.getState().shortcuts).toEqual({
+      "settings.open": "Ctrl+CmdOrCtrl+Shift+ArrowRight",
+    });
   });
 });
