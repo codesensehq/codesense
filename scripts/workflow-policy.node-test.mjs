@@ -103,6 +103,16 @@ jobs:
           persist-credentials: false
 `;
 
+// rust.yml must keep its source-guards job, so a fixture checked as rust.yml gets one.
+const rustGuards =
+  "  rust-guards:\n    name: Rust guards\n    runs-on: ubuntu-24.04\n    timeout-minutes: 20\n    permissions:\n      contents: read\n" +
+  "    steps:\n      - run: cargo test --locked -p codesense-guards\n";
+const rustPolicy = (text, file) =>
+  workflowPolicy(
+    file === "rust.yml" && !text.includes("\n  rust-guards:\n") ? text + rustGuards : text,
+    file,
+  );
+
 // Three planted bad workflows exercise each of the original policy failure classes.
 const badFixtures = [
   ["unpinned action", good.replace(/@[0-9a-f]{40}/, "@v4"), /40-hex/],
@@ -334,10 +344,10 @@ test("flaky-issues may run on a nightly schedule on main, never on merge groups"
     "github.event_name == 'push'",
     "github.event_name == 'schedule'",
   );
-  assert.deepEqual(workflowPolicy(nightly, "rust.yml"), []);
+  assert.deepEqual(rustPolicy(nightly, "rust.yml"), []);
   for (const event of ["merge_group", "workflow_dispatch", "pull_request"])
     assert.match(
-      workflowPolicy(
+      rustPolicy(
         flakyIssues.replace("github.event_name == 'push'", `github.event_name == '${event}'`),
         "rust.yml",
       ).join("\n"),
@@ -479,6 +489,159 @@ test("rust.yml skips its test jobs only when the changes job finds nothing Rust-
     "rust-macos-test",
   ]);
   assert.equal(workflow.jobs["rust-check-linux"].if, `\${{ ${pathFilter} }}`);
+});
+
+// The source guards also scan the front end, so no path filter or needs may skip them.
+test("rust.yml runs its source guards on every change", () => {
+  const text = fs.readFileSync(path.join(directory, "rust.yml"), "utf8");
+  const job = parse(text).jobs["rust-guards"];
+  assert.equal(job.name, "Rust guards");
+  assert.equal(job.if, undefined);
+  assert.equal(job.needs, undefined);
+  assert.deepEqual(
+    job.steps.filter((step) => step.run === "cargo test --locked -p codesense-guards").length,
+    1,
+  );
+  assert.deepEqual(workflowPolicy(text, "rust.yml"), []);
+  const header = "  rust-guards:\n    name: Rust guards\n";
+  const run = "        run: cargo test --locked -p codesense-guards\n";
+  assert.ok(text.includes(header) && text.includes(run));
+  for (const [from, to] of [
+    [header, `${header}    if: \${{ needs.changes.outputs.rust != 'false' }}\n`],
+    [header, `${header}    if: \${{ github.event_name != 'pull_request' || true }}\n`],
+    [header, `${header}    needs: changes\n`],
+    [header, `${header}    continue-on-error: true\n`],
+    [header, "  rust-guards-renamed:\n    name: Rust guards\n"],
+    [run, "        run: cargo test -p codesense-guards\n"],
+    [run, "        run: cargo test --locked -p codesense-guards || true\n"],
+    [run, `${run}        if: \${{ github.event_name != 'pull_request' }}\n`],
+    [run, `${run}        continue-on-error: true\n`],
+    [run, `${run}      - run: cargo test --locked -p codesense-guards\n`],
+  ])
+    assert.match(
+      workflowPolicy(text.replace(from, to), "rust.yml").join("\n"),
+      /rust-guards: must have no if: or needs: and run cargo test --locked -p codesense-guards/,
+      to,
+    );
+  // The pin is rust.yml's alone.
+  assert.deepEqual(workflowPolicy(good, "ci.yml"), []);
+});
+
+// The guards' step runs the exact command under bash, nothing moves the tree the guards read or
+// the job's PATH and env, no path filter skips the workflow, and no other job reports the check.
+test("rust.yml's source guards step cannot be bent or shadowed", () => {
+  const text = fs.readFileSync(path.join(directory, "rust.yml"), "utf8");
+  const step = parse(text).jobs["rust-guards"].steps.find(
+    (candidate) => candidate.run === "cargo test --locked -p codesense-guards",
+  );
+  assert.deepEqual(Object.keys(step), ["name", "env", "run"]);
+  assert.deepEqual(Object.keys(step.env), ["X1_DIFF_BASE"]);
+  const header = "  rust-guards:\n    name: Rust guards\n";
+  const jobEnv = "      CARGO_TERM_COLOR: always\n    steps:\n";
+  const run = "        run: cargo test --locked -p codesense-guards\n";
+  const stepEnv = "        env:\n          # Empty on push";
+  const pullRequest = "  pull_request:\n";
+  for (const [from, to, error] of [
+    [run, "        run: cargo test --locked -p codesense-guards; exit 0\n", /must have no if:/],
+    [run, "        run: set +e; cargo test --locked -p codesense-guards\n", /must have no if:/],
+    [run, `${run}        shell: sh\n`, /may set only name, env, run/],
+    [run, `${run}        working-directory: elsewhere\n`, /may set only name, env, run/],
+    [run, `${run}        id: guards\n`, /may set only name, env, run/],
+    [run, `${run}        timeout-minutes: 1\n`, /may set only name, env, run/],
+    [
+      stepEnv,
+      "        env:\n          RUSTC_WRAPPER: /bin/true\n          # Empty on push",
+      /and env only X1_DIFF_BASE/,
+    ],
+    [
+      stepEnv,
+      "        env:\n          CODESENSE_GUARD_ROOT: /tmp\n          # Empty on push",
+      /CODESENSE_GUARD_ROOT may not appear/,
+    ],
+    [
+      jobEnv,
+      '      CARGO_TERM_COLOR: always\n      RUSTFLAGS: "--cfg x"\n    steps:\n',
+      /rust-guards: env may set only/,
+    ],
+    [
+      header,
+      `${header}    defaults:\n      run:\n        shell: sh\n`,
+      /rust-guards: defaults may set only run.shell: bash/,
+    ],
+    [
+      header,
+      `${header}    defaults:\n      run:\n        working-directory: x\n`,
+      /rust-guards: defaults may set only/,
+    ],
+    [
+      "\njobs:\n",
+      "\ndefaults:\n  run:\n    shell: pwsh\njobs:\n",
+      /rust\.yml: defaults may set only run.shell: bash/,
+    ],
+    [
+      jobEnv,
+      `${jobEnv}      - run: echo "$RUNNER_TEMP/fake" >> "$GITHUB_PATH"\n`,
+      /rust-guards: step "echo .*" writes GITHUB_PATH or GITHUB_ENV/,
+    ],
+    [
+      jobEnv,
+      `${jobEnv}      - run: echo "X=1" >> $GITHUB_ENV\n`,
+      /rust-guards: step "echo .*" writes GITHUB_PATH or GITHUB_ENV/,
+    ],
+    [
+      "\nenv:\n",
+      "\nenv:\n  CODESENSE_GUARD_ROOT: /tmp\n",
+      /CODESENSE_GUARD_ROOT may not appear in rust\.yml/,
+    ],
+    [
+      pullRequest,
+      `${pullRequest}    paths: ["src-tauri/**"]\n`,
+      /the pull_request trigger takes no paths or paths-ignore/,
+    ],
+    [
+      pullRequest,
+      `${pullRequest}    paths-ignore: ["src/**"]\n`,
+      /the pull_request trigger takes no paths or paths-ignore/,
+    ],
+    [
+      "  merge_group:\n",
+      '  merge_group:\n    paths-ignore: ["src/**"]\n',
+      /the merge_group trigger takes no paths or paths-ignore/,
+    ],
+    [
+      header,
+      "  rust-guards:\n    name: Rust source guards\n",
+      /rust-guards: name must be Rust guards/,
+    ],
+  ]) {
+    assert.ok(text.includes(from), from);
+    assert.match(workflowPolicy(text.replace(from, to), "rust.yml").join("\n"), error, to);
+  }
+  // A job elsewhere, or another job in rust.yml, whose name could report Rust guards.
+  const named = (name) =>
+    good.replace("    runs-on: ubuntu-24.04\n", `    name: ${name}\n    runs-on: ubuntu-24.04\n`);
+  for (const name of [
+    "Rust guards",
+    "rust GUARDS",
+    "Rust ${{ matrix.x }}",
+    "\"${{ 'Rust guards' }}\"",
+  ])
+    assert.match(
+      workflowPolicy(named(name), "ci.yml").join("\n"),
+      /static: the job name could report Rust guards, a check only rust\.yml reports/,
+      name,
+    );
+  assert.deepEqual(workflowPolicy(named("Rust guards tests"), "ci.yml"), []);
+  assert.match(
+    workflowPolicy(
+      text.replace(
+        "  rust-macos-build:\n    name: Rust (macOS arm64) build ${{ matrix.part }}\n",
+        "  rust-macos-build:\n    name: Rust ${{ matrix.part }}\n",
+      ),
+      "rust.yml",
+    ).join("\n"),
+    /rust-macos-build: the job name could report Rust guards/,
+  );
 });
 
 // The Linux app job is not a required check: it carries the path filter and nothing else, so it
@@ -810,7 +973,7 @@ test("rust.yml's changes job tests a push with no before, and diffs one that has
 test("only rust.yml's test jobs may skip a merge group on the changes job's output", () => {
   // queued()'s static job, renamed and gated on a changes job of its own.
   const filtered = (condition, file = "rust.yml", job = "rust-linux", needs = "changes") =>
-    workflowPolicy(
+    rustPolicy(
       queued().replace(
         "  static:\n",
         "  changes:\n    runs-on: ubuntu-24.04\n    timeout-minutes: 5\n    permissions:\n      contents: read\n" +
@@ -851,7 +1014,7 @@ test("only rust.yml's test jobs may skip a merge group on the changes job's outp
 // app job) may skip merge groups, with exactly this term after the path filter.
 test("only rust.yml's non-required jobs may skip merge groups, and still run on push and schedule", () => {
   const filtered = (condition, file = "rust.yml", job = "rust-macos") =>
-    workflowPolicy(
+    rustPolicy(
       queued().replace(
         "  static:\n",
         "  changes:\n    runs-on: ubuntu-24.04\n    timeout-minutes: 5\n    permissions:\n      contents: read\n" +
@@ -915,7 +1078,7 @@ test("only rust.yml's non-required jobs may skip merge groups, and still run on 
 // that builds or tests must not run after a cancel.
 test("only rust.yml's macOS result job may run on a cancelled run", () => {
   const filtered = (condition, file = "rust.yml", job = "rust-macos") =>
-    workflowPolicy(
+    rustPolicy(
       queued().replace(
         "  static:\n",
         "  changes:\n    runs-on: ubuntu-24.04\n    timeout-minutes: 5\n    permissions:\n      contents: read\n" +
@@ -949,7 +1112,7 @@ test("only rust.yml's macOS result job may run on a cancelled run", () => {
 // The macOS filter's term may only follow the path filter's, in the macOS build and result jobs.
 test("only rust.yml's macOS jobs may skip a change only Windows or Linux compiles", () => {
   const filtered = (condition, job = "rust-macos-build", file = "rust.yml") =>
-    workflowPolicy(
+    rustPolicy(
       queued().replace(
         "  static:\n",
         "  changes:\n    runs-on: ubuntu-24.04\n    timeout-minutes: 5\n    permissions:\n      contents: read\n" +
@@ -991,7 +1154,7 @@ test("only rust.yml's macOS shards may skip a build that main moved past", () =>
     needs = "rust-macos-build",
     file = "rust.yml",
   ) =>
-    workflowPolicy(
+    rustPolicy(
       queued().replace(
         "  static:\n",
         "  rust-macos-build:\n    runs-on: ubuntu-24.04\n    timeout-minutes: 5\n    permissions:\n      contents: read\n" +
@@ -1861,9 +2024,9 @@ const cachePrune = good
   )
   .replace("      contents: read", "      actions: write");
 test("actions write is limited to rust.yml's nightly cache prune", () => {
-  assert.deepEqual(workflowPolicy(cachePrune, "rust.yml"), []);
+  assert.deepEqual(rustPolicy(cachePrune, "rust.yml"), []);
   for (const file of ["ci.yml", "test-build.yml", ""])
-    assert.match(workflowPolicy(cachePrune, file).join("\n"), /permissions must grant exactly/);
+    assert.match(rustPolicy(cachePrune, file).join("\n"), /permissions must grant exactly/);
   for (const [from, to, error] of [
     ["  rust-macos-cache-prune:", "  rust-macos-build:", /permissions must grant exactly/],
     [
@@ -1876,7 +2039,7 @@ test("actions write is limited to rust.yml's nightly cache prune", () => {
     [" && !github.event.repository.fork", "", /if must require !github\.event\.repository\.fork/],
   ])
     assert.match(
-      workflowPolicy(cachePrune.replace(from, to), "rust.yml").join("\n"),
+      rustPolicy(cachePrune.replace(from, to), "rust.yml").join("\n"),
       error,
       `${from} -> ${to}`,
     );
@@ -1955,9 +2118,9 @@ const flakyIssues = good
   )
   .replace("      contents: read", "      contents: read\n      issues: write");
 test("issues write is limited to the flaky-issues job in rust.yml", () => {
-  assert.deepEqual(workflowPolicy(flakyIssues, "rust.yml"), []);
+  assert.deepEqual(rustPolicy(flakyIssues, "rust.yml"), []);
   for (const file of ["ci.yml", "quarantine.yml", "rust.yaml", "nested/rust.yml", ""])
-    assert.match(workflowPolicy(flakyIssues, file).join("\n"), /permissions must grant exactly/);
+    assert.match(rustPolicy(flakyIssues, file).join("\n"), /permissions must grant exactly/);
   for (const [from, to] of [
     ["  flaky-issues:", "  rust-linux:"],
     // The reports come from download-artifact, which needs no token scope.
@@ -1967,7 +2130,7 @@ test("issues write is limited to the flaky-issues job in rust.yml", () => {
     ["      contents: read\n", "      contents: read\n      pull-requests: write\n"],
   ])
     assert.match(
-      workflowPolicy(flakyIssues.replace(from, to), "rust.yml").join("\n"),
+      rustPolicy(flakyIssues.replace(from, to), "rust.yml").join("\n"),
       /permissions must grant exactly/,
       `${from} -> ${to}`,
     );

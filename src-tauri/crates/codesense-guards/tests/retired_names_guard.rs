@@ -1,7 +1,15 @@
 // SPDX-License-Identifier: MIT
 //! A guard that the retired pack system leaves no names behind.
+//!
+//! It reads the app's Rust and the front end's TypeScript, so it lives here, where `Rust guards`
+//! runs it on every change, rather than in the app crate, whose job skips a TypeScript-only change.
 
+use codesense_guards::guard_support::app_root;
 use std::path::Path;
+
+/// About nine tenths of the `.rs`, `.ts` and `.tsx` files the name scan read when it moved here
+/// (3,959), so a wrong root or a missing `src/` fails rather than passing on nothing.
+const SCANNED_CODE_FLOOR: usize = 3_600;
 
 /// Splits an identifier into lowercase words across `snake_case` and `camelCase`.
 fn identifier_words(ident: &str) -> Vec<String> {
@@ -161,12 +169,9 @@ fn no_pack_identifiers_or_agent_packs_paths_survive() {
             &["packId"],
         ),
     ];
-    // Files whose job is to name what is gone: this guard, and the routine boundary guard
-    // that bans the deleted automation modules by name.
-    const EXEMPT: &[&str] = &[
-        "src-tauri/src/agents/retired_names_guard.rs",
-        "src-tauri/src/routines/boundary_guard.rs",
-    ];
+    // Files whose job is to name what is gone: the routine boundary guard bans the deleted
+    // automation modules by name. This guard sits outside the scanned roots.
+    const EXEMPT: &[&str] = &["src-tauri/src/routines/boundary_guard.rs"];
     // The pack format of the docs repo's `packs/` folders (`pack.yml`, `packs.lock.yml`) is a
     // different thing from the retired pack system, so its module may use pack names.
     const PACK_FORMAT_DIR: &str = "src-tauri/src/packs/";
@@ -176,7 +181,8 @@ fn no_pack_identifiers_or_agent_packs_paths_survive() {
         "src-tauri/src/content_engine/sync/wave.rs",
     ];
 
-    let repo = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    let app = app_root();
+    let repo = app.parent().unwrap();
     let rel = |p: &Path| {
         p.strip_prefix(repo)
             .unwrap()
@@ -225,6 +231,7 @@ fn no_pack_identifiers_or_agent_packs_paths_survive() {
     let ident = regex::Regex::new(r"[A-Za-z_][A-Za-z0-9_]*").unwrap();
     let descriptor_dir = regex::Regex::new(r"\bagent_packs\b").unwrap();
     let mut offenders = Vec::new();
+    let (mut scanned, mut scanned_ts) = (0, 0);
 
     for path in under("src").chain(under("src-tauri/src")) {
         let is_code = path
@@ -238,6 +245,8 @@ fn no_pack_identifiers_or_agent_packs_paths_survive() {
         {
             continue;
         }
+        scanned += 1;
+        scanned_ts += usize::from(file.ends_with(".ts") || file.ends_with(".tsx"));
         let text = std::fs::read_to_string(&path).unwrap();
         for (n, line) in text.lines().enumerate() {
             let trimmed = line.trim_start();
@@ -289,6 +298,16 @@ fn no_pack_identifiers_or_agent_packs_paths_survive() {
         }
     }
 
+    assert!(
+        scanned_ts > 0,
+        "the name scan read no .ts or .tsx file under {}",
+        repo.display()
+    );
+    assert!(
+        scanned >= SCANNED_CODE_FLOOR,
+        "the name scan read {scanned} code files under {}, fewer than {SCANNED_CODE_FLOOR}",
+        repo.display()
+    );
     assert!(
         offenders.is_empty(),
         "pack system leftovers:\n{}",

@@ -1,12 +1,25 @@
 // SPDX-License-Identifier: MIT
 //! Guard the raw registry walk and the established own-team path boundaries.
-use std::path::Path;
+//!
+//! It reads the app's Rust and the front end's TypeScript, so it lives here, where `Rust guards`
+//! runs it on every change, rather than in the app crate, whose job skips a TypeScript-only change.
+use codesense_guards::guard_support::app_root;
+
+/// The app's own cut of test code, mounted rather than copied: this crate's `common` test-file
+/// rule is a different one.
+#[allow(dead_code)]
+#[path = "../../../src/test_support/source_guard.rs"]
+mod source_guard;
+
+/// About nine tenths of the files the guard read when it moved here (2,302), so a wrong root or
+/// a missing `src/` fails rather than passing on nothing.
+const SCANNED_FLOOR: usize = 2_100;
 
 /// What the guard scans of `source`: Rust without its test code, other
 /// languages whole (the Rust cut would misread their strings), minus comment lines.
 fn production(file: &str, source: &str) -> String {
     let code = if file.ends_with(".rs") {
-        crate::test_support::source_guard::production_text(source)
+        source_guard::production_text(source)
     } else {
         source.to_string()
     };
@@ -18,7 +31,8 @@ fn production(file: &str, source: &str) -> String {
 
 /// Every guarded source file as (repo-relative path, raw text).
 fn guarded_sources() -> Vec<(String, String)> {
-    let repo = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    let app = app_root();
+    let repo = app.parent().unwrap();
     let mut sources = Vec::new();
     for root in [repo.join("src-tauri/src"), repo.join("src")] {
         for entry in walkdir::WalkDir::new(root)
@@ -40,15 +54,23 @@ fn guarded_sources() -> Vec<(String, String)> {
                 .unwrap()
                 .to_string_lossy()
                 .replace('\\', "/");
-            if crate::test_support::source_guard::is_test_file(path)
-                || file.contains("/mock/")
-                || file == "src-tauri/src/context_repo/inheritance_guard.rs"
-            {
+            if source_guard::is_test_file(path) || file.contains("/mock/") {
                 continue;
             }
             sources.push((file, std::fs::read_to_string(path).unwrap()));
         }
     }
+    let ts = sources
+        .iter()
+        .filter(|(file, _)| file.ends_with(".ts") || file.ends_with(".tsx"))
+        .count();
+    assert!(ts > 0, "read no .ts or .tsx file under {}", repo.display());
+    assert!(
+        sources.len() >= SCANNED_FLOOR,
+        "read {} files under {}, fewer than {SCANNED_FLOOR}",
+        sources.len(),
+        repo.display()
+    );
     sources
 }
 
@@ -251,10 +273,7 @@ fn own_team_allowances_equal_the_production_matches() {
 fn one_more_production_access_in_an_allowlisted_file_fails() {
     let pattern = direct_pattern();
     let file = "src-tauri/src/commands/attachments.rs";
-    let raw = std::fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("src/commands/attachments.rs"),
-    )
-    .unwrap();
+    let raw = std::fs::read_to_string(app_root().join("src/commands/attachments.rs")).unwrap();
     assert!(direct_violation(file, &raw, &pattern).is_none());
     let extra = "\nfn added() { let _ = std::fs::read_dir(root.join(team).join(\"content\")); }\n";
     assert!(direct_violation(file, &format!("{raw}{extra}"), &pattern).is_some());

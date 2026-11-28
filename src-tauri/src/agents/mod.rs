@@ -76,8 +76,6 @@ pub use service::NoReferrers;
 pub use service::{AgentError, AgentReferrers, Placement, SaveTarget};
 
 #[cfg(test)]
-mod retired_names_guard;
-#[cfg(test)]
 mod tests;
 
 pub(crate) mod session_fields;
