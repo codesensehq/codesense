@@ -54,6 +54,7 @@ import { SlotFallbackStrip, type SlotFailure } from "./slot-fallback-strip";
 import { NativeSlotProvider } from "./native-slot-context";
 import { useSlotDebugTrace, type SlotRefreshTrigger } from "./slot-debug";
 import { basename } from "@/shared/lib/path";
+import { useTileHosted } from "@/shared/tiling/hosted-frame";
 
 type PaneFrame = {
   attempt: number;
@@ -333,8 +334,12 @@ export function SlotDashboardHost({
     },
     [isCurrentAttempt, onIntentDelivered],
   );
+  // Recovery swaps in the active team's built-in Inbox, which is the right pane's; a tile's Inbox
+  // page keeps its own team and falls back like any other page.
+  const tileHosted = useTileHosted();
   const inbox =
     slotId === "right-pane" &&
+    !tileHosted &&
     (isInboxDashboard(entry) ||
       canonicalSurface(entry.surface ?? entry.declaration?.surface) === "inbox");
   const canRecoverInbox = inbox && entry.dashboardRef?.scope !== "built-in";

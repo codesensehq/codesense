@@ -498,6 +498,31 @@ describe("HtmlViewer postMessage listener", () => {
     expect(onNavigate).toHaveBeenCalledWith("/org/backend/content/stories/x.md", {});
   });
 
+  it("Escape in a tile's pane returns focus to the tile's shown tab", async () => {
+    mockGetHttpApiPort.mockResolvedValue(9123);
+    render(
+      <div data-tile-body="dashboard:team:acme:dev/board" data-tile-shown="true">
+        <div role="tab" aria-selected="true" tabIndex={0}>
+          Board
+        </div>
+        <HtmlViewer
+          filePath="/org/backend/panes/board.html"
+          teamContentPath="/org/backend/content"
+          pane={{
+            contentRoot: "/org/backend/content",
+            panesDir: "/org/backend/panes",
+            fileName: "board.html",
+          }}
+        />
+      </div>,
+    );
+    await waitFor(() => {
+      expect(document.querySelector("iframe")?.getAttribute("src")).toContain("/pane/");
+    });
+    dispatchIframeMessage({ type: "codesense:key-escape" });
+    expect(document.activeElement).toBe(screen.getByRole("tab", { name: "Board" }));
+  });
+
   it("normalizes relative paths with ..", async () => {
     const onNavigate = await renderWithNav();
     dispatchIframeMessage({

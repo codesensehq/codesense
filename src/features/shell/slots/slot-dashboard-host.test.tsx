@@ -12,6 +12,7 @@ import { registerPanel, unregisterPanel } from "../right-pane/panel-registry";
 import { usePaneStore } from "../right-pane/panes/pane-store";
 import { useNativeSlot } from "./native-slot-context";
 import { Inbox } from "lucide-react";
+import { TileKeyContext } from "@/shared/tiling/tile-host";
 vi.mock("@/features/viewer/components/scratch-note-panel", () => ({
   ScratchNotePanel: () => <div>Native Notes</div>,
 }));
@@ -1037,6 +1038,41 @@ it.each(["team", "private"] as const)(
     ).toBeTruthy();
   },
 );
+
+it("a tile's failed Inbox keeps its own page and never swaps in the right pane's built-in", async () => {
+  const builtin = {
+    ...entry,
+    title: "Inbox",
+    scope: "private" as const,
+    team: undefined,
+    path: "/builtin-panes/panes/inbox.html",
+    dashboardRef: { scope: "built-in" as const, org: "acme", id: "inbox" },
+  };
+  useOrgStore.setState({ activeOrgSlug: "acme", activeTeamName: "dev" });
+  vi.mocked(listBuiltinPanes).mockClear();
+  vi.mocked(listBuiltinPanes).mockResolvedValue({
+    contentRoot: "/ctx",
+    chain: [],
+    panes: [builtin],
+    builtinInbox: builtin,
+  });
+  render(
+    <TileKeyContext.Provider value="dashboard:team:acme:dev/inbox">
+      <SlotDashboardHost
+        slotId="right-pane"
+        entry={{ ...entry, title: "Inbox" }}
+        contentRoot="/ctx"
+        visible
+      />
+    </TileKeyContext.Provider>,
+  );
+  await act(async () =>
+    props.current.onDocProblem({ kind: "script", message: "broken team copy" }),
+  );
+  expect(listBuiltinPanes).not.toHaveBeenCalled();
+  expect(props.current.filePath).toBe(entry.path);
+  expect(screen.queryByText("Your messages are safe.")).toBeNull();
+});
 
 const keyedEntry = {
   ...entry,
