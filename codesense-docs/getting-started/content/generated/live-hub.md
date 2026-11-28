@@ -2,7 +2,7 @@
 
 18 built-in topics and 1 dynamic topic family. Row shapes are read from actual producers; Value expressions and dynamic roster/collection state remain explicitly untyped. Topics with untyped fields: sessions, inbox, agentList, records, paneSources, machineStats, runEndorsements, runEvidence, files, stories, agentDefinitions, profile, workspaceConfig, prefs, storyTotals, pins, messageDelivery, needsYou, ui:<slotId>.
 
-View keys: `all` for non-team grants; `team:{org}/{team}` for a pinned team; `undefined` is the agentList status ordering suffix. For sessions, inbox and agentList, team grants cannot read other teams. Records instead use `records:{scope}:{owner}:{collection}`: private owner is the org; team owner is org/team. Global UI topics `ui:dock`, `theme` always use `all`, including in a team-pinned frame. Other UI topics follow the frame view.
+View keys: `all` for non-team grants; `team:{org}/{team}` for a pinned team; `undefined` is the agentList status ordering suffix. For sessions, inbox, agentList and needsYou, team grants cannot read other teams. Records instead use `records:{scope}:{owner}:{collection}`: private owner is the org; team owner is org/team. Global UI topics `ui:dock`, `theme` always use `all`, including in a team-pinned frame. Other UI topics follow the frame view.
 
 [SDK subscribe/page signatures and envelopes](codesense.d.ts) · [Machine reference](live-hub.json)
 
