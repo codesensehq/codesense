@@ -52,11 +52,25 @@ export interface HandOffRequest {
   budgetMs: number;
 }
 
+/** Why `window_move_item` refused a move; a kind check may add its own. */
+export type MoveRefusal =
+  | "stale"
+  | "moving"
+  | "pending_target"
+  | "self"
+  | "unknown_target"
+  | "occupied"
+  | "tiles_off"
+  | "window_failed"
+  | (string & {});
+
+/** Why a move ended without a commit; `abort_all_moves` passes its caller's own. */
+export type AbortReason = "dirty" | "gone" | "timeout" | "no_ack" | (string & {});
+
 export interface MoveAborted {
   key: ItemKey;
   moveId: string;
-  /** `dirty`, `gone`, `timeout`, `no_ack`, `window_failed`, or an `abort_all_moves` reason. */
-  reason: string;
+  reason: AbortReason;
 }
 
 export interface ItemsReturned {
@@ -67,14 +81,13 @@ export interface ItemsReturned {
 export interface HandOffAck {
   moveId: string;
   ok: boolean;
-  reason?: string;
+  /** A refused hand-off's reason; the registry reads `dirty` when there is none. */
+  reason?: AbortReason;
 }
 
-/** The answer to `window_move_item`. A refusal's reason is `stale`, `moving`,
- *  `pending_target`, `self`, `unknown_target`, `tiles_off`, `window_failed` or a kind
- *  check's own. */
+/** The answer to `window_move_item`. */
 export type MoveStart =
   | { status: "started"; moveId: string; target: string }
-  | { status: "refused"; reason: string };
+  | { status: "refused"; reason: MoveRefusal };
 
 export type AckOutcome = "committed" | "aborted" | "ignored";

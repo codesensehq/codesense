@@ -9,7 +9,7 @@
 import "@/test/prefs-state-fixture";
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { createElement } from "react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 
 vi.mock("@/tauri/commands", () => ({
   saveAppState: vi.fn().mockResolvedValue(undefined),
@@ -63,7 +63,7 @@ import {
   type SatelliteContent,
 } from "./satellite-root";
 import type { SliceSource, SliceView } from "./slice";
-import type { AckOutcome, HandOffAck } from "./window-slice";
+import type { AbortReason, AckOutcome, HandOffAck, MoveRefusal, MoveStart } from "./window-slice";
 
 const TEAM = "acme:general";
 const A = "/acme/a.md";
@@ -469,5 +469,24 @@ describe("the move states a satellite's renderer gets", () => {
     expect(satelliteContent(view(), released)).toEqual({ item: K_KEY });
     released.side.letGo(K_KEY);
     expect(satelliteContent(view(), released)).toEqual({ state: "handed-off" });
+  });
+});
+
+describe("the move reason codes", () => {
+  // `Extract` keeps only the named literals, so the open tail cannot hide a missing code.
+  it("name occupied among the refusals, beside an open tail for a kind check's own", () => {
+    const refused: MoveStart = { status: "refused", reason: "occupied" };
+    expect(refused).toEqual({ status: "refused", reason: "occupied" });
+    expectTypeOf<Extract<MoveRefusal, "occupied" | "stale">>().toEqualTypeOf<
+      "occupied" | "stale"
+    >();
+    expectTypeOf<"tab_refused">().toMatchTypeOf<MoveRefusal>();
+  });
+
+  it("name the four abort reasons, beside an open tail for abort_all_moves' own", () => {
+    expectTypeOf<Extract<AbortReason, "dirty" | "gone" | "timeout" | "no_ack">>().toEqualTypeOf<
+      "dirty" | "gone" | "timeout" | "no_ack"
+    >();
+    expectTypeOf<"quit">().toMatchTypeOf<AbortReason>();
   });
 });

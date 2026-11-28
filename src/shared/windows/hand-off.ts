@@ -127,20 +127,20 @@ export function mainTabSide(): HandOffSide<TabPlace> {
       return !tabsOf(key.team).some((t) => t.path === key.id);
     },
     takeBack(key, place) {
-      // Not open at hand-off (the user closed it during the flush): nothing to give back.
-      if (place && place.index < 0) return;
-      const repoPath = place?.repoPath ?? repoPathForItem(key);
+      // `record` always runs on this side. Not open at hand-off (the user closed it during
+      // the flush): nothing to give back.
+      if (!place || place.index < 0) return;
+      const repoPath = place.repoPath ?? repoPathForItem(key);
       if (repoPath === null) {
         // Queued until the team is ready; it comes back without its old position.
-        openWhenTeamReady(key, place?.preview);
+        openWhenTeamReady(key, place.preview);
         return;
       }
-      openItemTab(key, repoPath, place?.preview);
+      openItemTab(key, repoPath, place.preview);
       const store = useViewerStore.getState();
-      if (!place) return;
       const tabs = tabsOf(key.team);
       const from = tabs.findIndex((t) => t.path === key.id);
-      if (place.index >= 0 && from >= 0 && from !== place.index) {
+      if (from >= 0 && from !== place.index) {
         store.reorderTab(key.team, from, Math.min(place.index, tabs.length - 1));
         // A reorder pins a preview tab; this one is going back as it was.
         if (place.preview) repreview(key);
