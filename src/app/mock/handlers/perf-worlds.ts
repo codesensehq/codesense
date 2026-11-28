@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-import { TEAM_CONTENT_PATH } from "../fixtures";
+import { MOCK_ORG_SLUG, MOCK_TEAM_NAME, TEAM_CONTENT_PATH } from "../fixtures";
 import type { HandlerRegistry } from "../mock-router";
 import type { DerivedPipelineTree } from "@/shared/lib/pipeline-graph/types";
 
@@ -82,11 +82,28 @@ type PerfClock = { start: { ms: number; endState: string } | null };
 
 /**
  * `?perf=nav5k`: the team's scan answers the 5,000-file tree. Its first answer stamps the spec's
- * start clock, which the nav's first paint is timed from; a later rescan leaves it.
+ * start clock, which the nav's first paint is timed from; a later rescan leaves it. The app state
+ * is `base`'s (the demo's) with the first area and its first group open, so the nav's first paint
+ * draws file rows.
  */
-export function navPerfHandlers(): HandlerRegistry {
+export function navPerfHandlers(base: HandlerRegistry): HandlerRegistry {
+  const loadBase = base.load_app_state;
   let stamped = false;
   return {
+    // Synchronous, as the demo's is: some readers parse the answer without awaiting it.
+    load_app_state: (args) => {
+      const state = JSON.parse(String(loadBase(args))) as { viewer: object };
+      state.viewer = {
+        ...state.viewer,
+        statusNavExpandedPaths: {
+          [`${MOCK_ORG_SLUG}:${MOCK_TEAM_NAME}`]: [
+            `${TEAM_CONTENT_PATH}/area-01`,
+            `${TEAM_CONTENT_PATH}/area-01/group-1`,
+          ],
+        },
+      };
+      return JSON.stringify(state);
+    },
     scan_pipeline_tree: (args) => {
       const tree = navTree5k(String(args.teamContentPath).replace(/\/+$/, ""));
       const clock = (globalThis as { __perf?: PerfClock }).__perf;

@@ -66,6 +66,16 @@ describe("the ?perf=nav5k backend", () => {
     expect(perf.__perf.start).toBeNull();
   });
 
+  it("boots with the first area and its first group open, so a file row paints first", async () => {
+    const search = "?perf=nav5k";
+    const state = JSON.parse(
+      String(await createMockBackend(resolveScenario(search), search)("load_app_state")),
+    ) as { viewer: { statusNavExpandedPaths: Record<string, string[]> } };
+    expect(Object.values(state.viewer.statusNavExpandedPaths)).toEqual([
+      [`${TEAM_CONTENT_PATH}/area-01`, `${TEAM_CONTENT_PATH}/area-01/group-1`],
+    ]);
+  });
+
   it("leaves the default world's scan alone", async () => {
     perf.__perf = { start: null };
     expect(walk(await scanner("")()).files.length).toBeLessThan(5_000);

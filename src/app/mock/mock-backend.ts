@@ -114,7 +114,7 @@ export function createMockBackend(
   // The left nav's demo world, opt-in (`?nav=demo`).
   if (isLeftNavDemo(search)) Object.assign(handlers, leftNavDemoHandlers(state, events, handlers));
   // The perf baseline's 5,000-file nav (`?perf=nav5k`).
-  if (isPerfWorld(search, "nav5k")) Object.assign(handlers, navPerfHandlers());
+  if (isPerfWorld(search, "nav5k")) Object.assign(handlers, navPerfHandlers(handlers));
   if (isChatMediaWorld(search)) Object.assign(handlers, workspaceChatMediaHandlers(events));
   Object.assign(handlers, navGitHandlers(search));
   // SW-XS-27: the unsaved team edits world, opt-in (`?edits=demo`).
