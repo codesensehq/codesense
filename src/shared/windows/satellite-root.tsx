@@ -17,13 +17,8 @@ import { useEffect, useState, useSyncExternalStore, type ReactNode } from "react
 import { renderViewer } from "@/shared/lib/render-viewer";
 
 import { BOOT_EXPORTS, BootRows, SATELLITE_ROWS } from "./boot-inventory";
-import {
-  EMPTY_SLICE_SOURCE,
-  installSliceSource,
-  TAB_ITEM_KIND,
-  type SliceItem,
-  type SliceSource,
-} from "./slice";
+import { TAB_ITEM_KIND, type ItemKey } from "./item-key";
+import { EMPTY_SLICE_SOURCE, installSliceSource, type SliceSource } from "./slice";
 
 // The module rows (the virtual-tab registrations) run before the first render, so a
 // `virtual://` item a slice hands over synchronously resolves at once.
@@ -32,7 +27,7 @@ for (const row of SATELLITE_ROWS) {
 }
 
 /** What the renderer is handed: the one item, or the layout the slice names. */
-export type SatelliteContent = { item: SliceItem } | { layoutRef: string };
+export type SatelliteContent = { item: ItemKey } | { layoutRef: string };
 
 type SatelliteRenderer = (content: SatelliteContent) => ReactNode;
 

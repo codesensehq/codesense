@@ -15,23 +15,16 @@
  */
 import { isMainWindow } from "@/shared/lib/current-window";
 
-/** The item kind of a viewer tab: its `id` is the tab's path. */
-export const TAB_ITEM_KIND = "tab";
+import type { ItemKey } from "./item-key";
 
 /** The item kind of a workspace tile. No slice holds one yet. */
 const WORKSPACE_ITEM_KIND = "workspace";
-
-export interface SliceItem {
-  kind: string;
-  team: string;
-  id: string;
-}
 
 export interface SliceView {
   label: string;
   /** An opaque layout id, or `null`: the window then shows its one item. */
   layoutRef: string | null;
-  items: readonly SliceItem[];
+  items: readonly ItemKey[];
 }
 
 export interface SliceSource {
