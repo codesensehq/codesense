@@ -38,7 +38,7 @@ use std::sync::{Arc, Mutex};
 
 use log::{debug, error, info, trace, warn};
 use serde::Deserialize;
-use tauri::{Emitter, Manager};
+use tauri::Manager;
 
 use crate::commands::async_helpers::await_blocking;
 use crate::content_engine::sync::{DetachFn, WaveCoordinator};
@@ -835,8 +835,7 @@ pub(crate) fn emit_context_change_for_suppressed_write<R: tauri::Runtime>(
         return;
     };
     for payload in suppressed_write_payloads(&state.path_to_repo, file_path) {
-        crate::content_engine::sync::residual_metrics::note_context_file_change_emit();
-        let _ = app.emit("context-file-change", payload);
+        crate::windows::router::emit_path_event(app, payload);
     }
     emit_inherited_change(app, file_path);
 }
@@ -1180,14 +1179,13 @@ fn build_context_handler<R: tauri::Runtime>(
                 // SW-SY-8 (AC-3): the per-path `context-file-change` IPC emit —
                 // architecture.md Open-Questions #6's residual (~2,198 events/burst
                 // to already-debounced renderer consumers). Count each emit so a
-                // burst-correlated spike is attributable to the emit volume.
-                crate::content_engine::sync::residual_metrics::note_context_file_change_emit();
-                let _ = app.emit("context-file-change", payload.clone());
+                // burst-correlated spike is attributable to the emit volume
+                // (`emit_path_event` counts each one).
+                crate::windows::router::emit_path_event(&app, payload.clone());
             },
         );
         if let Some(payload) = team_level {
-            crate::content_engine::sync::residual_metrics::note_context_file_change_emit();
-            let _ = app.emit("context-file-change", payload);
+            crate::windows::router::emit_path_event(&app, payload);
         }
         // SW-XS-20: this content dir may be a parent of the active team (a
         // parent with its own per-workspace watch): its nav refreshes too.
@@ -1273,8 +1271,7 @@ fn emit_inherited_change<R: tauri::Runtime>(app: &tauri::AppHandle<R>, event_pat
         .as_ref()
         .map(|a| (a.org_slug.as_str(), a.team_name.as_str()));
     if let Some(payload) = inherited_change_payload(event_path, active) {
-        crate::content_engine::sync::residual_metrics::note_context_file_change_emit();
-        let _ = app.emit("context-file-change", payload);
+        crate::windows::router::emit_path_event(app, payload);
     }
 }
 
@@ -1617,7 +1614,7 @@ fn recover_context_sources_inner<R: tauri::Runtime>(
         if let Some(child) = inherited_by {
             payload["inherited_by"] = serde_json::json!(child);
         }
-        let _ = app.emit("context-file-change", payload);
+        crate::windows::router::emit_path_event(app, payload);
     }
     if let Err(error) = crate::live_hub::pane_sources::recover(app, scope, activated_org.is_some())
     {
@@ -1902,10 +1899,7 @@ fn build_codesense_internal_handler<R: tauri::Runtime>(
     dir: PathBuf,
 ) -> DispatchHandler {
     build_fanout_handler(path_to_repo, dir, move |event_path, config| {
-        let _ = app.emit(
-            "context-file-change",
-            base_event_payload(event_path, config),
-        );
+        crate::windows::router::emit_path_event(&app, base_event_payload(event_path, config));
     })
 }
 

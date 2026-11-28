@@ -6,7 +6,6 @@
 
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use tauri::Emitter;
 
 pub(crate) fn segments(path: &Path) -> Option<Vec<String>> {
     path.components()
@@ -209,7 +208,7 @@ pub fn register_scratch_watch<R: tauri::Runtime>(
         configuration_path_changed(&index_app, &config_home, &principal, &registered);
         crate::context_query::note_path(&index_app, path);
         if let Some(payload) = content_change_payload(path) {
-            let _ = index_app.emit("context-file-change", payload);
+            crate::windows::router::emit_path_event(&index_app, payload);
         }
 
         if let Some(parts) = registered.strip_prefix(&pane_root).ok().and_then(segments) {

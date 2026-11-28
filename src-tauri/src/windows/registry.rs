@@ -323,6 +323,37 @@ impl Locked<'_> {
         self.state.entries.get(label).map(|e| e.number)
     }
 
+    /// The labels of the non-pending satellites holding at least one item `pred` accepts,
+    /// sorted. Never `main`, and no item leaves this file.
+    pub fn satellites_holding(&self, pred: impl Fn(&ItemKey) -> bool) -> Vec<String> {
+        self.state
+            .entries
+            .values()
+            .filter(|e| {
+                e.kind == WindowKind::Satellite
+                    && !e.pending
+                    && Iterator::any(&mut e.items.iter(), &pred)
+            })
+            .map(|e| e.label.clone())
+            .collect()
+    }
+
+    /// `label`'s Layout: `None` when it holds none or there is no such window.
+    pub fn layout_ref_of(&self, label: &str) -> Option<String> {
+        self.state
+            .entries
+            .get(label)
+            .and_then(|e| e.layout_ref.clone())
+    }
+
+    /// The window that holds `layout`, if one does (at most one window holds a Layout).
+    pub fn layout_holder(&self, layout: &str) -> Option<String> {
+        Iterator::find(&mut self.state.entries.values(), |e| {
+            e.layout_ref.as_deref() == Some(layout)
+        })
+        .map(|e| e.label.clone())
+    }
+
     pub fn add_pending_target(
         &mut self,
         host: &impl WindowHost,
@@ -1054,6 +1085,80 @@ mod owners {
         assert!(main.accept(pushed));
         assert!(!main.accept(pulled));
         assert_eq!(main.held.unwrap().owners.unwrap().len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod accessors {
+    use super::test_host::Recorder;
+    use super::*;
+
+    fn key(id: &str) -> ItemKey {
+        ItemKey {
+            kind: "tab".into(),
+            team: "acme:docs".into(),
+            id: id.into(),
+        }
+    }
+
+    /// `main`, ready satellites `sat-1` (holds `a.md`) and `sat-3` (holds `b.md`), and a
+    /// pending `sat-2` (holds `a.md`).
+    fn reg(host: &Recorder) -> WindowRegistry {
+        let reg = WindowRegistry::new();
+        for l in ["sat-1", "sat-2", "sat-3"] {
+            reg.add_satellite(host, l).unwrap();
+            reg.ready(host, l).unwrap();
+        }
+        reg.reassign_item(host, &key("/repo/a.md"), "sat-1")
+            .unwrap();
+        reg.reassign_item(host, &key("/repo/b.md"), "sat-3")
+            .unwrap();
+        {
+            let mut state = reg.lock();
+            let sat2 = state.entries.get_mut("sat-2").unwrap();
+            sat2.items.insert(key("/repo/a.md"));
+            sat2.pending = true;
+        }
+        reg
+    }
+
+    #[test]
+    fn satellites_holding_lists_ready_satellites_sorted_never_main_or_pending() {
+        let host = Recorder::default();
+        let reg = reg(&host);
+        let locked = reg.locked();
+        assert_eq!(
+            locked.satellites_holding(|k| k.id.starts_with("/repo/")),
+            vec!["sat-1".to_owned(), "sat-3".to_owned()]
+        );
+        assert_eq!(
+            locked.satellites_holding(|k| k.id == "/repo/a.md"),
+            vec!["sat-1".to_owned()]
+        );
+        assert!(locked.satellites_holding(|_| false).is_empty());
+    }
+
+    #[test]
+    fn layout_ref_of_is_none_for_null_and_unknown_and_the_ref_when_held() {
+        let host = Recorder::default();
+        let reg = reg(&host);
+        reg.set_layout(&host, MAIN_LABEL, "sat-3", Some("grp_a".into()))
+            .unwrap();
+        let locked = reg.locked();
+        assert_eq!(locked.layout_ref_of("sat-1"), None);
+        assert_eq!(locked.layout_ref_of("nope"), None);
+        assert_eq!(locked.layout_ref_of("sat-3").as_deref(), Some("grp_a"));
+    }
+
+    #[test]
+    fn layout_holder_names_the_window_holding_the_layout() {
+        let host = Recorder::default();
+        let reg = reg(&host);
+        reg.set_layout(&host, MAIN_LABEL, "sat-3", Some("grp_a".into()))
+            .unwrap();
+        let locked = reg.locked();
+        assert_eq!(locked.layout_holder("grp_a").as_deref(), Some("sat-3"));
+        assert_eq!(locked.layout_holder("grp_b"), None);
     }
 }
 
