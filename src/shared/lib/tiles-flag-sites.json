@@ -18,5 +18,9 @@
     "file": "src-tauri/src/live_hub/groups.rs",
     "fn": "project",
     "what": "publishes group changes on the group and groups topics"
+  },
+  {
+    "file": "src/shared/stores/layout-store-client.ts",
+    "what": "reads a layout's group file at launch and writes it through group_commit"
   }
 ]

@@ -248,6 +248,8 @@ import {
   type TeamOrderSource,
 } from "@/features/viewer/lib/workspace-order";
 import type { Heading } from "@/features/viewer/lib/note-headings";
+import { hydrateLayouts, saveLayout } from "@/shared/stores/layout-store-client";
+import type { KitOp } from "@/shared/tiling/kit-op";
 import {
   type MosaicNode,
   type SavedPresetTree,
@@ -901,6 +903,7 @@ function withoutTabGridCell(
   if (!saved || !leafWorkspaceIds(saved.root).includes(tabId)) return s.tabGridLayout;
   const { [key]: _pruned, ...rest } = s.tabGridLayout;
   const root = pruneLeaf(saved.root, tabId);
+  saveLayout({ kind: "tabGrid", workspaceKey: key }, root, { op: "close", leafId: tabId });
   return root?.kind === "split" ? { ...rest, [key]: { preset: saved.preset, root } } : rest;
 }
 
@@ -2098,6 +2101,17 @@ function foregroundSlotForRail(
  *  every foreground setter routes through. */
 export function activeForegroundSlot(state: ForegroundSlotState, teamKey: string): ForegroundSlot {
   return foregroundSlotForRail(state, teamKey, activeRailKey(state, teamKey));
+}
+
+/** Saves the arrangement `teamKey`'s active foreground shows to its group file, made by
+ *  `gesture` (the tiles flag on; `layout-store-client.ts`). */
+function saveActiveForeground(state: ForegroundSlotState, teamKey: string, gesture?: KitOp) {
+  const slot = activeForegroundSlot(state, teamKey);
+  saveLayout(
+    { kind: "foreground", teamKey, railKey: activeRailKey(state, teamKey) },
+    effectiveMosaicRoot(defaultForegroundLayout(slot.layout), slot.tileIds),
+    gesture,
+  );
 }
 
 /** SW-EW-40: rebuild the per-team rail-key index from the SAME grouping the tray
@@ -7906,6 +7920,7 @@ const viewerStore: StateCreator<ViewerState> = (set, get) => ({
       return slot.write({ ...base, root: sized });
     });
     get().persistState();
+    saveActiveForeground(get(), teamKey, { op: "resize", path, sizes });
   },
 
   placeWorkspaceTile: (teamKey, workspaceId, target, opts) => {
@@ -7915,6 +7930,7 @@ const viewerStore: StateCreator<ViewerState> = (set, get) => ({
       get().switchWorkspace(teamKey, workspaceId);
       return;
     }
+    let gesture: KitOp | undefined;
     set((s) => {
       // SW-EW-40: operate on the active foreground slot (flat, or the selected
       // rail's slot in grouped mode) over its mode-aware tile set.
@@ -7929,6 +7945,23 @@ const viewerStore: StateCreator<ViewerState> = (set, get) => ({
       const nextRoot = onScreen
         ? moveLeaf(current, workspaceId, target)
         : splitAt(current, target.targetWorkspaceId, target.axis, target.side, workspaceId);
+      gesture = onScreen
+        ? {
+            op: "move",
+            leafId: workspaceId,
+            target: {
+              targetWorkspaceId: target.targetWorkspaceId,
+              axis: target.axis,
+              side: target.side,
+            },
+          }
+        : {
+            op: "splitAt",
+            targetLeafId: target.targetWorkspaceId,
+            axis: target.axis,
+            side: target.side,
+            leafId: workspaceId,
+          };
       // No structural change (e.g. a tile dropped on its OWN edge) → don't flip
       // the preset to `custom` or leave expanded for a no-op (the pure tree ops
       // return the same reference unchanged).
@@ -7941,6 +7974,7 @@ const viewerStore: StateCreator<ViewerState> = (set, get) => ({
       };
     });
     get().persistState();
+    if (gesture) saveActiveForeground(get(), teamKey, gesture);
   },
 
   replaceFocusedLeafWorkspace: (teamKey, incomingWorkspaceId, opts) => {
@@ -8222,16 +8256,11 @@ const viewerStore: StateCreator<ViewerState> = (set, get) => ({
 
   setTabGridSizes: (teamKey, workspaceId, preset, root, path, sizes) => {
     if (teamKey === getActiveTeamKey()) beginContextNavigation();
-    set((s) => ({
-      tabGridLayout: {
-        ...s.tabGridLayout,
-        [selectWorkspaceKey(s, teamKey, workspaceId)]: {
-          preset,
-          root: setNodeSizes(root, path, sizes),
-        },
-      },
-    }));
+    const key = selectWorkspaceKey(get(), teamKey, workspaceId);
+    const sized = setNodeSizes(root, path, sizes);
+    set((s) => ({ tabGridLayout: { ...s.tabGridLayout, [key]: { preset, root: sized } } }));
     get().persistState();
+    saveLayout({ kind: "tabGrid", workspaceKey: key }, sized, { op: "resize", path, sizes });
   },
 
   setCliExpanded: (expanded) => {
@@ -12929,6 +12958,8 @@ const viewerStore: StateCreator<ViewerState> = (set, get) => ({
         });
         // Tab-grid sizes only for workspaces that came back, open or minimized.
         set((st) => ({ tabGridLayout: tabGridsOfLiveWorkspaces(st) }));
+        // With the tiles flag on, each layout's group file wins over what was restored.
+        void hydrateLayouts(get(), set);
 
         // SW-WL-3 T1.3 / F-7: rebuild the (runtime-only) open-set from the
         // restored surfaces. Story workspaces were explicit user surfaces, so
