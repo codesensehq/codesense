@@ -33,7 +33,7 @@ you quit. See [PRIVACY.md](PRIVACY.md) for exactly what that check sends.
 ## Requirements
 
 - A Mac with Apple Silicon. Tested on macOS 26 (Tahoe); older versions may work
-  but aren't tested.
+  but aren't tested. Dashboard frames need macOS 14 (Sonoma) or later.
 - An agent CLI to run, such as Claude Code, Codex or OpenCode, installed and signed in
   with your own account. CodeSense runs the CLIs; it makes no AI calls itself.
 - git.
