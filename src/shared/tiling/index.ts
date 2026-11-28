@@ -6,6 +6,7 @@
 // features or stores; `tiling-kit.guard.test.ts` holds it to that.
 // ---------------------------------------------------------------------------
 
+export * from "./layout-undo";
 export * from "./mosaic-tree";
 export { MosaicView, type MosaicRenderProbe, type MosaicViewProps } from "./mosaic-view";
 export { ROOT_SPLIT_KEY, stabilizeTree, type StableNode, type StableTree } from "./stabilize-tree";
