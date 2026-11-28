@@ -21,9 +21,12 @@ import { Button } from "@/components/ui/button";
 import { useRetiringFrames } from "@/features/dashboard/components/use-retiring-frames";
 import type { LiveFrame } from "@/features/dashboard/lib/frame-lifecycle";
 import { frameOf } from "@/features/dashboard/lib/frame-of";
+import { useTeamContentContext } from "@/shared/hooks/use-team-content-context";
 import { closeCurrentWindow } from "@/shared/lib/current-window";
 import { logger } from "@/shared/lib/logger";
+import { privateFile } from "@/shared/lib/private-file";
 import { renderViewer } from "@/shared/lib/render-viewer";
+import { useFileRefreshStore } from "@/shared/stores/file-refresh-store";
 
 import { BOOT_EXPORTS, BootRows, SATELLITE_ROWS } from "./boot-inventory";
 import type { ReleasedItems } from "./hand-off";
@@ -75,6 +78,20 @@ export function satelliteContent(
   return { item };
 }
 
+/** A tab item's tab body, reloading on the refresh key `main`'s viewer reads for the same
+ *  file: a private file's content root, else its team's content. */
+function SatelliteViewer({ item }: { item: ItemKey }): ReactNode {
+  const context = useTeamContentContext(item.team);
+  const refreshPath =
+    privateFile(item.id)?.contentRoot ?? (context.kind === "ready" ? context.source.repoPath : "");
+  const refreshKey = useFileRefreshStore((s) => s.contentRefreshKeys[refreshPath] ?? 0);
+  const changedPaths = useFileRefreshStore((s) => s.lastChangedContextFile[refreshPath] ?? null);
+  return renderViewer(
+    { hostTeamKey: item.team, filePath: item.id, refreshKey, teamContentPath: "" },
+    { changedPaths },
+  );
+}
+
 const ownsItem = (frame: LiveFrame, item: ItemKey) => frameOf(frame, item.team, item.id);
 
 function DefaultSatelliteContent({
@@ -97,7 +114,7 @@ function DefaultSatelliteContent({
           className="h-full w-full"
           style={each === item ? undefined : { display: "none" }}
         >
-          {renderViewer({ hostTeamKey: each.team, filePath: each.id, teamContentPath: "" }, {})}
+          <SatelliteViewer item={each} />
         </div>
       ))}
       {"state" in content && content.state === "pending" && (

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
-import { renderHook } from "@testing-library/react";
+import { render, renderHook, screen } from "@testing-library/react";
+import { createElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const host = vi.hoisted(() => ({ main: false }));
@@ -19,12 +20,34 @@ vi.mock("@tauri-apps/api/event", () => ({
   }),
 }));
 
+// The satellite's real root and viewer, with its boot rows stubbed, a counted read and a
+// plain editor.
+vi.mock("./boot-inventory", () => ({ BOOT_EXPORTS: {}, BootRows: () => null, SATELLITE_ROWS: [] }));
+
+const reads = vi.hoisted(() => ({ count: 0 }));
+vi.mock("@/tauri/commands", async (importActual) => ({
+  ...(await importActual<typeof import("@/tauri/commands")>()),
+  readFile: vi.fn(async () => `read ${++reads.count}`),
+}));
+
+vi.mock("@/shared/components/code-editor", async (importActual) => {
+  const { createElement: h } = await import("react");
+  return {
+    ...(await importActual<typeof import("@/shared/components/code-editor")>()),
+    CodeEditor: ({ value }: { value: string }) => h("pre", null, value),
+  };
+});
+
+import { fileContentCache } from "@/shared/lib/file-content-cache";
 import { useFileRefreshStore } from "@/shared/stores/file-refresh-store";
+import { useOrgStore } from "@/shared/stores/org-store";
+import type { Org } from "@/shared/types/domain";
 import { CONTEXT_FILE_CHANGE_EVENT, type ContextFileChangePayload } from "@/tauri/events";
 
 import type { ItemKey } from "./item-key";
 import { ownsPathEvent, refreshItem, useSatellitePathRefresh } from "./path-listeners";
-import { installSliceSource } from "./slice";
+import { SatelliteRoot } from "./satellite-root";
+import { installSliceSource, type SliceSource } from "./slice";
 
 const tab = (id: string): ItemKey => ({ kind: "tab", team: "acme:docs", id });
 
@@ -132,5 +155,43 @@ describe("useSatellitePathRefresh in a satellite", () => {
     holding(tab("/repo/notes/a.md"));
     deliver(change("/repo/notes/a.md"));
     expect(refreshes()).toBe(0);
+  });
+});
+
+describe("a satellite's viewer", () => {
+  const FILE = "/orgs/acme/docs/content/a.ts";
+
+  it("re-reads its held file when that file changes, on the key main's viewer reads", async () => {
+    useOrgStore.setState({
+      orgs: [
+        {
+          slug: "acme",
+          display_name: "Acme",
+          org_root: "/orgs/acme",
+          teams: [{ name: "docs", source_repos: [] }],
+        } as unknown as Org,
+      ],
+      discoveryComplete: true,
+    });
+    fileContentCache.clear();
+    reads.count = 0;
+    const slice = {
+      label: "sat-1",
+      kind: "satellite",
+      version: 1,
+      layoutRef: null,
+      items: [tab(FILE)],
+    };
+    const source: SliceSource = { current: () => slice, subscribe: () => () => {} };
+    const { unmount } = render(createElement(SatelliteRoot, { source }));
+    await screen.findByText("read 1");
+    await vi.waitFor(() => expect(bus.get(CONTEXT_FILE_CHANGE_EVENT)?.size).toBe(1));
+
+    deliver(change("/orgs/acme/docs/content/b.ts", ""));
+    deliver(change(FILE, ""));
+    await screen.findByText("read 2");
+    expect(reads.count).toBe(2);
+    expect(useFileRefreshStore.getState().contentRefreshKeys["team:acme:docs"]).toBe(1);
+    unmount();
   });
 });
