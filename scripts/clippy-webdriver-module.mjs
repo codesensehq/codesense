@@ -3,10 +3,11 @@
 // module (`src-tauri/src/windows/e2e`, the module webdriver_cfg_guard.rs keeps behind the feature):
 // any warning or lint in it fails, as does a compile error in the app crate, any error in a crate
 // the app crate needs, or a build that did not finish. It fails closed: unless the JSON shows the
-// app crate itself was checked, the module was never linted; a lint elsewhere in the app crate
-// passes only when rustc's summary shows that crate's check ran to its end, and a compiler crash
-// fails. Lints elsewhere in the app crate are left to their own owners: no job lints the whole
-// tree with `-D warnings`.
+// app crate itself was checked, the module was never linted; a failed build in which the app crate
+// reported any error passes only when rustc's summary for that crate shows its check ran to its
+// end, and any error level other than plain `error` (a compiler crash or a level this script does
+// not know) fails. Lints elsewhere in the app crate are left to their own owners: no job lints the
+// whole tree with `-D warnings`.
 // Usage: node scripts/clippy-webdriver-module.mjs <clippy json file>
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -21,6 +22,7 @@ export function clippyProblems(text) {
   let finished = null;
   let appChecked = false;
   let lintedElsewhere = false;
+  let appErrored = false;
   let appSummarized = false;
   for (const line of text.split("\n")) {
     let record;
@@ -35,14 +37,23 @@ export function clippyProblems(text) {
     if (record?.reason !== "compiler-message") continue;
     if (inApp) appChecked = true;
     const { level, message, code, spans = [] } = record.message ?? {};
-    if (String(level).includes("internal compiler error")) {
-      problems.push(`the compiler crashed (${level}): ${message}`);
+    if (String(level).startsWith("error") && level !== "error") {
+      const what = String(level).includes("internal compiler error")
+        ? "the compiler crashed"
+        : "the compiler reported an error level this script does not know";
+      problems.push(`${what} (${level}): ${message}`);
       continue;
     }
     if (level !== "warning" && level !== "error") continue;
-    // rustc's last word on a crate it finished checking with errors.
-    if (inApp && spans.length === 0 && /^aborting due to /.test(String(message)))
-      appSummarized = true;
+    if (inApp && level === "error") {
+      // rustc's last word on the app crate when it finished checking it with errors; a
+      // dependency's summary says nothing about the app crate.
+      if (spans.length === 0 && /^aborting due to /.test(String(message))) {
+        appSummarized = true;
+        continue;
+      }
+      appErrored = true;
+    }
     const span = spans.find((s) => s.is_primary) ?? spans[0];
     const where = span ? `${span.file_name}:${span.line_start}` : null;
     const lint = String(code?.code ?? "").startsWith("clippy::");
@@ -55,7 +66,7 @@ export function clippyProblems(text) {
     else problems.push(`${where}: ${level}: ${message}`);
   }
   if (finished === null) problems.push("clippy did not finish: no build-finished line");
-  else if (!finished && lintedElsewhere && !appSummarized)
+  else if (!finished && appErrored && !appSummarized)
     problems.push(
       "the app crate's check ended without rustc's summary (a crash or a killed rustc), so the module may not have been linted",
     );

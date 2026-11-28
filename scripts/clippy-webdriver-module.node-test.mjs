@@ -72,6 +72,42 @@ test("fails closed when the app crate's check ends without rustc's summary after
   ]);
 });
 
+test("fails closed when an app compile error ends without rustc's summary", () => {
+  // Any error in the app crate, not only a lint, needs the crate's own summary to show its
+  // check was not cut short.
+  const lines = [
+    message("error", "src-tauri/src/lib.rs", { code: "E0425", text: "cannot find value" }),
+    finished(false),
+  ];
+  assert.deepEqual(clippyProblems(lines.join("\n")), [
+    "src-tauri/src/lib.rs:7: error: cannot find value",
+    "the app crate's check ended without rustc's summary (a crash or a killed rustc), so the module may not have been linted",
+  ]);
+});
+
+test("a dependency's summary does not stand in for the app crate's", () => {
+  const lines = [
+    message("error", "src-tauri/src/commands/fs.rs", { code: "clippy::never_loop" }),
+    aborting(PLATFORM),
+    finished(false),
+  ];
+  assert.deepEqual(clippyProblems(lines.join("\n")), [
+    "the app crate's check ended without rustc's summary (a crash or a killed rustc), so the module may not have been linted",
+  ]);
+});
+
+test("fails an error level it does not know, even with the app crate's summary", () => {
+  const lines = [
+    message("error", "src-tauri/src/commands/fs.rs", { code: "clippy::never_loop" }),
+    message("error: a new kind", null, { code: null, text: "something went wrong" }),
+    aborting(APP),
+    finished(false),
+  ];
+  assert.deepEqual(clippyProblems(lines.join("\n")), [
+    "the compiler reported an error level this script does not know (error: a new kind): something went wrong",
+  ]);
+});
+
 test("fails a compiler crash anywhere, even with the app crate's summary", () => {
   const lines = [
     message("error", "src-tauri/src/commands/fs.rs", { code: "clippy::never_loop" }),
@@ -89,6 +125,7 @@ test("fails any lint or warning in the module or a file under it", () => {
     message("warning", "src-tauri/src/windows/e2e.rs"),
     message("warning", "src-tauri/src/windows/e2e/seed.rs", { code: "unused_mut" }),
     message("error", "/home/runner/work/x/x/src-tauri/src/windows/e2e.rs"),
+    aborting(APP),
     finished(false),
   ];
   assert.deepEqual(clippyProblems(lines.join("\n")), [
