@@ -5,6 +5,9 @@
  *
  * - no TS code writes a path under `groups/`: no file write, `fs` call or Tauri fs call whose
  *   arguments hold a `groups/` path;
+ * - no production TS names `config/groups` at all (a string or template part, or a `join` of
+ *   `"config"` and `"groups"`), so a path held in a variable, built apart or only read is caught
+ *   too: group files go through the Rust store's commands;
  * - no new layout key enters `app-state.json`: the keys the viewer prefs persist and the keys
  *   the Rust side writes under `viewer` that hold a layout (a tree, splits, sizes or groups) are
  *   the ones listed here, kept until their layouts move to group files.
@@ -91,6 +94,35 @@ function groupWrites(file: string, text: string): string[] {
   return found;
 }
 
+/** Production TS that names the group folder, as `line: text`: `config/groups` in a string or
+ *  template part, or the two segments side by side in one call's arguments. */
+function configGroupNames(file: string, text: string): string[] {
+  const source = parse(file, text);
+  const found: string[] = [];
+  const note = (node: ts.Node) => {
+    const { line } = source.getLineAndCharacterOfPosition(node.getStart());
+    found.push(`${line + 1}: ${node.getText().slice(0, 80)}`);
+  };
+  const part = (node: ts.Node): string | null =>
+    ts.isStringLiteralLike(node) ||
+    ts.isTemplateHead(node) ||
+    ts.isTemplateMiddle(node) ||
+    ts.isTemplateTail(node)
+      ? node.text
+      : null;
+  const visit = (node: ts.Node) => {
+    const text = part(node);
+    if (text !== null && /config[/\\]groups/.test(text)) note(node);
+    if (ts.isCallExpression(node)) {
+      const args = node.arguments.map(part);
+      if (args.some((a, i) => a === "config" && args[i + 1] === "groups")) note(node);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+  return found;
+}
+
 function sources(dir: string, out: string[] = []): string[] {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const path = join(dir, entry.name);
@@ -166,10 +198,51 @@ function rustSources(dir: string, out: string[] = []): string[] {
   return out;
 }
 
-/** Rust source with its `#[cfg(test)]` modules cut (a test may write any key). */
+/** The index just past the `}` that closes the `{` at `open`, skipping strings, chars and
+ *  comments; the text's length when it never closes. */
+function endOfBlock(text: string, open: number): number {
+  let depth = 0;
+  for (let i = open; i < text.length; i++) {
+    const c = text[i];
+    if (c === "/" && text[i + 1] === "/") {
+      i = text.indexOf("\n", i);
+      if (i === -1) return text.length;
+    } else if (c === "/" && text[i + 1] === "*") {
+      const close = text.indexOf("*/", i + 2);
+      if (close === -1) return text.length;
+      i = close + 1;
+    } else if (c === "r" && /^r#*"/.test(text.slice(i, i + 40)) && !/\w/.test(text[i - 1] ?? "")) {
+      const hashes = /^r(#*)"/.exec(text.slice(i, i + 40))![1];
+      const close = text.indexOf(`"${hashes}`, i + 2 + hashes.length);
+      if (close === -1) return text.length;
+      i = close + hashes.length;
+    } else if (c === '"') {
+      for (i++; i < text.length && text[i] !== '"'; i++) if (text[i] === "\\") i++;
+    } else if (c === "'" && (text[i + 1] === "\\" || text[i + 2] === "'")) {
+      i = text.indexOf("'", i + (text[i + 1] === "\\" ? 3 : 2));
+      if (i === -1) return text.length;
+    } else if (c === "{") {
+      depth++;
+    } else if (c === "}" && --depth === 0) {
+      return i + 1;
+    }
+  }
+  return text.length;
+}
+
+/** Rust source with its `#[cfg(test)]` modules cut, each by its own braces, so code after one
+ *  is still scanned (a test may write any key). */
 function withoutTests(text: string): string {
-  const at = text.search(/#\[cfg\(test\)\]\s*(pub(\([^)]*\))?\s+)?mod\s+\w+\s*\{/);
-  return at === -1 ? text : text.slice(0, at);
+  const test = /#\[cfg\(test\)\]\s*(pub(\([^)]*\))?\s+)?mod\s+\w+\s*\{/g;
+  let out = "";
+  let from = 0;
+  for (let m = test.exec(text); m; m = test.exec(text)) {
+    if (m.index < from) continue;
+    out += text.slice(from, m.index);
+    from = endOfBlock(text, m.index + m[0].length - 1);
+    test.lastIndex = from;
+  }
+  return out + text.slice(from);
 }
 
 function rustKeys(): string[] {
@@ -190,6 +263,30 @@ describe("group files", () => {
     expect(found, "group files are written by the Rust group store only").toEqual([]);
   });
 
+  it("no production TS names the group folder", () => {
+    const found = sources(join(ROOT, "src")).flatMap((file) =>
+      configGroupNames(file, readFileSync(file, "utf8")).map((w) => `${relative(ROOT, file)}:${w}`),
+    );
+    expect(found, "group files are reached through the Rust store's commands only").toEqual([]);
+  });
+
+  it("catches a group path held in a variable, built apart or read", () => {
+    const planted = [
+      "const p = `${root}/config/groups/${id}.json`; await writeTextFile(p, text);",
+      `const p = "orgs/a/b/config/groups/main.json"; await invoke("x", { p });`,
+      `const p = join(root, "config", "groups", id);`,
+      `const text = await readTextFile("config/groups/main.json");`,
+      `const dir = "config\\\\groups";`,
+    ];
+    for (const text of planted) expect(configGroupNames("p.ts", text), text).not.toEqual([]);
+    const fine = [
+      `const a = "groups"; const b = join(root, "config");`,
+      `writeFile(path, "{}"); // config/groups/`,
+      `const label = "workspace groups";`,
+    ];
+    for (const text of fine) expect(configGroupNames("p.ts", text), text).toEqual([]);
+  });
+
   it("catches planted writes", () => {
     const planted = [
       `writeTextFile("orgs/a/b/config/groups/main.json", "{}");`,
@@ -202,7 +299,6 @@ describe("group files", () => {
     const fine = [
       `writeTextFile("workspace-groups.json", "{}");`,
       `const label = "groups/";`,
-      `readTextFile("config/groups/main.json");`,
       `writeFile(path, "{}"); // config/groups/`,
     ];
     for (const text of fine) expect(groupWrites("p.ts", text), text).toEqual([]);
@@ -229,6 +325,17 @@ describe("app-state.json layout keys", () => {
     const text = readFileSync(join(ROOT, "src/shared/stores/viewer-store.ts"), "utf8");
     const persisted = new Set([...persistedViewerKeys(text), ...rustKeys()]);
     expect(LAYOUT_KEYS.filter((k) => !persisted.has(k))).toEqual([]);
+  });
+
+  it("withoutTests cuts a test module by its braces and keeps the code after it", () => {
+    const rust = [
+      `fn a() { s["viewer"]["one"] = 1; }`,
+      `#[cfg(test)] mod tests { fn t() { let s = "}"; s["viewer"]["inTest"] = 1; if x { } } }`,
+      `fn b() { s["viewer"]["two"] = 2; }`,
+      `#[cfg(test)]\npub(crate) mod more { fn t() { s["viewer"]["alsoTest"] = 1; } }`,
+      `fn c() { s["viewer"]["three"] = 3; }`,
+    ].join("\n");
+    expect(rustViewerWrites(withoutTests(rust))).toEqual(["one", "two", "three"]);
   });
 
   it("catches a planted layout key", () => {

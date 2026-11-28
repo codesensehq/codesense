@@ -9,6 +9,9 @@
 //!
 //! - a string literal holding `config/groups` or `groups/` (macro tokens included);
 //! - a `join("groups")` or `push("groups")`;
+//! - a `const` or `static` whose value is the string `groups`, and an array literal that holds
+//!   `"groups"` (`["config", "groups"].iter().collect::<PathBuf>()`);
+//! - a `concat!` whose literals join into a group path (`concat!("config/", "groups")`);
 //! - a use of the store's `groups_dir` or `GROUPS_DIR`, outside [`ALLOWED`].
 //!
 //! Test code is skipped: items under a `cfg` that names `test`, `#[test]` functions, and files
@@ -92,6 +95,43 @@ impl Scan<'_> {
         self.found.push(format!("{}:{line}: {what}", self.label));
     }
 
+    /// `expr` is the string `groups`: the folder's name held in a constant or a list of segments.
+    fn named_folder(&mut self, expr: &syn::Expr) {
+        if let syn::Expr::Lit(syn::ExprLit {
+            lit: syn::Lit::Str(lit),
+            ..
+        }) = expr
+        {
+            if lit.value() == "groups" {
+                self.flag(
+                    lit.span(),
+                    "the folder name \"groups\" held in a value".into(),
+                );
+            }
+        }
+    }
+
+    /// A `concat!` whose string literals join into a group path.
+    fn concat(&mut self, mac: &syn::Macro) {
+        let joined: String = mac
+            .tokens
+            .clone()
+            .into_iter()
+            .filter_map(|tree| match tree {
+                TokenTree::Literal(literal) => syn::parse_str::<syn::LitStr>(&literal.to_string())
+                    .ok()
+                    .map(|lit| lit.value()),
+                _ => None,
+            })
+            .collect();
+        if group_literal(&joined) {
+            self.flag(
+                mac.path.segments[0].ident.span(),
+                format!("`concat!` joining {joined:?}"),
+            );
+        }
+    }
+
     fn tokens(&mut self, stream: TokenStream) {
         for tree in stream {
             match tree {
@@ -149,6 +189,23 @@ impl<'ast> Visit<'ast> for Scan<'_> {
         }
     }
 
+    fn visit_item_const(&mut self, item: &'ast syn::ItemConst) {
+        self.named_folder(&item.expr);
+        visit::visit_item_const(self, item);
+    }
+
+    fn visit_item_static(&mut self, item: &'ast syn::ItemStatic) {
+        self.named_folder(&item.expr);
+        visit::visit_item_static(self, item);
+    }
+
+    fn visit_expr_array(&mut self, array: &'ast syn::ExprArray) {
+        for elem in &array.elems {
+            self.named_folder(elem);
+        }
+        visit::visit_expr_array(self, array);
+    }
+
     fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
         let joins = call.method == "join" || call.method == "push";
         if let (true, Some(syn::Expr::Lit(arg))) = (joins, call.args.first()) {
@@ -178,6 +235,9 @@ impl<'ast> Visit<'ast> for Scan<'_> {
     }
 
     fn visit_macro(&mut self, mac: &'ast syn::Macro) {
+        if mac.path.is_ident("concat") {
+            self.concat(mac);
+        }
         self.tokens(mac.tokens.clone());
         visit::visit_macro(self, mac);
     }
@@ -264,6 +324,12 @@ fn planted_writers_are_caught() {
         r#"fn f() -> String { format!("{}/groups/{}", "a", "b") }"#,
         r#"fn f() { let _ = vec![groups_dir(&s)]; }"#,
         r#"const P: &str = "orgs/a/b/config/groups";"#,
+        r#"const G: &str = "groups"; fn f(d: &std::path::Path) { let _ = d.join("config").join(G); }"#,
+        r#"static G: &str = "groups";"#,
+        r#"fn f() -> &'static str { concat!("config/", "groups") }"#,
+        r#"fn f() -> &'static str { concat!("config", "/", "groups", "/x") }"#,
+        r#"fn f() -> std::path::PathBuf { ["config", "groups"].iter().collect::<std::path::PathBuf>() }"#,
+        r#"fn f() { let g = "groups"; let _ = [g, "x"]; let _ = ["groups"]; }"#,
     ];
     for src in planted {
         assert!(!violations("elsewhere.rs", src).is_empty(), "missed: {src}");
@@ -302,6 +368,8 @@ fn the_store_tests_and_allowed_uses_pass() {
             "missed: {still}"
         );
     }
+    let benign_concat = r#"fn f() -> &'static str { concat!("work", "spaces") }"#;
+    assert!(violations("elsewhere.rs", benign_concat).is_empty());
     let documented = "/// Writes `config/groups/<id>.json`.\nfn f() {}";
     assert!(violations("elsewhere.rs", documented).is_empty());
     let unrelated =
