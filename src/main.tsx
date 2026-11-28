@@ -225,6 +225,18 @@ function renderApp(): void {
   // A satellite window renders its registry slice, never `App`: neither `App`'s
   // module scope nor its effects run there (`boot-inventory.ts`).
   if (!isMainWindow()) {
+    // `webdriver` and `mock` only: `?probe=<path>` mounts one file's viewer through the
+    // satellite root, for the two-window e2e driver (`e2e-satellite-probe.tsx`). Dead, and
+    // proven absent by scripts/verify-webdriver-absence.ts, in the release build.
+    if (import.meta.env.MODE === "webdriver" || import.meta.env.MODE === "mock") {
+      const probe = new URLSearchParams(window.location.search).get("probe");
+      if (probe) {
+        void import("./app/e2e-satellite-probe").then(({ SatelliteProbe }) =>
+          mountRoot(<SatelliteProbe path={probe} />),
+        );
+        return;
+      }
+    }
     void Promise.all([
       import("@/shared/windows/satellite-root"),
       import("@/shared/windows/satellite-registry"),
