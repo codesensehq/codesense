@@ -121,6 +121,7 @@ mod test_logger;
 /// sanctioned write path (one writer per record, live-max/AUTOINCREMENT id
 /// minting, atomic audit trail). See [`weft`] for the load-bearing rules.
 mod weft;
+/// The window registry: every window, its Layout and the items satellites hold.
 mod windows;
 /// Work items: minted once per lead launch, inherited by its workers.
 mod work_item;
@@ -626,6 +627,8 @@ pub fn run() {
         .manage(renderer_watchdog::RendererLiveness::default())
         .manage(mcp::state::AskUserRegistry::new())
         .manage(commands::team_resolution_cache::TeamResolutionCache::default())
+        // Every window and the items satellites hold; created with `main`'s entry.
+        .manage(windows::registry::WindowRegistry::new())
         .setup(move |app| {
             // First, so the secret store probe has the whole of setup to finish: it runs on a
             // background thread, because `.setup()` never blocks on the session bus.
@@ -1875,6 +1878,11 @@ pub fn run() {
             commands::workspace_chat::workspace_chat_human_rooms,
             commands::workspace_chat::workspace_chat_list_workspaces,
             commands::workspace_chat::workspace_chat_archive,
+            // The window registry; every window may call these.
+            windows::commands::window_get_slice,
+            windows::commands::window_ready,
+            windows::commands::window_set_layout,
+            windows::commands::window_focus_owner,
         ]))
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

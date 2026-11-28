@@ -26,7 +26,7 @@ import { readPrefsState, usePrefsStore } from "@/features/dashboard/lib/prefs-cl
 import type { TeamFocusRestore } from "@/features/viewer/lib/agents-pane-team-focus";
 import { DEFAULT_NAV_LENS, normalizeNavLens, type NavLensState } from "@/shared/lib/nav-lens";
 import { useMemo } from "react";
-import { create } from "zustand";
+import { create, type StateCreator, type StoreApi } from "zustand";
 import type { PaneType } from "@/shared/lib/focus-utils";
 import {
   removalDiscardMessage,
@@ -68,6 +68,7 @@ import {
   type NoteMeta,
   type NoteActor,
   pushViewerState,
+  windowFocusOwner,
   workspaceGroupEdit,
   checkPathExists,
   dashboardRegisterSession,
@@ -157,6 +158,13 @@ import type { AgentContextSelection } from "@/features/agent-context/lib/agent-c
 import type { RepoState } from "./config-store";
 import { useConfigStore } from "./config-store";
 import { useOrgStore } from "./org-store";
+import { itemKeyForTab, type ItemKey } from "@/shared/windows/item-key";
+import {
+  onOwnerMapChange,
+  ownerMapSize,
+  pullMainSlice,
+  satelliteOwnedTabs,
+} from "@/shared/windows/owner-map";
 import {
   DEFAULT_TERMINAL_SPLIT_RATIO,
   applyCliChromePatch,
@@ -4312,6 +4320,13 @@ function fileHashPatch(
   return { fileHashRequests: next };
 }
 
+/** A satellite holds `path` in this team and `main` has no unsaved edit for it, so the
+ *  store's guard keeps it out of `main`. */
+function heldBySatellite(s: ViewerState, teamKey: string, path: string): boolean {
+  if (!satelliteOwnedTabs().get(teamKey)?.has(path)) return false;
+  return !readTeamKeyed(s.editingDirtyPaths, teamKey, []).includes(path);
+}
+
 function commitTabOpen(
   s: ViewerState,
   teamKey: string,
@@ -4326,6 +4341,9 @@ function commitTabOpen(
   if (nextTabs !== currentTabs) {
     partial.openTabs = updateTeamKeyed(s.openTabs, teamKey, nextTabs);
   }
+
+  // An open the guard refuses leaves the history where it was.
+  if (heldBySatellite(s, teamKey, filePath)) return partial;
 
   // navHistory push with dedup + truncate-forward + 50-cap.
   const history = readTeamKeyed(s.navHistory, teamKey, []);
@@ -6944,7 +6962,163 @@ export const IS_MAXIMIZED_THRESHOLD = 0.93;
 const pendingPanelCloses = new Set<string>();
 let paneLayoutRevision = 0;
 
-export const useViewerStore = create<ViewerState>((set, get) => ({
+/**
+ * `main` never shows a satellite-owned item. The one guard, `guardSatelliteItems`, wraps
+ * the store's `set` and `api.setState`, so every writer of `openTabs` (store actions,
+ * the keyed-slice helpers, `loadPersistedState`, the prefs path, the MCP patch, direct
+ * `setState` callers) is filtered before any subscriber sees the result.
+ *
+ * - With an empty owner map (no satellite holds anything) the partial passes through
+ *   untouched. Otherwise only buckets whose `openTabs` or `activeTab` changed are
+ *   scanned, and when nothing is removed the same references come back.
+ * - A removed key that was `activeTab[tk]` is repaired first: the bucket's previous
+ *   active tab is restored when it is still open. Otherwise a deliberate open drops the
+ *   pointer, and any other write (a map update, the hydrate) activates the removed tab's
+ *   neighbour, as `closeTab` does. Only then does `reconcileActiveTabs` run, which would
+ *   otherwise rebuild the tab.
+ * - A deliberate open (after load, the key became active and its tab was not a preview)
+ *   focuses the owner window. A preview swap, the hydrate and a map update focus nothing.
+ *   `openFile` and `openFilePreview` leave the history alone for a key a satellite
+ *   holds, `openFilePreview` changes nothing at all, and Back and Forward step past it.
+ * - A path that is dirty in `main` is kept and logged: the one case where an item is
+ *   open in two windows. Once it is saved, the guard drops it.
+ */
+interface SatelliteFilterResult {
+  openTabs: Record<string, TabState[]>;
+  activeTab: Record<string, string>;
+  /** The key a deliberate open asked for, now held by a satellite. */
+  focus: ItemKey | null;
+}
+
+function filterSatelliteTabs(
+  prev: ViewerState,
+  openTabs: Record<string, TabState[]>,
+  activeTab: Record<string, string>,
+  dirtyPaths: Record<string, string[]>,
+  buckets: Iterable<string>,
+  allowFocus: boolean,
+): SatelliteFilterResult {
+  const owned = satelliteOwnedTabs();
+  let nextOpen = openTabs;
+  let nextActive = activeTab;
+  let focus: ItemKey | null = null;
+  for (const tk of buckets) {
+    const paths = owned.get(tk);
+    if (!paths) continue;
+    const dirty = dirtyPaths[tk];
+    const kept = (path: string) => {
+      if (!dirty?.includes(path)) return false;
+      logger.warn("windows", `kept ${path} in ${tk}: a satellite holds it and it is unsaved here`);
+      return true;
+    };
+    const tabs = nextOpen[tk];
+    const filtered = tabs?.filter((t) => !paths.has(t.path) || kept(t.path));
+    if (tabs && filtered && filtered.length !== tabs.length) {
+      if (nextOpen === openTabs) nextOpen = { ...openTabs };
+      nextOpen[tk] = filtered;
+    }
+    const active = nextActive[tk];
+    if (active === undefined || !paths.has(active) || dirty?.includes(active)) continue;
+    const before = prev.activeTab[tk];
+    if (nextActive === activeTab) nextActive = { ...activeTab };
+    const remaining = nextOpen[tk] ?? [];
+    const backed = (path: string | undefined) =>
+      path !== undefined && path !== active && remaining.some((t) => t.path === path);
+    const index = tabs?.findIndex((t) => t.path === active) ?? -1;
+    const deliberate =
+      allowFocus && prev.stateLoaded && active !== before && !tabs?.[index]?.preview;
+    if (backed(before)) nextActive[tk] = before;
+    else if (!deliberate && index >= 0 && remaining.length > 0) {
+      nextActive[tk] = neighborPathAfterClose(remaining, index);
+    } else delete nextActive[tk];
+    if (deliberate) focus = itemKeyForTab(tk, { path: active });
+  }
+  if (nextOpen === openTabs && nextActive === activeTab) {
+    return { openTabs, activeTab, focus: null };
+  }
+  return { ...reconcileActiveTabs(nextOpen, nextActive), focus };
+}
+
+/** The buckets whose `openTabs`, `activeTab` or `editingDirtyPaths` entry differs from
+ *  `prev`'s. */
+function changedBuckets(
+  prev: ViewerState,
+  openTabs: Record<string, TabState[]>,
+  activeTab: Record<string, string>,
+  dirtyPaths: Record<string, string[]>,
+): Set<string> {
+  const changed = new Set<string>();
+  const scan = <T>(next: Record<string, T>, before: Record<string, T>) => {
+    if (next === before) return;
+    for (const tk of Object.keys(next)) if (next[tk] !== before[tk]) changed.add(tk);
+    for (const tk of Object.keys(before)) if (!(tk in next)) changed.add(tk);
+  };
+  scan(openTabs, prev.openTabs);
+  scan(activeTab, prev.activeTab);
+  scan(dirtyPaths, prev.editingDirtyPaths);
+  return changed;
+}
+
+function focusOwner(key: ItemKey): void {
+  try {
+    windowFocusOwner(key).catch((e) =>
+      logger.warn("windows", `focus owner failed: ${getErrorMessage(e)}`),
+    );
+  } catch (e) {
+    logger.warn("windows", `focus owner failed: ${getErrorMessage(e)}`);
+  }
+}
+
+type ViewerSet = StoreApi<ViewerState>["setState"];
+
+export const guardSatelliteItems =
+  (config: StateCreator<ViewerState>): StateCreator<ViewerState> =>
+  (set, get, api) => {
+    const guarded = ((partial, replace) => {
+      if (ownerMapSize() === 0) return (set as ViewerSet)(partial as ViewerState, replace as true);
+      const prev = get();
+      const next = typeof partial === "function" ? partial(prev) : partial;
+      if (!("openTabs" in next) && !("activeTab" in next) && !("editingDirtyPaths" in next)) {
+        return (set as ViewerSet)(next as ViewerState, replace as true);
+      }
+      const openTabs = next.openTabs ?? prev.openTabs;
+      const activeTab = next.activeTab ?? prev.activeTab;
+      const dirtyPaths = next.editingDirtyPaths ?? prev.editingDirtyPaths;
+      const result = filterSatelliteTabs(
+        prev,
+        openTabs,
+        activeTab,
+        dirtyPaths,
+        changedBuckets(prev, openTabs, activeTab, dirtyPaths),
+        true,
+      );
+      const filtered =
+        result.openTabs === openTabs && result.activeTab === activeTab
+          ? next
+          : { ...next, openTabs: result.openTabs, activeTab: result.activeTab };
+      (set as ViewerSet)(filtered as ViewerState, replace as true);
+      if (result.focus) focusOwner(result.focus);
+    }) as ViewerSet;
+    api.setState = guarded;
+    // A map update filters the current state once, with no focus.
+    onOwnerMapChange(() => {
+      const s = get();
+      const result = filterSatelliteTabs(
+        s,
+        s.openTabs,
+        s.activeTab,
+        s.editingDirtyPaths,
+        satelliteOwnedTabs().keys(),
+        false,
+      );
+      if (result.openTabs !== s.openTabs || result.activeTab !== s.activeTab) {
+        set({ openTabs: result.openTabs, activeTab: result.activeTab });
+      }
+    });
+    return config(guarded, get, api);
+  };
+
+const viewerStore: StateCreator<ViewerState> = (set, get) => ({
   openTabs: {},
   activeTab: {},
   editingDirtyPaths: {},
@@ -7193,6 +7367,8 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
     get().setMaximized(teamKey, get().maximizedPanel[teamKey] === panelId ? null : panelId),
 
   openFilePreview: (teamKey, repoPath, filePath, opts) => {
+    // Browsing onto a tab a satellite holds changes nothing: `main`'s preview tab stays.
+    if (heldBySatellite(get(), teamKey, filePath)) return;
     if (!opts?.keepLayout && teamKey === getActiveTeamKey()) beginContextNavigation();
     logger.debug("viewer", `openFilePreview: ${filePath} in ${repoPath} (team ${teamKey})`);
     set((s) => ({
@@ -12164,7 +12340,9 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
     if (index <= 0) return;
 
     const history = readTeamKeyed(s.navHistory, teamKey, []);
-    const newIndex = index - 1;
+    // Step past entries a satellite holds; with none left, stay put.
+    let newIndex = index - 1;
+    while (newIndex >= 0 && heldBySatellite(s, teamKey, history[newIndex])) newIndex -= 1;
     const targetPath = history[newIndex];
     if (!targetPath) return;
 
@@ -12180,7 +12358,10 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
     const index = readTeamKeyed(s.navIndex, teamKey, -1);
     if (index >= history.length - 1) return;
 
-    const newIndex = index + 1;
+    let newIndex = index + 1;
+    while (newIndex < history.length && heldBySatellite(s, teamKey, history[newIndex])) {
+      newIndex += 1;
+    }
     const targetPath = history[newIndex];
     if (!targetPath) return;
 
@@ -12234,8 +12415,13 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
     // The saved orders replace the live ones: nothing computed or queued over them survives.
     tileOrderCache.clear();
     provisionalMoves.clear();
+    // The hydrate pull: `main`'s satellite-owned map, fetched alongside the prefs and
+    // current before anything below applies, so a tab that moved to another window
+    // before `main` saved is dropped by the guard. It never rejects.
+    const mainSlicePull = pullMainSlice();
     try {
       const data = JSON.parse(JSON.stringify(await readPrefsState()));
+      await mainSlicePull;
       const prefsOwner = usePrefsStore.getState().principal;
       persistedViewer = structuredClone(data.viewer ?? {});
       if (data.viewer) {
@@ -12921,7 +13107,9 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
       get().persistState();
     }
   },
-}));
+});
+
+export const useViewerStore = create<ViewerState>()(guardSatelliteItems(viewerStore));
 
 /**
  * Resolve an open file's honest `lifecycle` from the store-published `openFileLifecycleByPath`
