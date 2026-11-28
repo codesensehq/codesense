@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
 
+import { buildRootWorkspaceId } from "../lib/team-key";
 import { storyIdFromPath } from "../lib/worktree/resolve";
 import { genericWorkspaceId } from "../stores/viewer-store";
 import type { Axis, GroupFile, OwnerKind, SavedNode } from "./group-file.generated";
@@ -41,12 +42,14 @@ describe("the leaf-id fixture", () => {
   const valid = (leaf: string, layer: string) =>
     rows.some((r) => r.leaf === leaf && r.layer === layer && r.valid);
 
-  it("holds the ids the viewer mints for a generic workspace and a story workspace", () => {
+  it("holds the ids the viewer mints for a generic, a story and a root workspace", () => {
     const minted = [
       genericWorkspaceId("/home/me/code/app"),
       storyIdFromPath("/repo/docs/DEMO-63-cli-overlay.story.md"),
     ];
     expect(minted).toEqual(["generic:/home/me/code/app", "DEMO-63-cli-overlay.story"]);
+    minted.push(buildRootWorkspaceId({ owner: "acme", repo: "app" }));
+    expect(minted[2]).toBe("root:acme/app");
     for (const id of minted) {
       expect(valid(id, "private"), `${id} is valid in the private layer`).toBe(true);
       expect(valid(id, "shared"), `${id} is refused in a shared layer`).toBe(false);

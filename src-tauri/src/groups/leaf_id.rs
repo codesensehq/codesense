@@ -15,6 +15,11 @@
 //! - a workspace id or a terminal tab id (`[A-Za-z0-9._-]{1,128}`, no prefix, not only dots):
 //!   machine-local, valid only in the private layer, which never pushes. A story workspace's id
 //!   is the story's file stem, which holds dots.
+//! - the viewer's prefixed workspace ids, machine-local and valid only in the private layer:
+//!   `root:<owner>/<repo>` or `root:<name>` (a repo's root workspace), `story:<local id>`, and
+//!   `integration:<epic>` (an epic's terminal, its epic a relative path with an optional
+//!   `:<repo>`). Each part keeps the local id's charset and length bound; an `integration:` path
+//!   is normalized as a doc path is.
 //!
 //! A team and a name are `[a-z0-9][a-z0-9._-]{0,63}`. Any other prefix or shape is refused.
 //! The cases live in one fixture, `tests/fixtures/leaf-keys.json`, which other checks of a
@@ -30,6 +35,9 @@ pub enum Layer {
 const AGENT_PREFIX: &str = "agent:";
 const DOC_PREFIX: &str = "doc:";
 const GENERIC_PREFIX: &str = "generic:";
+const ROOT_PREFIX: &str = "root:";
+const STORY_PREFIX: &str = "story:";
+const INTEGRATION_PREFIX: &str = "integration:";
 const GENERIC_PATH_MAX: usize = 4096;
 const LOCAL_ID_MAX: usize = 128;
 const SEGMENT_MAX: usize = 64;
@@ -56,11 +64,18 @@ pub fn leaf_ref_problem(leaf: &str, layer: Layer) -> Option<String> {
         }
         return machine_local(leaf, layer);
     }
+    if let Some(problem) = prefixed_workspace_problem(leaf) {
+        return match problem {
+            Some(why) => Some(format!("{leaf:?}: {why}")),
+            None => machine_local(leaf, layer),
+        };
+    }
     if is_local_id(leaf) {
         return machine_local(leaf, layer);
     }
     Some(format!(
-        "{leaf:?}: not a tile ref (agent:, doc:, generic:, a workspace or a terminal tab id)"
+        "{leaf:?}: not a tile ref (agent:, doc:, generic:, root:, story:, integration:, a \
+         workspace or a terminal tab id)"
     ))
 }
 
@@ -99,6 +114,32 @@ fn generic_dir_problem(dir: &str) -> Option<&'static str> {
     dir.split(['/', '\\'])
         .any(|segment| matches!(segment, "." | ".."))
         .then_some("the generic workspace directory holds a . or .. segment")
+}
+
+/// For a viewer workspace id with a `root:`, `story:` or `integration:` prefix, why its rest is
+/// refused (`Some(None)` when it is valid); `None` for any other ref.
+fn prefixed_workspace_problem(leaf: &str) -> Option<Option<&'static str>> {
+    if let Some(rest) = leaf.strip_prefix(ROOT_PREFIX) {
+        let parts: Vec<&str> = rest.split('/').collect();
+        let valid = parts.len() <= 2 && parts.iter().all(|part| is_local_id(part));
+        return Some(
+            (!valid).then_some("a root workspace ref is root:<owner>/<repo> or root:<name>"),
+        );
+    }
+    if let Some(rest) = leaf.strip_prefix(STORY_PREFIX) {
+        return Some((!is_local_id(rest)).then_some("a story workspace ref is story:<local id>"));
+    }
+    if let Some(rest) = leaf.strip_prefix(INTEGRATION_PREFIX) {
+        let valid = rest.len() <= GENERIC_PATH_MAX
+            && !rest.chars().any(|c| c.is_control() || c == '\\')
+            && rest
+                .split(['/', ':'])
+                .all(|segment| !matches!(segment, "" | "." | ".."));
+        return Some((!valid).then_some(
+            "an integration workspace ref is integration:<relative epic path>[:<repo>]",
+        ));
+    }
+    None
 }
 
 /// A team or agent name: `[a-z0-9][a-z0-9._-]{0,63}`.
@@ -212,6 +253,9 @@ mod tests {
             "tab_9",
             "DEMO-63-cli-overlay.story",
             "generic:/home/me/code",
+            "root:acme/app",
+            "story:ab-12-cli-overlay.story",
+            "integration:_epic/demo/README.md",
         ] {
             assert_eq!(leaf_ref_problem(leaf, Layer::Private), None);
             assert!(leaf_ref_problem(leaf, Layer::Shared).is_some());
