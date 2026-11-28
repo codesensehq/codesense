@@ -157,6 +157,7 @@ import { useInboxSessionsStore } from "@/features/inbox/hooks/use-inbox-sessions
 import type { AgentSessionRow, SessionListRow } from "@/tauri/commands";
 import { useViewerStore, effectiveMosaicRoot } from "@/shared/stores/viewer-store";
 import { reconcilePresetTree, type MosaicNode } from "@/shared/tiling";
+import { useAvatarPacksStore } from "@/shared/hooks/use-avatar-packs";
 import { dropWorkspace } from "../lib/tray-reorder-drag";
 import { tileZoneId } from "../lib/terminal-drag";
 import { installTerminalLayoutHarness, seedTerminalTabs } from "@/test/terminal-layout-harness";
@@ -729,8 +730,50 @@ describe("the tile probe: no descendant of an unrelated tile commits", () => {
     await renderAgents();
     act(() => useOrgStore.setState({ activeTeamName: "other" }));
     await flush();
-    // The chrome and tab bar of a tile holding its own team read no active team.
+    // The chrome, caption and tab bar of a tile holding its own team read no active team.
     expect(probe.committed("chrome:")).toEqual([]);
+    expect(probe.committed("caption:")).toEqual([]);
+  });
+
+  it("when another team's packs change (a tile showing only its own team)", async () => {
+    addWorkspace(TEAM_B, "x1");
+    useViewerStore.setState((st) => ({
+      activeWorkspace: { ...st.activeWorkspace, [TEAM_B]: "x1" },
+    }));
+    useAgentListProjectionStore.setState({ sessions: [agentRow("x1")], error: null });
+    useInboxSessionsStore.setState({ sessions: [inboxRow("x1", 0)] });
+    render(
+      <DndContext>
+        <DisplayWarm />
+        <div data-xterm-host data-repo-path="/repo">
+          <WorkspaceTerminalPanels
+            teamKey={TEAM_B}
+            repoPath="/repo"
+            teamHidden={false}
+            frameProbe={probe}
+          />
+        </div>
+      </DndContext>,
+    );
+    await flush();
+    probe.reset();
+    act(() =>
+      useAvatarPacksStore.setState((st) => ({
+        byTeam: {
+          ...st.byTeam,
+          [TEAM]: {
+            packs: [],
+            defaultPack: "changed",
+            agentAvatars: {},
+            warnings: [],
+          },
+        },
+      })),
+    );
+    await flush();
+    expect(probe.committed("chrome:")).toEqual([]);
+    expect(probe.committed("caption:")).toEqual([]);
+    expect(probe.committed("tile:")).toEqual([]);
   });
 
   it("when an inbox row for another tab changes", async () => {

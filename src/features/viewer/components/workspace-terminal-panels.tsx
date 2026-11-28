@@ -195,7 +195,7 @@ export interface FrameProbe {
   mount: (frameId: string) => void;
   /** A `React.Profiler` commit anywhere in a tile frame's tree: the frame and every descendant
    *  (tab bar, captions, panes). Frame ids as for `render`; a tile's chrome and tab bar alone
-   *  report as `chrome:{workspaceId}`. */
+   *  report as `chrome:{workspaceId}`, and a tab's caption as `caption:{tabId}`. */
   descendants?: (frameId: string, phase: "mount" | "update" | "nested-update") => void;
 }
 
@@ -1529,22 +1529,24 @@ const TerminalPane = memo(function TerminalPane({ view }: { view: PaneView }) {
           (grid-mode: one per cell; tabs-mode: one for the active tab) so the
           toolbar replaces the retired standalone TabPrimitivesToolbar. */}
       {isVisible && (
-        <TerminalGridCaption
-          tab={tab}
-          isActive={isActiveTabInWs}
-          background={view.themeConfig.chromeBg}
-          foreground={view.themeConfig.theme.foreground ?? "inherit"}
-          onFocusCell={() => selectCell(teamKey, ws.id, tab.id, true)}
-          onZoomCell={() => zoomTerminalCell(teamKey, ws.id, tab.id)}
-          onClose={() => closeTab(teamKey, ws.id, tab.id)}
-          neighbourTabId={view.neighbourTabId}
-          workspace={ws}
-          teamKey={teamKey}
-          // SW-TP CAP-12: thread the owning tile's focus indicator only for the
-          // active tab's caption. Non-active cell captions in a split stay neutral
-          // so the one-line-per-tile rule holds.
-          tileFocusIndicator={view.tileFocusIndicator}
-        />
+        <ProbedTree frameId={`caption:${tab.id}`}>
+          <TerminalGridCaption
+            tab={tab}
+            isActive={isActiveTabInWs}
+            background={view.themeConfig.chromeBg}
+            foreground={view.themeConfig.theme.foreground ?? "inherit"}
+            onFocusCell={() => selectCell(teamKey, ws.id, tab.id, true)}
+            onZoomCell={() => zoomTerminalCell(teamKey, ws.id, tab.id)}
+            onClose={() => closeTab(teamKey, ws.id, tab.id)}
+            neighbourTabId={view.neighbourTabId}
+            workspace={ws}
+            teamKey={teamKey}
+            // SW-TP CAP-12: thread the owning tile's focus indicator only for the
+            // active tab's caption. Non-active cell captions in a split stay neutral
+            // so the one-line-per-tile rule holds.
+            tileFocusIndicator={view.tileFocusIndicator}
+          />
+        </ProbedTree>
       )}
       {/* `isCell`-only behavior (cell-focus marker, keyboard close targeting
           via `data-pane-id`) remains gated above; the caption itself is now

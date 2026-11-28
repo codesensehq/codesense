@@ -95,10 +95,12 @@ a keyed view store, not through `renderLeaf`.
 
 **Read per tile below a leaf, too.** A memoized leaf still redraws when a hook under
 it reads a whole store. A tile's tab bar, caption and chrome read their own tab's
-data by id: its session row, its team (`useTabTeamOf`), that team's packs
-(`useAvatarPacks(team)`), its handle's look and its handle's inbox counts. Each
+data by id: its session row, its team (`useTabTeamOf`), that team's faces
+(`useTeamFaces(team)`), its handle's look and its handle's inbox counts. Each
 returns primitives or a shallow-compared row. So another tile's agent, another
-team's packs or looks, or a switch of the active team commits nothing in that tile.
+team's packs or looks commits nothing in that tile. A switch of the active team
+commits nothing in the chrome or tab bar. StoryHud and SourceDiffOverlay may
+commit once, through `useScopeActive`, when the tile's own team is left or entered.
 The CLI workspace's render seam test checks this. Its `FrameProbe.descendants` hook
 wraps each tile frame's whole tree in a `Profiler` and records every commit under
 it as `tile:<id>`. A row that changes one tile then asserts that no other tile
