@@ -31,8 +31,8 @@ use serde::Serialize;
 use tauri::{Emitter, Manager, Runtime};
 
 use super::item_key::ItemKey;
-use super::pending_timeout::PENDING_TIMEOUT_MS;
 use super::label::MAIN_LABEL;
+use super::pending_timeout::PENDING_TIMEOUT_MS;
 use super::registry::{Incoming, Locked, WindowHost, WindowRegistry};
 
 /// How long the source may take to flush the item's frame writes and let it go.
@@ -141,7 +141,7 @@ impl MoveBook {
         m
     }
 
-    fn by_id(&self, id: &str) -> Option<&Move> {
+    fn move_by_id(&self, id: &str) -> Option<&Move> {
         self.moves.get(id)
     }
 
@@ -291,7 +291,7 @@ pub fn move_item(
     tiles_on: bool,
 ) -> MoveStart {
     let mut locked = registry.locked();
-    if Locked::owner_of(&locked, key) != caller {
+    if Locked::item_owner(&locked, key) != caller {
         return refused(reason::STALE);
     }
     if MoveBook::find_key(Locked::book_ref(&locked), key).is_some() {
@@ -396,12 +396,12 @@ pub fn window_ready(
     label: &str,
 ) -> Result<(), String> {
     let mut locked = registry.locked();
-    Locked::mark_ready(&mut locked, host, label)?;
+    Locked::mark_window_ready(&mut locked, host, label)?;
     let Some(id) = MoveBook::pending_for(Locked::book_ref(&locked), label) else {
         return Ok(());
     };
     let mut after = After::default();
-    let m = MoveBook::by_id(Locked::book_ref(&locked), &id)
+    let m = MoveBook::move_by_id(Locked::book_ref(&locked), &id)
         .cloned()
         .expect("pending_for names a move in the book");
     if !MoveHost::window_exists(host, &m.source) {
@@ -444,7 +444,7 @@ pub fn hand_off_ack(
     ack: &HandOffAck,
 ) -> AckOutcome {
     let mut locked = registry.locked();
-    let Some(m) = MoveBook::by_id(Locked::book_ref(&locked), &ack.move_id).cloned() else {
+    let Some(m) = MoveBook::move_by_id(Locked::book_ref(&locked), &ack.move_id).cloned() else {
         return AckOutcome::Ignored;
     };
     if m.source != caller || m.phase != Phase::HandingOff {
@@ -491,7 +491,7 @@ fn commit_locked(locked: &mut Locked<'_>, host: &impl MoveHost, m: &Move) -> Res
         );
     }
     if m.created {
-        if let Err(e) = Locked::clear_pending(locked, host, &m.target) {
+        if let Err(e) = Locked::clear_target_pending(locked, host, &m.target) {
             log::warn!(target: "windows", "move target {} not cleared: {e}", m.target);
         }
     }
@@ -528,7 +528,8 @@ pub fn on_timer(host: &impl MoveHost, registry: &WindowRegistry, timer: &MoveTim
         MoveTimer::HandOff(id) => (id, Phase::HandingOff, reason::NO_ACK),
     };
     let mut locked = registry.locked();
-    let current = MoveBook::by_id(Locked::book_ref(&locked), id).is_some_and(|m| m.phase == phase);
+    let current =
+        MoveBook::move_by_id(Locked::book_ref(&locked), id).is_some_and(|m| m.phase == phase);
     if !current {
         return;
     }

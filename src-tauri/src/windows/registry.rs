@@ -299,7 +299,7 @@ pub struct Locked<'a> {
 }
 
 impl Locked<'_> {
-    pub fn owner_of(&self, key: &ItemKey) -> String {
+    pub fn item_owner(&self, key: &ItemKey) -> String {
         State::owner(&self.state, key).to_owned()
     }
 
@@ -324,11 +324,15 @@ impl Locked<'_> {
         State::add_satellite(&mut self.state, host, label, Some(incoming))
     }
 
-    pub fn mark_ready(&mut self, host: &impl WindowHost, label: &str) -> Result<(), String> {
+    pub fn mark_window_ready(&mut self, host: &impl WindowHost, label: &str) -> Result<(), String> {
         State::ready(&mut self.state, host, label)
     }
 
-    pub fn clear_pending(&mut self, host: &impl WindowHost, label: &str) -> Result<(), String> {
+    pub fn clear_target_pending(
+        &mut self,
+        host: &impl WindowHost,
+        label: &str,
+    ) -> Result<(), String> {
         State::set_pending(&mut self.state, host, label, false)
     }
 
@@ -372,7 +376,7 @@ impl WindowRegistry {
         Self {
             state: Mutex::new(State {
                 entries: BTreeMap::from([(MAIN_LABEL.to_owned(), main)]),
-                moves: MoveBook::default(),
+                moves: <MoveBook as Default>::default(),
             }),
         }
     }
