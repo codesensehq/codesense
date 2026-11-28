@@ -44,9 +44,10 @@ use std::sync::{Arc, Mutex};
 use tauri::Manager;
 
 use crate::runtime::now_ms;
+use crate::windows::item_key::ItemKey;
 use crate::windows::moves::MoveHost;
 use crate::windows::registry::{Locked, WindowRegistry};
-use crate::windows::returns::{return_by_kind, ReturnReason};
+use crate::windows::returns::{return_by_kind_locked, ReturnReason};
 use crate::windows::{is_main, MAIN_LABEL};
 
 /// RF-perf-4 (AC-1): the per-resource FE instance tally pushed on the heartbeat —
@@ -811,34 +812,30 @@ pub fn watch_step(label: &str, watch: &mut WindowWatch, reading: &WatchReading) 
     }
 }
 
-/// Gives `label`'s items back to `main` as `crash`, through the windows' one return path.
-fn return_satellite_items(host: &impl MoveHost, registry: &WindowRegistry, label: &str) {
-    let items = Locked::items_held_by(&WindowRegistry::locked(registry), label);
-    return_by_kind(host, registry, &items, ReturnReason::Crash);
-}
-
-/// Drops `label`'s entry, then destroys the window once the lock is released. `false` when
-/// the registry refuses (an item arrived since its items were returned).
-fn drop_satellite(host: &impl MoveHost, registry: &WindowRegistry, label: &str) -> bool {
-    // The lock is released at the end of this statement, before the window is destroyed.
-    let removed = Locked::remove_empty_satellite(&mut WindowRegistry::locked(registry), label);
-    if let Err(e) = removed {
-        log::warn!(target: "webview-watchdog", "satellite {label} kept for now: {e}");
-        return false;
-    }
-    MoveHost::destroy_window(host, label);
-    true
-}
-
-/// The watchdog's give-up on a satellite: its items return to `main` as `crash`, its entry
-/// goes, and the window is destroyed. `main` is never given up on. `false` when the window
-/// stays (the next tick retries).
+/// The watchdog's give-up on a satellite, in one registry transaction (the order `returns.rs`
+/// gives a caller that drops a window): its items return to `main` as `crash`, its entry goes,
+/// and once the lock is released the window is destroyed. A satellite holding nothing sends no
+/// return. `main` is never given up on. `false` when the registry refuses the removal (the
+/// window is already gone); nothing is destroyed and nothing is returned, and the watch is
+/// dropped on the next tick with the window's registration.
 pub fn give_up_satellite(host: &impl MoveHost, registry: &WindowRegistry, label: &str) -> bool {
     if is_main(label) {
         return false;
     }
-    return_satellite_items(host, registry, label);
-    drop_satellite(host, registry, label)
+    let removed = {
+        let mut locked = WindowRegistry::locked(registry);
+        let items = Locked::items_held_by(&locked, label);
+        if !<[ItemKey]>::is_empty(&items) {
+            return_by_kind_locked(host, &mut locked, &items, ReturnReason::Crash);
+        }
+        Locked::remove_empty_satellite(&mut locked, label)
+    };
+    if let Err(e) = removed {
+        log::warn!(target: "webview-watchdog", "satellite {label} not removed: {e}");
+        return false;
+    }
+    MoveHost::destroy_window(host, label);
+    true
 }
 
 /// Keeps one watch per registered, non-pending window: a window whose `pending` cleared gets a
@@ -1900,17 +1897,24 @@ mod per_label {
         assert_eq!(*host.destroyed.borrow(), vec!["sat-1".to_owned()]);
     }
 
+    fn returned_events(host: &Host) -> usize {
+        Iterator::count(host.events.borrow().iter().filter(|(to, event, _)| {
+            to == MAIN_LABEL && event == crate::windows::moves::ITEMS_RETURNED_EVENT
+        }))
+    }
+
     #[test]
-    fn a_refused_remove_keeps_the_window_and_the_next_tick_retries() {
+    fn a_refused_removal_destroys_nothing_and_the_watch_retries_until_the_window_is_gone() {
         let host = Host::default();
         let reg = reg(&host);
-        return_satellite_items(&host, &reg, "sat-1");
-        // An item arrives between the return and the removal.
-        reg.reassign_item(&host, &tab("/repo/b.md"), "sat-1")
-            .unwrap();
-        assert!(!drop_satellite(&host, &reg, "sat-1"));
+        // Removed by another path (a close) since this tick read the registry.
+        assert!(give_up_satellite(&host, &reg, "sat-1"));
+        host.events.borrow_mut().clear();
+        host.destroyed.borrow_mut().clear();
+
+        assert!(!give_up_satellite(&host, &reg, "sat-1"));
         assert!(host.destroyed.borrow().is_empty());
-        assert!(Locked::has_window(&WindowRegistry::locked(&reg), "sat-1"));
+        assert_eq!(returned_events(&host), 0);
 
         let mut watch = watch_from(0, 0, 0);
         mark_giving_up(&mut watch);
@@ -1918,9 +1922,39 @@ mod per_label {
             watch_step("sat-1", &mut watch, &at(1_000, 1_000)),
             WatchStep::GiveUp
         );
+        let mut watches = BTreeMap::from([("sat-1".to_owned(), watch)]);
+        sync_watches(
+            &mut watches,
+            &[(MAIN_LABEL.to_owned(), false)],
+            1_000,
+            &|_: &str| (0, 0),
+        );
+        assert!(!watches.contains_key("sat-1"));
+    }
+
+    #[test]
+    fn a_refused_removal_returns_nothing_twice() {
+        let host = Host::default();
+        let reg = reg(&host);
         assert!(give_up_satellite(&host, &reg, "sat-1"));
+        assert_eq!(returned_events(&host), 1);
+        for _ in 0..3 {
+            assert!(!give_up_satellite(&host, &reg, "sat-1"));
+        }
+        assert_eq!(returned_events(&host), 1);
         assert_eq!(*host.destroyed.borrow(), vec!["sat-1".to_owned()]);
-        assert!(!Locked::has_window(&WindowRegistry::locked(&reg), "sat-1"));
+    }
+
+    #[test]
+    fn an_empty_satellite_is_removed_without_a_return() {
+        let host = Host::default();
+        let reg = reg(&host);
+        reg.reassign_item(&host, &tab("/repo/a.md"), MAIN_LABEL)
+            .unwrap();
+        host.events.borrow_mut().clear();
+        assert!(give_up_satellite(&host, &reg, "sat-1"));
+        assert_eq!(returned_events(&host), 0);
+        assert_eq!(*host.destroyed.borrow(), vec!["sat-1".to_owned()]);
     }
 
     #[test]
