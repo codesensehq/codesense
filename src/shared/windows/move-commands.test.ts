@@ -33,11 +33,13 @@ import {
   MOVE_INTO_MAIN_WINDOW,
   MOVE_TO_NEW_WINDOW,
   moveEntries,
+  moveItemTo,
   moveItemToMain,
   moveItemToNewWindow,
   resetMoveCommandsForTests,
   type CanMoveResult,
 } from "./move-commands";
+import { markRefusalShown } from "./shown-refusals";
 import { MOVE_ABORTED_EVENT } from "./window-slice";
 
 const tab: ItemKey = { kind: "tab", team: "acme", id: "docs/mockups.html" };
@@ -152,14 +154,14 @@ describe("the moves", () => {
 });
 
 describe("aborts", () => {
-  it("an injected create failure aborts with the toast and leaves the source unchanged", async () => {
+  it("a tab that turned dirty during the hand-off shows closeTab's toast alone", async () => {
     await moveItemToNewWindow(tab);
-    h.aborted?.({ payload: { key: tab, moveId: "m1", reason: "window_failed" } });
-    expect(toastError).toHaveBeenCalledExactlyOnceWith(
-      "Couldn’t move mockups.html: the new window didn’t open",
-    );
-    // The source keeps its item through `hand-off.ts`; the commands start nothing more.
-    expect(moveItem).toHaveBeenCalledOnce();
+    markRefusalShown(tab);
+    h.aborted?.({ payload: { key: tab, moveId: "m1", reason: "dirty" } });
+    expect(toastError).not.toHaveBeenCalled();
+    // The mark is spent: a later abort for the item shows its toast.
+    h.aborted?.({ payload: { key: tab, moveId: "m2", reason: "dirty" } });
+    expect(toastError).toHaveBeenCalledOnce();
   });
 
   it.each([
@@ -230,9 +232,20 @@ describe("refusals", () => {
     expect(toastError).toHaveBeenCalledExactlyOnceWith("mockups.html is already moving");
   });
 
-  it("a move into a window that holds an item already says so", async () => {
+  it("a new window that fails to open refuses the start with the toast", async () => {
+    // The registry builds the window before the move starts; a failed build refuses it, and
+    // no abort follows (`moves.rs`).
+    moveItem.mockResolvedValue({ status: "refused", reason: "window_failed" });
+    expect(await moveItemToNewWindow(tab)).toEqual({ status: "refused", reason: "window_failed" });
+    expect(toastError).toHaveBeenCalledExactlyOnceWith(
+      "Couldn’t move mockups.html: the new window didn’t open",
+    );
+  });
+
+  it("a move into a satellite that holds an item already says so", async () => {
     moveItem.mockResolvedValue({ status: "refused", reason: "occupied" });
-    await moveItemToMain(tab);
+    await moveItemTo(tab, "pane-3");
+    expect(moveItem).toHaveBeenCalledExactlyOnceWith(tab, "pane-3");
     expect(toastError).toHaveBeenCalledExactlyOnceWith("That window already has an item open");
   });
 

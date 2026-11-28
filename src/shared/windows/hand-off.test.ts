@@ -54,6 +54,7 @@ import { useViewerStore } from "@/shared/stores/viewer-store";
 
 import { createHandOff, createReleasedItems, mainTabSide } from "./hand-off";
 import { resetWaitingItemsForTests } from "./items-returned";
+import { markRefusalShown, takeRefusalShown } from "./shown-refusals";
 import { itemKeyForTab, type ItemKey } from "./item-key";
 import {
   SatelliteRoot,
@@ -186,6 +187,15 @@ describe("main as the source", () => {
     expect(ack).toHaveBeenCalledWith({ moveId: "mv-1", ok: false, reason: "dirty" });
     expect(frame.post).not.toHaveBeenCalled();
     expect(paths()).toEqual([A, K, B]);
+    // No toast was shown here, so the abort shows one.
+    expect(takeRefusalShown(K_KEY)).toBe(false);
+  });
+
+  it("clears an earlier move's shown refusal when a new hand-off arrives", async () => {
+    markRefusalShown(K_KEY);
+    useViewerStore.setState({ editingDirtyPaths: { [TEAM]: [K] } });
+    await createHandOff(mainTabSide(), acker()).onHandOff(request(K_KEY));
+    expect(takeRefusalShown(K_KEY)).toBe(false);
   });
 
   it("acks dirty when an edit starts during the flush and closeTab refuses", async () => {
@@ -200,6 +210,8 @@ describe("main as the source", () => {
     expect(ack).toHaveBeenCalledWith({ moveId: "mv-1", ok: false, reason: "dirty" });
     expect(log).toEqual([`flush ${K} (open)`, "ack dirty (open)"]);
     expect(paths()).toEqual([A, K, B]);
+    // closeTab showed its toast, so the abort shows none.
+    expect(takeRefusalShown(K_KEY)).toBe(true);
   });
 
   it("never closes the tab when the move aborts during the flush", async () => {

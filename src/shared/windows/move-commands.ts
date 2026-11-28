@@ -6,7 +6,9 @@
  *
  * A move is one `window_move_item` call. The registry raises and focuses the target once
  * the move commits, so a commit shows nothing here. An abort arrives at this window as
- * `window:move-aborted` and shows as a toast; `hand-off.ts` keeps the item in place.
+ * `window:move-aborted` and shows as a toast; `hand-off.ts` keeps the item in place. A
+ * refusal this window has shown already for the move (`closeTab`'s, for a tab that turned
+ * dirty during the hand-off) adds no second toast.
  *
  * A refusal found before the move (the `window_can_move_bodies` answer, passed in as
  * `check`) disables the entry with its text, and running it anyway shows that text as the
@@ -19,7 +21,8 @@ import { currentWebviewWindow, isMainWindow } from "@/shared/lib/current-window"
 import { tilesEnabled } from "@/shared/lib/tiles-enabled";
 import { windowMoveItem } from "@/tauri/commands";
 
-import type { ItemKey } from "./item-key";
+import { itemName, type ItemKey } from "./item-key";
+import { takeRefusalShown } from "./shown-refusals";
 import { MOVE_ABORTED_EVENT, type MoveAborted, type MoveStart } from "./window-slice";
 
 export const MOVE_TO_NEW_WINDOW = "Move to New Window";
@@ -108,15 +111,21 @@ export function moveItemToNewWindow(
   key: ItemKey,
   options: MoveOptions = {},
 ): Promise<MoveStart | null> {
-  return move(key, "new", options);
+  return moveItemTo(key, "new", options);
 }
 
 /** Moves `key` into the main window. `null` when nothing was asked of the registry. */
 export function moveItemToMain(key: ItemKey, options: MoveOptions = {}): Promise<MoveStart | null> {
-  return move(key, "main", options);
+  return moveItemTo(key, "main", options);
 }
 
-async function move(key: ItemKey, to: string, options: MoveOptions): Promise<MoveStart | null> {
+/** Moves `key` into the window labelled `to`, or into a new one for `"new"`. `null` when
+ *  nothing was asked of the registry. */
+export async function moveItemTo(
+  key: ItemKey,
+  to: string,
+  options: MoveOptions = {},
+): Promise<MoveStart | null> {
   if (!(await tilesEnabled())) return null;
   const name = itemName(key);
   const refused = refusalFor(key, options);
@@ -143,17 +152,13 @@ function refusalFor(key: ItemKey, options: MoveOptions): string | null {
   return options.check ? checkRefusal(options.check, itemName(key)) : null;
 }
 
-/** The name a toast uses: the last segment of the item's path. */
-function itemName(key: ItemKey): string {
-  return key.id.slice(key.id.lastIndexOf("/") + 1) || key.id;
-}
-
 let abortListener: Promise<unknown> | null = null;
 
 /** Starts listening for this window's aborts once, before its first move. */
 function listenForAborts(): Promise<unknown> {
   abortListener ??= currentWebviewWindow()
     .listen<MoveAborted>(MOVE_ABORTED_EVENT, ({ payload }) => {
+      if (takeRefusalShown(payload.key)) return;
       const text = refusalText(payload.reason, itemName(payload.key));
       if (text) toast.error(text);
     })
