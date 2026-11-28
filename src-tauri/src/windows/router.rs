@@ -262,7 +262,7 @@ mod fanout {
         let (app, heard) = app_hearing(&["main", "sat-1", "sat-2", "sat-3"]);
         app.manage(reg(&[
             ("sat-1", &["/repo/notes/a.md"]),
-            ("sat-2", &["/repo/notes/a.md"]),
+            ("sat-2", &["/repo/notes/a.md?x=1"]),
             ("sat-3", &["/repo/notes/b.md"]),
         ]));
         let count = Cell::new(0);
