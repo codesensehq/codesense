@@ -699,3 +699,43 @@ test("budget: record on m1 names a budget key the run didn't measure and still e
   assert.ok(c.out.includes("budget open_cold: not measured"), c.out.join("\n"));
   assert.ok(!c.out.some((line) => line.startsWith("FAIL")), c.out.join("\n"));
 });
+
+test("budget: exactly the budget passes (the test is strict), and under it the verdict is unchanged", () => {
+  for (const top of [200, 170]) {
+    const measured = current({ open_warm: ms([156, 156, 156, 156, top]) });
+    const out = compare(budgeted(), measured, { runner: "m1" });
+    assert.equal(out.exitCode, 0, `p95 ${top}`);
+    assert.deepEqual(out, compare(budgeted({ budget: undefined }), measured, { runner: "m1" }));
+  }
+});
+
+test("budget: a budget key outside compare.keys and outside the set is still checked", () => {
+  const file = budgeted({ budget: { ...BUDGET, keys: ["open_warm", "open_new"] } });
+  const out = compare(
+    file,
+    current({ open_warm: ms([156, 156, 156]), open_new: ms([150, 160, 250]) }),
+    { runner: "m1" },
+  );
+  assert.equal(out.exitCode, 1);
+  assert.equal(out.rows.length, 1);
+  assert.ok(out.lines.includes("FAIL open_new p95 250ms > budget 200"), out.lines.join("\n"));
+});
+
+test("budget: a relative regression and a budget failure both reach the verdict", () => {
+  const out = compare(budgeted(), current({ open_warm: ms([230, 230, 230, 230, 230]) }), {
+    runner: "m1",
+  });
+  assert.equal(out.exitCode, 1);
+  assert.equal(out.rows.length, 1);
+  assert.equal(
+    out.verdict,
+    "perf compare m1: FAIL 1/1: open_warm +47%; over budget: open_warm p95 230ms",
+  );
+  assert.deepEqual(out.lines.slice(1), ["FAIL open_warm p95 230ms > budget 200", out.verdict]);
+});
+
+test("budget: upsertSet keeps the block", () => {
+  const after = upsertSet(budgeted(), current({ open_warm: ms([150, 156, 160]) }), "m1");
+  assert.deepEqual(after.budget, BUDGET);
+  assert.deepEqual(Object.keys(after), Object.keys(budgeted()));
+});
