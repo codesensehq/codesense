@@ -37,10 +37,18 @@ export const RUST_PATHS = [
   "scripts/lib/",
   "scripts/run-secret-service-tests.sh",
   "scripts/rust-changes.mjs",
+  "scripts/verify-wdio-plugin-release-absence.sh",
+  "scripts/verify-webdriver-absence.ts",
   "src-emulator/",
   "codesense-docs/",
   "site/package.json",
   ".claude/settings.json",
+  // What windows-e2e-linux runs: the two-window specs, their runner and the front-end they drive.
+  "src/shared/windows/",
+  "src/app/e2e-windows-control.ts",
+  "src/app/e2e-satellite-probe.tsx",
+  "tests/windows/",
+  "wdio.windows.conf.ts",
 ];
 
 // Rust-relevant files that the macOS build never compiles or reads: each is a module declared only

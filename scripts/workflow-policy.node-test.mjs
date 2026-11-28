@@ -734,7 +734,13 @@ test("only rust.yml's non-required jobs may skip merge groups, and still run on 
       ),
       file,
     ).join("\n");
-  for (const job of ["rust-macos-build", "rust-macos", "rust-check-windows", "rust-linux-app"])
+  for (const job of [
+    "rust-macos-build",
+    "rust-macos",
+    "rust-check-windows",
+    "rust-linux-app",
+    "windows-e2e-linux",
+  ])
     for (const condition of [
       `\${{ ${pathFilter} && ${offMergeGroups} && (${macosOptIn}) }}`,
       `\${{ ${pathFilter} && ${offMergeGroups} && (${windowsOptIn}) }}`,
