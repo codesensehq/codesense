@@ -72,6 +72,8 @@ test("a change to what the two-window e2e job drives runs the Rust jobs", () => 
     "src/shared/windows/satellite-root.tsx",
     "src/app/e2e-windows-control.ts",
     "src/app/e2e-satellite-probe.tsx",
+    // It mounts the probe route and registers the webdriver controls.
+    "src/main.tsx",
     "tests/windows/two-window-smoke.e2e.ts",
     "tests/windows/fixtures/probe.html",
     "wdio.windows.conf.ts",

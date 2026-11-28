@@ -47,6 +47,7 @@ export const RUST_PATHS = [
   "src/shared/windows/",
   "src/app/e2e-windows-control.ts",
   "src/app/e2e-satellite-probe.tsx",
+  "src/main.tsx",
   "tests/windows/",
   "wdio.windows.conf.ts",
 ];
