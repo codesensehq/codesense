@@ -23,6 +23,7 @@ use crate::commands::async_helpers::await_blocking;
 use crate::commands::machines::RuntimeSessionReference;
 use crate::commands::pty::{attach_warm_from_args, spawn_from_args, AttachWarmArgs, SpawnPtyArgs};
 use crate::commands::pty_backend::{self, SpawnPlacement};
+use crate::commands::pty_viewer;
 use tauri::{Emitter, Manager};
 
 #[derive(Serialize)]
@@ -189,12 +190,6 @@ pub fn terminal_layout_admission(
     baseline
 }
 
-/// This app's webview: its one viewer in every terminal host it uses. A
-/// webview reload keeps it, so the reloaded view keeps its focus and scroll.
-pub(crate) fn app_viewer() -> ViewerId {
-    ViewerId::new("app")
-}
-
 /// Separates the team from the workspace form in a [`WorkspaceKey`]. The
 /// frontend's `WORKSPACE_KEY_SEPARATOR` (`src/shared/lib/workspace-key.ts`) is
 /// the same character; a contract test pins the two.
@@ -273,14 +268,11 @@ async fn authorize_remote_session(
             let backend = pty_backend::resolve_member_backend(&app, &target.runtime, true)?;
             backend.revalidate(&app)?;
             // Read under the webview's own boot, so the read hides nothing it shows.
-            let boot = WEBVIEW_BOOT
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .clone()
-                .ok_or("the terminal layout has not been read yet")?;
+            let boot =
+                pty_viewer::main_boot().ok_or("the terminal layout has not been read yet")?;
             let snapshot = backend
                 .domain()
-                .layout_snapshot(&app_viewer(), &boot)
+                .layout_snapshot(&pty_viewer::main_viewer(), &boot)
                 .map_err(|e| e.to_string())?;
             backend.revalidate(&app)?;
             snapshot
@@ -511,30 +503,17 @@ pub struct OpenTabRequest {
     pub cwd: Option<std::path::PathBuf>,
 }
 
-/// The app launch the webview last asked the hosts' layout under, so a read
-/// on its behalf (the MCP viewer state) asks under the same one — a read under
-/// another would prune the exited tabs the webview still shows.
-static WEBVIEW_BOOT: Mutex<Option<ClientBootId>> = Mutex::new(None);
-
-/// Record `id` as the webview's boot. True for a new boot (the first ask, or
-/// a reload), which re-syncs the connection manager with the registry.
-fn adopt_webview_boot(slot: &Mutex<Option<ClientBootId>>, id: &ClientBootId) -> bool {
-    let previous = slot
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .replace(id.clone());
-    previous.as_ref() != Some(id)
-}
-
 /// Every host's layout as the webview sees it: one snapshot per host, each
 /// keyed by its own `epoch`.
 #[tauri::command]
 pub async fn terminal_layout_snapshot(
     app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
     client_boot_id: ClientBootId,
 ) -> Result<Vec<super::machines::RuntimeLayoutReply>, String> {
-    let new_boot = adopt_webview_boot(&WEBVIEW_BOOT, &client_boot_id);
-    if new_boot {
+    let viewer = pty_viewer::window_viewer(&window)?;
+    let read = pty_viewer::layout_read(pty_viewer::boots(), &viewer, &client_boot_id);
+    if read.announces() {
         let _ = app.emit("sessions-source-changed", ());
         // A new webview boot is the frontend re-registering: re-read the
         // machine registry so connect never meets a machine the list shows
@@ -548,14 +527,18 @@ pub async fn terminal_layout_snapshot(
     }
     let read_app = app.clone();
     let replies = await_blocking("terminal_layout_snapshot", move || {
-        pty_backend::admitted_layout_snapshots(&read_app, &client_boot_id)
+        pty_backend::admitted_layout_snapshots_for(&read_app, &viewer, &client_boot_id, true)
     })
     .await?;
+    if !read.app_wide {
+        return Ok(replies);
+    }
     // Read under the webview's own boot, so the restore never prunes what it shows.
     super::dashboard_launch::spawn_local_launch_restore(&app, &replies);
     // SV-7: a read of the layout is the app settling what it hosts: claim it
     // (a restore still running claims as it settles).
     let claim_app = app.clone();
+    let new_boot = read.new_boot;
     let _ = await_blocking("claim held sessions", move || {
         pty_backend::claim_held_sessions(&claim_app, new_boot);
         Ok(())
@@ -597,10 +580,7 @@ fn refuse_launch_tags<'a>(mut keys: impl Iterator<Item = &'a String>) -> Result<
 pub(crate) async fn webview_layout_snapshots(
     app: tauri::AppHandle,
 ) -> Option<Result<Vec<LayoutSnapshot>, String>> {
-    let boot = WEBVIEW_BOOT
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .clone()?;
+    let boot = pty_viewer::main_boot()?;
     Some(
         await_blocking("webview_layout_snapshots", move || {
             pty_backend::layout_snapshots(&app, &boot)
@@ -612,8 +592,10 @@ pub(crate) async fn webview_layout_snapshots(
 #[tauri::command]
 pub async fn terminal_open_tab(
     app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
     request: OpenTabRequest,
 ) -> Result<TabEntry, String> {
+    let viewer = pty_viewer::window_viewer(&window)?;
     let OpenTabRequest {
         machine_id,
         workspace,
@@ -631,7 +613,7 @@ pub async fn terminal_open_tab(
     refuse_launch_tags(tags.keys())?;
     let open = OpenTab {
         cwd,
-        viewer: app_viewer(),
+        viewer,
         workspace,
         session,
         descriptor,
@@ -645,11 +627,9 @@ pub async fn terminal_open_tab(
     open_layout_tab(app, machine_id, open, spawn).await
 }
 
+/// `main`'s boot: what every read on the app's behalf asks under.
 pub(crate) fn webview_boot() -> Option<ClientBootId> {
-    WEBVIEW_BOOT
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .clone()
+    pty_viewer::main_boot()
 }
 
 /// Every admitted host's layout, read now on this thread (blocking); `None` before the
@@ -657,10 +637,7 @@ pub(crate) fn webview_boot() -> Option<ClientBootId> {
 pub(crate) fn member_layout_snapshots_blocking(
     app: &tauri::AppHandle,
 ) -> Option<Result<Vec<super::machines::RuntimeLayoutReply>, String>> {
-    let boot = WEBVIEW_BOOT
-        .lock()
-        .unwrap_or_else(|error| error.into_inner())
-        .clone()?;
+    let boot = pty_viewer::main_boot()?;
     Some(pty_backend::admitted_layout_snapshots(app, &boot))
 }
 
@@ -684,10 +661,7 @@ async fn webview_layout_replies(
     app: tauri::AppHandle,
     machines: bool,
 ) -> Option<Result<Vec<super::machines::RuntimeLayoutReply>, String>> {
-    let boot = WEBVIEW_BOOT
-        .lock()
-        .unwrap_or_else(|error| error.into_inner())
-        .clone()?;
+    let boot = pty_viewer::main_boot()?;
     let label = if machines {
         "webview_member_layout_snapshots"
     } else {
@@ -695,7 +669,12 @@ async fn webview_layout_replies(
     };
     Some(
         await_blocking(label, move || {
-            pty_backend::admitted_layout_snapshots_of(&app, &boot, machines)
+            pty_backend::admitted_layout_snapshots_for(
+                &app,
+                &pty_viewer::main_viewer(),
+                &boot,
+                machines,
+            )
         })
         .await,
     )
@@ -1012,6 +991,19 @@ where
 #[tauri::command]
 pub async fn terminal_close_tab(
     app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+    session: RuntimeSessionReference,
+    mode: CloseMode,
+) -> Result<CloseOutcome, String> {
+    let viewer = pty_viewer::window_viewer(&window)?;
+    close_tab_as(app, viewer, session, mode).await
+}
+
+/// Close `session`'s entry for `viewer`: the calling window's, or `main`'s for a caller
+/// with no window (an MCP verb).
+pub(crate) async fn close_tab_as(
+    app: tauri::AppHandle,
+    viewer: ViewerId,
     session: RuntimeSessionReference,
     mode: CloseMode,
 ) -> Result<CloseOutcome, String> {
@@ -1024,7 +1016,7 @@ pub async fn terminal_close_tab(
         app,
         "terminal_close_tab",
         session,
-        move |host, session, _| host.close_tab(&app_viewer(), session, mode),
+        move |host, session, _| host.close_tab(&viewer, session, mode),
     )
     .await;
     // A remote tab closed for good is no longer one of this app's launches; one
@@ -1101,9 +1093,11 @@ pub async fn terminal_move_tab(
 #[tauri::command]
 pub async fn terminal_set_active(
     app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
     workspace: super::machines::RuntimeWorkspaceReference,
     session: Option<RuntimeSessionReference>,
 ) -> Result<(), String> {
+    let viewer = pty_viewer::window_viewer(&window)?;
     if let (super::machines::RuntimeWorkspaceReference::Admitted(workspace), Some(session)) =
         (&workspace, &session)
     {
@@ -1124,7 +1118,7 @@ pub async fn terminal_set_active(
                 session,
                 move |host, session, remote| {
                     within_remote_workspace(remote, workspace.workspace())?;
-                    host.set_active(&app_viewer(), workspace.workspace(), Some(session))
+                    host.set_active(&viewer, workspace.workspace(), Some(session))
                 },
             )
             .await
@@ -1134,7 +1128,7 @@ pub async fn terminal_set_active(
                 app,
                 "terminal_set_active",
                 workspace,
-                move |host, workspace| host.set_active(&app_viewer(), workspace, None),
+                move |host, workspace| host.set_active(&viewer, workspace, None),
             )
             .await
         }
@@ -1159,14 +1153,16 @@ pub async fn terminal_set_grid(
 #[tauri::command]
 pub async fn terminal_set_view_hint(
     app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
     session: RuntimeSessionReference,
     hint: ViewHint,
 ) -> Result<(), String> {
+    let viewer = pty_viewer::window_viewer(&window)?;
     in_session_host(
         app,
         "terminal_set_view_hint",
         session,
-        move |host, session, _| host.set_view_hint(&app_viewer(), session, hint),
+        move |host, session, _| host.set_view_hint(&viewer, session, hint),
     )
     .await
 }
@@ -1294,18 +1290,6 @@ mod tests {
             let tags = Tags::from([(key.to_string(), "1".to_string())]);
             assert!(refuse_launch_tags(tags.keys()).is_err(), "{key}");
         }
-    }
-
-    #[test]
-    fn only_a_new_webview_boot_re_syncs_the_machine_registry() {
-        let slot = Mutex::new(None);
-        let first = ClientBootId::new("boot-1");
-        assert!(adopt_webview_boot(&slot, &first), "first ask");
-        assert!(!adopt_webview_boot(&slot, &first), "same boot polling");
-        let reload = ClientBootId::new("boot-2");
-        assert!(adopt_webview_boot(&slot, &reload), "webview reload");
-        assert!(!adopt_webview_boot(&slot, &reload));
-        assert_eq!(*slot.lock().unwrap(), Some(reload));
     }
 
     use crate::test_support::source_guard::production_text;

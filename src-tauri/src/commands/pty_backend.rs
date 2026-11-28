@@ -71,7 +71,7 @@ use crate::commands::pty_host::{
     emit_stream, remote_replay_emitter, AppTerminalSink, AttachReservedError, StreamHost,
     StreamIds, StreamItem,
 };
-use crate::commands::pty_layout::app_viewer;
+use crate::commands::pty_viewer::main_viewer;
 use crate::platform_caps::{Caps, TERMINAL_SERVER_SIDECAR};
 use crate::terminal::session_server::{
     launch_detached, terminate_sidecar, ConnectError, Continuity, Presence, RemoteSessionLedger,
@@ -2585,6 +2585,27 @@ pub fn unsubscribe<R: Runtime>(app: &AppHandle<R>, local: u64) -> Result<(), Str
     Ok(())
 }
 
+/// Every terminal host connected now, for a request each must hear (a closed window's viewer
+/// detach): the in-process host, this Mac's sidecar when connected, and each connected
+/// machine's server. Never waits on a connection being made.
+pub(crate) fn connected_viewer_hosts<R: Runtime>(
+    app: &AppHandle<R>,
+) -> Vec<Arc<dyn crate::commands::pty_viewer::ViewerHost>> {
+    let mut hosts: Vec<Arc<dyn crate::commands::pty_viewer::ViewerHost>> = Vec::new();
+    if let Some(local) = Hosts::of(app) {
+        hosts.push(local.in_process);
+        if let Ok(Some(client)) = local.sidecar {
+            hosts.push(client);
+        }
+    }
+    if let Some(manager) = app.try_state::<HostConnectionManager>() {
+        for client in manager.connected_clients() {
+            hosts.push(client);
+        }
+    }
+    hosts
+}
+
 /// Every host's layout as the app's viewer sees it, once a connection being
 /// made to the sidecar settles.
 pub fn layout_snapshots<R: Runtime>(
@@ -2593,10 +2614,10 @@ pub fn layout_snapshots<R: Runtime>(
 ) -> Result<Vec<LayoutSnapshot>, String> {
     let mut layouts = Hosts::settled(app)
         .ok_or_else(|| "PTY registry unavailable".to_string())?
-        .layout_snapshots(&app_viewer(), boot)
+        .layout_snapshots(&main_viewer(), boot)
         .map_err(|e| e.to_string())?;
     if let Some(manager) = app.try_state::<HostConnectionManager>() {
-        layouts.extend(manager.verified_remote_layouts(&app_viewer(), boot));
+        layouts.extend(manager.verified_remote_layouts(&main_viewer(), boot));
     }
     Ok(layouts)
 }
@@ -2605,16 +2626,19 @@ pub(crate) fn admitted_layout_snapshots<R: Runtime>(
     app: &AppHandle<R>,
     boot: &ClientBootId,
 ) -> Result<Vec<RuntimeLayoutReply>, String> {
-    admitted_layout_snapshots_of(app, boot, true)
+    admitted_layout_snapshots_for(app, &main_viewer(), boot, true)
 }
 
-/// [`admitted_layout_snapshots`], of every admitted host (`machines`) or of this Mac's
-/// own runtimes only.
-pub(crate) fn admitted_layout_snapshots_of<R: Runtime>(
+/// [`admitted_layout_snapshots`] as `viewer` sees them, of every admitted host (`machines`)
+/// or of this Mac's own runtimes only. Only `main`'s reads refresh the machines' cached
+/// layouts: those caches are what `main` shows.
+pub(crate) fn admitted_layout_snapshots_for<R: Runtime>(
     app: &AppHandle<R>,
+    viewer: &ViewerId,
     boot: &ClientBootId,
     machines: bool,
 ) -> Result<Vec<RuntimeLayoutReply>, String> {
+    let caches = crate::commands::pty_viewer::is_main_viewer(viewer);
     let local = app
         .try_state::<SessionServerState>()
         .ok_or("local runtime unavailable")?;
@@ -2636,7 +2660,7 @@ pub(crate) fn admitted_layout_snapshots_of<R: Runtime>(
             resolve_member_backend(app, target, true).and_then(|backend| {
                 let snapshot = backend
                     .domain
-                    .layout_snapshot(&app_viewer(), boot)
+                    .layout_snapshot(viewer, boot)
                     .map_err(|error| error.to_string())?;
                 if snapshot.server_id.as_str() != target.namespace.server_id
                     || snapshot.epoch != target.namespace.epoch
@@ -2644,7 +2668,7 @@ pub(crate) fn admitted_layout_snapshots_of<R: Runtime>(
                     return Err("snapshot does not belong to admitted runtime".into());
                 }
                 validate_member_target(app, target)?;
-                if let Some(token) = &backend.remote_token {
+                if let Some(token) = backend.remote_token.as_ref().filter(|_| caches) {
                     let manager = app.state::<HostConnectionManager>();
                     manager
                         .cache_verified_layout(token, snapshot.clone())
@@ -4859,7 +4883,7 @@ mod tests {
         }
         assert_eq!(
             local
-                .layout_snapshot(&app_viewer(), &ClientBootId::new("partition"))
+                .layout_snapshot(&main_viewer(), &ClientBootId::new("partition"))
                 .unwrap()
                 .workspaces[&workspace]
                 .descriptor
@@ -4868,7 +4892,7 @@ mod tests {
         );
         assert_eq!(
             client
-                .layout_snapshot(&app_viewer(), &ClientBootId::new("partition"))
+                .layout_snapshot(&main_viewer(), &ClientBootId::new("partition"))
                 .unwrap()
                 .workspaces[&workspace]
                 .descriptor
@@ -4984,9 +5008,9 @@ mod tests {
             .bind_owned("owned-reveal", session, None, None, Some(owner.clone()))
             .unwrap();
         let boot = ClientBootId::new("reveal-test");
-        let peer_before = local.layout_snapshot(&app_viewer(), &boot).unwrap();
+        let peer_before = local.layout_snapshot(&main_viewer(), &boot).unwrap();
         let peer_process = local.live_child_pids(&[sid(session)]).unwrap();
-        let owner_before = client.layout_snapshot(&app_viewer(), &boot).unwrap();
+        let owner_before = client.layout_snapshot(&main_viewer(), &boot).unwrap();
         let captured =
             workspace_open::capture_workspace_reveal_owner(app.handle(), "owned-reveal").unwrap();
         assert_eq!(captured, owner);
@@ -5001,7 +5025,7 @@ mod tests {
         .unwrap();
         assert_eq!(passive["focus"], false);
         assert_eq!(
-            client.layout_snapshot(&app_viewer(), &boot).unwrap(),
+            client.layout_snapshot(&main_viewer(), &boot).unwrap(),
             owner_before
         );
         let focused = workspace_open::complete_workspace_reveal(
@@ -5014,14 +5038,14 @@ mod tests {
         .unwrap()
         .unwrap();
         assert_eq!(focused["runtimeTarget"]["member"]["slot"], "sidecar");
-        let focused_layout = client.layout_snapshot(&app_viewer(), &boot).unwrap();
+        let focused_layout = client.layout_snapshot(&main_viewer(), &boot).unwrap();
         assert_eq!(
             focused_layout.workspaces[&workspace].tabs[0].placement,
             Placement::Tab
         );
         assert_eq!(focused_layout.viewer.active[&workspace], sid(session));
         assert_eq!(
-            local.layout_snapshot(&app_viewer(), &boot).unwrap(),
+            local.layout_snapshot(&main_viewer(), &boot).unwrap(),
             peer_before
         );
 
@@ -5047,11 +5071,11 @@ mod tests {
         )
         .is_err());
         assert_eq!(
-            client.layout_snapshot(&app_viewer(), &boot).unwrap(),
+            client.layout_snapshot(&main_viewer(), &boot).unwrap(),
             focused_layout
         );
         assert_eq!(
-            local.layout_snapshot(&app_viewer(), &boot).unwrap(),
+            local.layout_snapshot(&main_viewer(), &boot).unwrap(),
             peer_before
         );
 
@@ -5075,7 +5099,7 @@ mod tests {
         )
         .is_err());
         assert_eq!(
-            local.layout_snapshot(&app_viewer(), &boot).unwrap(),
+            local.layout_snapshot(&main_viewer(), &boot).unwrap(),
             peer_before
         );
         assert_eq!(
@@ -5104,7 +5128,7 @@ mod tests {
             workspace_open::capture_workspace_reveal_owner(app.handle(), "owned-reveal").is_err()
         );
         assert_eq!(
-            local.layout_snapshot(&app_viewer(), &boot).unwrap(),
+            local.layout_snapshot(&main_viewer(), &boot).unwrap(),
             peer_before
         );
     }
@@ -5355,7 +5379,7 @@ mod tests {
     fn tab_request(session: &str) -> OpenTab {
         OpenTab {
             cwd: None,
-            viewer: app_viewer(),
+            viewer: main_viewer(),
             workspace: codesense_pty_core::domain::WorkspaceKey::new("root:acme/app"),
             session: sid(session),
             descriptor: Some(codesense_pty_core::layout::WorkspaceDescriptor {
@@ -5374,7 +5398,7 @@ mod tests {
 
     /// The sessions `host`'s layout holds.
     fn placed(host: &dyn TerminalDomain) -> Vec<PtySessionId> {
-        host.layout_snapshot(&app_viewer(), &ClientBootId::new("boot"))
+        host.layout_snapshot(&main_viewer(), &ClientBootId::new("boot"))
             .unwrap()
             .workspaces
             .values()
@@ -5555,7 +5579,7 @@ mod tests {
             Ok(())
         );
         let snapshot = client
-            .layout_snapshot(&app_viewer(), &ClientBootId::new("boot"))
+            .layout_snapshot(&main_viewer(), &ClientBootId::new("boot"))
             .unwrap();
         assert_eq!(
             snapshot.workspaces[&held].descriptor.display_name,
@@ -5591,12 +5615,12 @@ mod tests {
             "applied in-process only: the sidecar's copy is unknown"
         );
         assert!(matches!(
-            cut_off.layout_snapshots(&app_viewer(), &ClientBootId::new("boot")),
+            cut_off.layout_snapshots(&main_viewer(), &ClientBootId::new("boot")),
             Err(LayoutError::Unreachable(_))
         ));
         assert_eq!(
             hosts
-                .layout_snapshots(&app_viewer(), &ClientBootId::new("boot"))
+                .layout_snapshots(&main_viewer(), &ClientBootId::new("boot"))
                 .unwrap()
                 .len(),
             2
@@ -5735,7 +5759,7 @@ mod tests {
         let b = TestServer::start();
         let client_a = sidecar_client(&a);
         let client_b = sidecar_client(&b);
-        let viewer = app_viewer();
+        let viewer = main_viewer();
         let boot = ClientBootId::new("respawn-proof");
         for client in [&client_a, &client_b] {
             client.layout_snapshot(&viewer, &boot).unwrap();

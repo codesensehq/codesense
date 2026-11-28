@@ -4233,7 +4233,7 @@ mod tests {
             let old = fixture.reserve(true);
             let state = fixture.app.state::<SessionServerState>();
             let prior = state.connected().unwrap();
-            let viewer = super::super::pty_layout::app_viewer();
+            let viewer = super::super::pty_viewer::main_viewer();
             prior
                 .layout_snapshot(&viewer, &ClientBootId::new("terminal-recovery"))
                 .unwrap();
@@ -4814,7 +4814,7 @@ mod tests {
             .open_tab(
                 OpenTab {
                     cwd: None,
-                    viewer: super::super::pty_layout::app_viewer(),
+                    viewer: super::super::pty_viewer::main_viewer(),
                     workspace: workspace.clone(),
                     session: PtySessionId::new(&fixture.session),
                     descriptor: Some(WorkspaceDescriptor::default()),

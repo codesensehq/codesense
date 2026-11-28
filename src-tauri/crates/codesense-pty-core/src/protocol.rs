@@ -641,6 +641,26 @@ pub enum Request {
     CloseWorkspace {
         workspace: WorkspaceKey,
     },
+    /// Forget `viewer` (its window closed). Answered with [`Reply::Done`];
+    /// asked only of a host that advertises `Capability::ViewerDetachV1`.
+    DetachViewer {
+        viewer: ViewerId,
+    },
+    /// Forget `viewer`'s view of `session` (the terminal left its window).
+    /// Answered with [`Reply::Done`]; asked only of a host that advertises
+    /// `Capability::ViewerDetachV1`.
+    DetachView {
+        viewer: ViewerId,
+        session: PtySessionId,
+    },
+    /// Forget every viewer whose id starts with `prefix` except those in
+    /// `keep` (the viewers a crash left behind). Answered with
+    /// [`Reply::Done`]; asked only of a host that advertises
+    /// `Capability::ViewerDetachV1`.
+    RetainViewers {
+        keep: Vec<ViewerId>,
+        prefix: String,
+    },
 }
 
 /// What the usage spool holds past a sequence number. `epoch` names the spool file: a new one means
@@ -1977,11 +1997,22 @@ mod tests {
             Request::CloseWorkspace {
                 workspace: workspace.clone(),
             },
+            Request::DetachViewer {
+                viewer: viewer.clone(),
+            },
+            Request::DetachView {
+                viewer: viewer.clone(),
+                session: session("s1"),
+            },
+            Request::RetainViewers {
+                keep: vec![viewer.clone()],
+                prefix: "app:i1:".into(),
+            },
         ];
         assert_eq!(
             requests.len(),
-            20,
-            "layout verbs, writable ownership and uncertain reservation reconciliation"
+            23,
+            "layout verbs, viewer detach, writable ownership and uncertain reservation reconciliation"
         );
         for request in requests {
             let frame = Frame::control(&Message::Call {

@@ -1142,7 +1142,7 @@ fn routine_of(
     }
     let snapshot = client
         .layout_snapshot(
-            &crate::commands::pty_layout::app_viewer(),
+            &crate::commands::pty_viewer::main_viewer(),
             &codesense_pty_core::domain::ClientBootId::new("routine-binding"),
         )
         .map_err(|e| e.to_string())?;

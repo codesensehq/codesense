@@ -905,6 +905,18 @@ impl TerminalDomain for TerminalHost {
     fn close_workspace(&self, workspace: &WorkspaceKey) -> Result<(), LayoutError> {
         self.apply_ok(self.layout.close_workspace(workspace))
     }
+
+    fn detach_viewer(&self, viewer: &ViewerId) -> Result<(), LayoutError> {
+        self.apply_ok(self.layout.detach_viewer(viewer))
+    }
+
+    fn detach_view(&self, viewer: &ViewerId, session: &PtySessionId) -> Result<(), LayoutError> {
+        self.apply_ok(self.layout.detach_view(viewer, session))
+    }
+
+    fn retain_viewers(&self, keep: &[ViewerId], prefix: &str) -> Result<(), LayoutError> {
+        self.apply_ok(self.layout.retain_viewers(keep, prefix))
+    }
 }
 
 #[cfg(test)]

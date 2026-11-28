@@ -1195,8 +1195,9 @@ pub async fn handle(
         let session = crate::commands::machines::RuntimeSessionReference::Admitted(Box::new(
             tab.target.clone(),
         ));
-        if let Err(error) = crate::commands::pty_layout::terminal_close_tab(
+        if let Err(error) = crate::commands::pty_layout::close_tab_as(
             app.clone(),
+            crate::commands::pty_viewer::main_viewer(),
             session,
             codesense_pty_core::layout::CloseMode::Kill,
         )

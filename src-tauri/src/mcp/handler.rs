@@ -8143,8 +8143,9 @@ impl CodesenseHandler {
         use crate::commands::mcp_workspace::{AGENT_COLS, AGENT_ROWS};
         use crate::commands::pty::{AttachWarmArgs, SpawnPtyArgs, SpawnPtySize};
         use crate::commands::pty_layout::{
-            app_viewer, open_layout_tab, parse_team_key, team_key, workspace_key, TabSpawn,
+            open_layout_tab, parse_team_key, team_key, workspace_key, TabSpawn,
         };
+        use crate::commands::pty_viewer::main_viewer;
         use codesense_pty_core::domain::PtySessionId;
         use codesense_pty_core::layout::{OpenTab, Placement, Tags, WorkspaceDescriptor};
 
@@ -8212,7 +8213,7 @@ impl CodesenseHandler {
         let (org, team) = parse_team_key(&ws.team_key);
         let open = OpenTab {
             cwd: None,
-            viewer: app_viewer(),
+            viewer: main_viewer(),
             workspace: workspace_key(&ws.team_key, form),
             session: PtySessionId::new(session_id.clone()),
             descriptor: Some(WorkspaceDescriptor {
@@ -8521,7 +8522,8 @@ impl CodesenseHandler {
     async fn close_tab_by_handle(&self, handle: &str) -> Result<serde_json::Value, ErrorData> {
         use crate::commands::dashboard_launch::DashboardLaunchState;
         use crate::commands::machines::{RuntimeSessionReference, LOCAL_MACHINE_ID};
-        use crate::commands::pty_layout::terminal_close_tab;
+        use crate::commands::pty_layout::close_tab_as;
+        use crate::commands::pty_viewer::main_viewer;
         use codesense_pty_core::layout::{CloseMode, CloseOutcome};
 
         if handle.is_empty() {
@@ -8585,36 +8587,42 @@ impl CodesenseHandler {
         // verb there.
         let session_ref = RuntimeSessionReference::Admitted(Box::new(tab.target.clone()));
 
-        let reply =
-            match terminal_close_tab(self.app_handle.clone(), session_ref, CloseMode::Kill).await {
-                Ok(outcome) => {
-                    // `Killed` ⇒ a live process was running at close time; `Removed`
-                    // ⇒ the entry was already exited (nothing to kill). `Backgrounded`
-                    // is impossible with CloseMode::Kill — mapped defensively.
-                    let had_cli_running = match outcome {
-                        CloseOutcome::Killed | CloseOutcome::Backgrounded => true,
-                        CloseOutcome::Removed => false,
-                    };
-                    serde_json::json!({
-                        "closed": true,
-                        "hadCliRunning": had_cli_running,
-                        "remote": is_remote,
-                    })
+        let reply = match close_tab_as(
+            self.app_handle.clone(),
+            main_viewer(),
+            session_ref,
+            CloseMode::Kill,
+        )
+        .await
+        {
+            Ok(outcome) => {
+                // `Killed` ⇒ a live process was running at close time; `Removed`
+                // ⇒ the entry was already exited (nothing to kill). `Backgrounded`
+                // is impossible with CloseMode::Kill — mapped defensively.
+                let had_cli_running = match outcome {
+                    CloseOutcome::Killed | CloseOutcome::Backgrounded => true,
+                    CloseOutcome::Removed => false,
+                };
+                serde_json::json!({
+                    "closed": true,
+                    "hadCliRunning": had_cli_running,
+                    "remote": is_remote,
+                })
+            }
+            Err(error) if is_already_closed_error(&error) => {
+                // An already-gone session reads as a benign idempotent
+                // close (we HAD it, it's now gone).
+                if !is_remote {
+                    self.release_closed_session(tab.session.clone()).await;
                 }
-                Err(error) if is_already_closed_error(&error) => {
-                    // An already-gone session reads as a benign idempotent
-                    // close (we HAD it, it's now gone).
-                    if !is_remote {
-                        self.release_closed_session(tab.session.clone()).await;
-                    }
-                    serde_json::json!({
-                        "closed": true,
-                        "alreadyClosed": true,
-                        "remote": is_remote,
-                    })
-                }
-                Err(error) => return Err(invalid_err("close_terminal_tab", error)),
-            };
+                serde_json::json!({
+                    "closed": true,
+                    "alreadyClosed": true,
+                    "remote": is_remote,
+                })
+            }
+            Err(error) => return Err(invalid_err("close_terminal_tab", error)),
+        };
         Ok(self.with_seat_cleanup(handle, is_remote, reply).await)
     }
 
@@ -8680,7 +8688,8 @@ impl CodesenseHandler {
     ) -> Result<CallToolResult, ErrorData> {
         use crate::commands::interactive_gate::InteractiveGate;
         use crate::commands::machines::RuntimeSessionReference;
-        use crate::commands::pty_layout::terminal_close_tab;
+        use crate::commands::pty_layout::close_tab_as;
+        use crate::commands::pty_viewer::main_viewer;
         use codesense_pty_core::layout::CloseMode;
 
         InteractiveGate::admit("close_workspace").map_err(gate_err)?;
@@ -8785,7 +8794,14 @@ impl CodesenseHandler {
         for tab in tab_indices.iter().map(|&i| &live.tabs[i]) {
             let label = tab.handle.clone().unwrap_or_else(|| tab.session.clone());
             let session_ref = RuntimeSessionReference::Admitted(Box::new(tab.target.clone()));
-            match terminal_close_tab(self.app_handle.clone(), session_ref, CloseMode::Kill).await {
+            match close_tab_as(
+                self.app_handle.clone(),
+                main_viewer(),
+                session_ref,
+                CloseMode::Kill,
+            )
+            .await
+            {
                 Ok(_) => tabs_closed.push(serde_json::json!(label)),
                 Err(error) if is_already_closed_error(&error) => {}
                 Err(error) => failed.push(serde_json::json!({ "tab": label, "error": error })),
@@ -19461,11 +19477,11 @@ pub(crate) mod tests {
             .find("is_self_closing_tab(")
             .unwrap_or_else(|| panic!("{verb} must call is_self_closing_tab"));
         let teardown = body
-            .find("terminal_close_tab(")
-            .unwrap_or_else(|| panic!("{verb} must call terminal_close_tab"));
+            .find("close_tab_as(")
+            .unwrap_or_else(|| panic!("{verb} must call close_tab_as"));
         assert!(
             self_close < teardown,
-            "{verb} must refuse selfClose before any terminal_close_tab call"
+            "{verb} must refuse selfClose before any close_tab_as call"
         );
         assert!(
             body.contains("\"reason\": \"selfClose\""),
@@ -19503,7 +19519,7 @@ pub(crate) mod tests {
             &source[at..next_fn]
         };
         let tab = body_of("close_tab_by_handle");
-        let teardown = tab.find("terminal_close_tab(").unwrap();
+        let teardown = tab.find("close_tab_as(").unwrap();
         let cleanup = tab
             .rfind("self.with_seat_cleanup(handle, is_remote, reply)")
             .unwrap();
@@ -19512,7 +19528,7 @@ pub(crate) mod tests {
             "reap_story_seats(&self.app_handle, story_id, Some(seat), SEAT_CLOSE_WAITS)"
         ));
         let workspace = body_of("close_workspace");
-        let teardown = workspace.find("terminal_close_tab(").unwrap();
+        let teardown = workspace.find("close_tab_as(").unwrap();
         let cleanup = workspace.find("reap_story_seats(").unwrap();
         assert!(teardown < cleanup);
         assert!(workspace[cleanup..].contains("\"seatWorktreesRemoved\": seats_removed"));

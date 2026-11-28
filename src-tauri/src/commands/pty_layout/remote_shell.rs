@@ -1574,7 +1574,10 @@ pub(crate) async fn restore_on_machine(app: &tauri::AppHandle, machine: &str) {
                 .ok_or("remote admission unavailable")?;
             let snapshot = backend
                 .domain()
-                .layout_snapshot(&app_viewer(), &ClientBootId::new("remote-human"))
+                .layout_snapshot(
+                    &pty_viewer::main_viewer(),
+                    &ClientBootId::new("remote-human"),
+                )
                 .map_err(|e| e.to_string())?;
             let live: Vec<LiveRemoteTab> = snapshot
                 .workspaces
@@ -2142,7 +2145,7 @@ async fn finish_launch_inner(
             let meta_workspace = home.workspace.as_str().to_string();
             let open = OpenTab {
                 cwd: None,
-                viewer: app_viewer(),
+                viewer: pty_viewer::main_viewer(),
                 workspace: home.workspace,
                 session: record.target.session.clone(),
                 descriptor: Some(home.descriptor),
@@ -2244,7 +2247,10 @@ async fn reconcile(
             }
             let snapshot = backend
                 .domain()
-                .layout_snapshot(&app_viewer(), &ClientBootId::new("remote-human"))
+                .layout_snapshot(
+                    &pty_viewer::main_viewer(),
+                    &ClientBootId::new("remote-human"),
+                )
                 .map_err(|e| e.to_string())?;
             let tab = snapshot
                 .workspaces
@@ -2474,7 +2480,10 @@ async fn recover(
                 .ok_or("remote admission unavailable")?;
             let snapshot = backend
                 .domain()
-                .layout_snapshot(&app_viewer(), &ClientBootId::new("remote-human"))
+                .layout_snapshot(
+                    &pty_viewer::main_viewer(),
+                    &ClientBootId::new("remote-human"),
+                )
                 .map_err(|e| e.to_string())?;
             backend.revalidate(&app)?;
             let owner = backend

@@ -3,7 +3,8 @@
 #[ignore = "owned SSH fixture; shared production MCP dispatch, injected profile authority"]
 fn mcp_machine_shell_over_real_ssh() {
     use crate::commands::host_connection::RemoteTransportOwner;
-    use crate::commands::pty_layout::{app_viewer, RemoteShellRecord};
+    use crate::commands::pty_layout::RemoteShellRecord;
+    use crate::commands::pty_viewer::main_viewer;
     use crate::mcp::machine_tools::{DraftOperationParams, OpenRemoteTabParams};
     use crate::mcp::remote_terminal::{execute, RemoteOperation};
     use crate::terminal::session_server::{Ledger, SessionServerClient, SessionServerState};
@@ -73,7 +74,7 @@ fn mcp_machine_shell_over_real_ssh() {
         assert!(request.into_request().is_ok());
         let mut record=RemoteShellRecord {
         workspace_story_id: None, agent: None, phase: Default::default(),handle:"remote-tab-mcp-fixture".into(),owner_id:41,request_id,machine_id:saved.machine_id.clone(),team_key:"org:team".into(),workspace_id:"work".into(),workspace:crate::commands::pty_layout::workspace_key("org:team","work"),cwd:"/home/dev".into(),name:None, mcp_profile_revision: None, mcp_inventory: Vec::new(), hooks: false,launch: Default::default(),permission_mode: Default::default(),target:RuntimeSessionTarget{runtime:target.clone(),session:session.clone()},status:"opened",identity:Default::default()};
-        client.open_remote_tab(OpenTab{viewer:app_viewer(),workspace:record.workspace.clone(),session:session.clone(),descriptor:Some(WorkspaceDescriptor{display_name:"MCP fixture".into(),kind:"generic".into(),worktree_path:Some("/home/dev".into()),..Default::default()}),cwd:None,name:None,role:None,tags:[("remoteHandle".into(),record.handle.clone()),("remoteRequestId".into(),request_id.to_string())].into(),placement:Placement::Tab,index:None,activate:false},||client.spawn(SpawnIntent{agent_env:Vec::new(),remote_launch:Default::default(),login_path:None,command:None,argv:None,shell:None,cwd:record.cwd.clone(),cols:100,rows:30,shell_integration:true,starship_preset:None,api_port:None,env_remove:vec![],env:vec![]},registration(id,None,false)).map(|_|())).unwrap();
+        client.open_remote_tab(OpenTab{viewer:main_viewer(),workspace:record.workspace.clone(),session:session.clone(),descriptor:Some(WorkspaceDescriptor{display_name:"MCP fixture".into(),kind:"generic".into(),worktree_path:Some("/home/dev".into()),..Default::default()}),cwd:None,name:None,role:None,tags:[("remoteHandle".into(),record.handle.clone()),("remoteRequestId".into(),request_id.to_string())].into(),placement:Placement::Tab,index:None,activate:false},||client.spawn(SpawnIntent{agent_env:Vec::new(),remote_launch:Default::default(),login_path:None,command:None,argv:None,shell:None,cwd:record.cwd.clone(),cols:100,rows:30,shell_integration:true,starship_preset:None,api_port:None,env_remove:vec![],env:vec![]},registration(id,None,false)).map(|_|())).unwrap();
         let remote_pid=client.live_child_pids(std::slice::from_ref(&session)).unwrap()[0].unwrap();
         let revalidate=||manager.revalidate_backend(&exact).map_err(|e|format!("{e:?}"));
         let run=execute(&client,&record,RemoteOperation::Run{command:"printf 'MCP_%s\\nCWD=%s\\nPID=%s\\n' WORKING \"$PWD\" \"$$\"".into(),target:crate::mcp::remote_terminal::InputTarget::Auto},revalidate);
@@ -118,7 +119,7 @@ fn mcp_machine_shell_over_real_ssh() {
         assert_eq!(after["status"],"ok","{after}");
         assert_eq!(client.live_child_pids(std::slice::from_ref(&session)).unwrap()[0],Some(remote_pid));
         assert_eq!(client.live_session_ids().unwrap(),before,"read/reconnect must not spawn");
-        client.close_tab(&app_viewer(),&session,CloseMode::Kill).unwrap();
+        client.close_tab(&main_viewer(),&session,CloseMode::Kill).unwrap();
         manager.disconnect(&saved.machine_id).await.unwrap();
         println!("MCP_SHARED_DISPATCH_PASS remote_pid={remote_pid} local_pid={local_pid} head={head}");
     });

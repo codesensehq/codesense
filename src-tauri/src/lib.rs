@@ -447,7 +447,9 @@ pub fn run() {
     // SW-XS-4: focus changes start no sync work (see `on_window_focus_changed`).
     let builder = builder.on_window_event(|window, event| {
         if matches!(event, tauri::WindowEvent::Destroyed) {
-            live_hub::drop_window(window.app_handle(), window.label());
+            let label = window.label();
+            live_hub::drop_window(window.app_handle(), label);
+            commands::pty_viewer::window_destroyed(window.app_handle(), label);
         }
         if let tauri::WindowEvent::Focused(focused) = event {
             on_window_focus_changed(window.app_handle(), *focused);
@@ -750,6 +752,10 @@ pub fn run() {
             }));
             app.manage(local_sessions);
             commands::pty_backend::reconnect_on_loss(app.handle());
+            // Each window other than `main` is its own viewer on every host, named under this
+            // install's id; each host forgets the viewers a crash left behind as it connects.
+            app.manage(commands::pty_viewer::InstallId::read_local());
+            commands::pty_viewer::sweep_on_connect(app.handle());
             {
                 let handle = app.handle().clone();
                 let resolved = std::thread::Builder::new()

@@ -497,7 +497,7 @@ mod tests {
         // Refresh through the real session-server layout RPC, as registration does.
         client
             .layout_snapshot(
-                &crate::commands::pty_layout::app_viewer(),
+                &crate::commands::pty_viewer::main_viewer(),
                 &ClientBootId::new("capture-cycle"),
             )
             .unwrap();

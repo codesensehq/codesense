@@ -3949,6 +3949,26 @@ impl HostConnectionManager {
             .map_err(|_| ConnectedBackendError::IdentityMismatch)
     }
 
+    /// Every connected machine's terminal-server client, for a request each must hear (a
+    /// closed window's viewer detach).
+    pub(crate) fn connected_clients(&self) -> Vec<Arc<SessionServerClient>> {
+        let connected: Vec<String> = {
+            let core = lock(&self.core);
+            core.machines
+                .iter()
+                .filter(|(_, gate)| {
+                    gate.present && matches!(gate.state, HostConnectionState::Connected { .. })
+                })
+                .map(|(id, _)| id.clone())
+                .collect()
+        };
+        connected
+            .iter()
+            .flat_map(|machine_id| self.connected_backend(machine_id))
+            .map(|snapshot| ConnectedBackendSnapshot::client(&snapshot))
+            .collect()
+    }
+
     pub(crate) fn verified_remote_layouts(
         &self,
         viewer: &ViewerId,
@@ -5847,7 +5867,7 @@ mod tests {
             let client_bytes = codesense_pty_core::protocol::client_hello(
                 hello.instance_id.clone(),
                 env!("CARGO_PKG_VERSION"),
-                &crate::commands::pty_layout::app_viewer(),
+                &crate::commands::pty_viewer::main_viewer(),
             )
             .frame()
             .unwrap()
@@ -6220,7 +6240,7 @@ mod tests {
             let client_bytes = codesense_pty_core::protocol::client_hello(
                 hello.instance_id.clone(),
                 env!("CARGO_PKG_VERSION"),
-                &crate::commands::pty_layout::app_viewer(),
+                &crate::commands::pty_viewer::main_viewer(),
             )
             .frame()
             .unwrap()

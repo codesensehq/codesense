@@ -2263,6 +2263,7 @@ impl Host {
         hello.capabilities.push(Capability::ScopedReapV1);
         hello.capabilities.push(Capability::ServerStatusV1);
         hello.capabilities.push(Capability::MachineStatsV1);
+        hello.capabilities.push(Capability::ViewerDetachV1);
         if lock(&self.activity_service).is_some() {
             hello.capabilities.push(Capability::ActivityV1);
             hello.capabilities.push(Capability::SessionOutputV1);
@@ -4074,6 +4075,15 @@ impl Host {
             })),
             Request::CloseWorkspace { workspace } => blocking(Box::new(move |host| {
                 layout(host.terminal.close_workspace(&workspace).map(done))
+            })),
+            Request::DetachViewer { viewer } => blocking(Box::new(move |host| {
+                layout(host.terminal.detach_viewer(&viewer).map(done))
+            })),
+            Request::DetachView { viewer, session } => blocking(Box::new(move |host| {
+                layout(host.terminal.detach_view(&viewer, &session).map(done))
+            })),
+            Request::RetainViewers { keep, prefix } => blocking(Box::new(move |host| {
+                layout(host.terminal.retain_viewers(&keep, &prefix).map(done))
             })),
         };
         // A request that panicked still gets an answer, so its caller never

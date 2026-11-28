@@ -55,7 +55,8 @@ use super::launch_telemetry::{
     LaunchTelemetryTracker,
 };
 use super::pty::{fan_out_sessions, kill_session, session_has_live_agent, submit_pty_line};
-use super::pty_layout::{app_viewer, open_layout_tab, team_key, workspace_key, TabSpawn};
+use super::pty_layout::{open_layout_tab, team_key, workspace_key, TabSpawn};
+use super::pty_viewer::main_viewer;
 use super::route_to_context::{
     derive_active_context, derive_context_for, ActiveContext, ContextResolution,
 };
@@ -2606,7 +2607,7 @@ fn agent_open_tab(
         SessionView::Tab { focus } => (Placement::Tab, focus),
     };
     OpenTab {
-        viewer: app_viewer(),
+        viewer: main_viewer(),
         workspace: home.workspace,
         session: PtySessionId::new(session_id.to_string()),
         descriptor: Some(home.descriptor),

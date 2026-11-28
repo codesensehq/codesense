@@ -689,6 +689,55 @@ impl LayoutState {
             })
             .collect()
     }
+
+    /// Forget what each viewer `gone` picks knows of session `only` (`None`:
+    /// the whole viewer), so it never owns that size again. Every session whose
+    /// owning size changes as a result is resized to its new owner.
+    fn forget_views(
+        &mut self,
+        gone: impl Fn(&ViewerId) -> bool,
+        only: Option<&PtySessionId>,
+    ) -> Vec<(PtySessionId, u16, u16)> {
+        let leaving: Vec<ViewerId> = self.viewers.keys().filter(|id| gone(id)).cloned().collect();
+        let Some(prefer) = leaving.first() else {
+            return Vec::new();
+        };
+        let sized: BTreeSet<PtySessionId> = leaving
+            .iter()
+            .filter_map(|id| self.viewers.get(id))
+            .flat_map(|v| v.sizes.keys())
+            .filter(|s| only.is_none_or(|only| only == *s))
+            .cloned()
+            .collect();
+        let before: Vec<Option<(u16, u16)>> =
+            sized.iter().map(|s| self.size_owner(s, prefer)).collect();
+        for id in &leaving {
+            match only {
+                None => {
+                    self.viewers.remove(id);
+                }
+                Some(session) => {
+                    if let Some(view) = self.viewers.get_mut(id) {
+                        view.sizes.remove(session);
+                        view.views.remove(session);
+                    }
+                }
+            }
+        }
+        sized
+            .into_iter()
+            .zip(before)
+            .filter_map(|(session, before)| {
+                let after = self
+                    .viewers
+                    .values()
+                    .filter_map(|v| v.sizes.get(&session).map(|size| (v.last_activity, *size)))
+                    .max_by_key(|(rank, _)| *rank)
+                    .map(|(_, size)| size)?;
+                (Some(after) != before).then_some((session, after.0, after.1))
+            })
+            .collect()
+    }
 }
 
 /// The host's terminal layout. Every mutation runs under one lock and hands its
@@ -1328,6 +1377,58 @@ impl LayoutModel {
         let mut effects = state.publish([workspace.clone()]);
         effects.kill = sessions;
         Ok(effects)
+    }
+
+    /// Forget `viewer` (its window closed): its focus, hints and sizes go, and
+    /// every session it owned the size of is resized to its next owner. A
+    /// viewer the host never saw is a no-op; one that attaches again starts
+    /// fresh.
+    pub(crate) fn detach_viewer(&self, viewer: &ViewerId) -> Result<Effects, LayoutError> {
+        let mut state = self.lock()?;
+        let resize = state.forget_views(|id| id == viewer, None);
+        Ok(Effects {
+            resize,
+            ..Effects::default()
+        })
+    }
+
+    /// Forget `viewer`'s view of `session` only (the terminal left its
+    /// window): its size and scroll hint for it go, so the size returns to the
+    /// next owner. Nothing else of the viewer changes.
+    pub(crate) fn detach_view(
+        &self,
+        viewer: &ViewerId,
+        session: &PtySessionId,
+    ) -> Result<Effects, LayoutError> {
+        let mut state = self.lock()?;
+        let resize = state.forget_views(|id| id == viewer, Some(session));
+        Ok(Effects {
+            resize,
+            ..Effects::default()
+        })
+    }
+
+    /// Forget every viewer whose id starts with `prefix` except those in
+    /// `keep`: the viewers a crashed or disconnected app left behind. Only
+    /// the host knows which viewers exist, so the sweep runs here. An empty
+    /// prefix would match every viewer, so it forgets none.
+    pub(crate) fn retain_viewers(
+        &self,
+        keep: &[ViewerId],
+        prefix: &str,
+    ) -> Result<Effects, LayoutError> {
+        let mut state = self.lock()?;
+        if prefix.is_empty() {
+            return Ok(Effects::default());
+        }
+        let resize = state.forget_views(
+            |id| id.as_str().starts_with(prefix) && !keep.contains(id),
+            None,
+        );
+        Ok(Effects {
+            resize,
+            ..Effects::default()
+        })
     }
 
     /// Record `viewer`'s requested size for `session` and return the size the

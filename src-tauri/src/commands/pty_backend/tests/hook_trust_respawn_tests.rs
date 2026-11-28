@@ -66,7 +66,7 @@ fn check_respawn_attribution(captured_in_process: bool) {
     assert!(captured.domain().has_session(&session_id).unwrap());
     assert!(wait_until(|| captured
         .domain()
-        .layout_snapshot(&app_viewer(), &ClientBootId::new("captured-hook-trust"),)
+        .layout_snapshot(&main_viewer(), &ClientBootId::new("captured-hook-trust"),)
         .ok()
         .is_some_and(|layout| layout
             .workspaces

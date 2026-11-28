@@ -666,7 +666,7 @@ impl PendingRemoteTransport {
         let ours = client_hello(
             hello.instance_id.clone(),
             env!("CARGO_PKG_VERSION"),
-            &crate::commands::pty_layout::app_viewer(),
+            &crate::commands::pty_viewer::main_viewer(),
         );
         codesense_host_proto::write_frame(
             &mut writer,
