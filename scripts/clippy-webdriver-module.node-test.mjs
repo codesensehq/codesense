@@ -34,6 +34,8 @@ const message = (
       rendered: `${level}: ${text}`,
     },
   });
+const aborting = (target) =>
+  message("error", null, { code: null, text: "aborting due to 1 previous error", target });
 const artifact = (target) => JSON.stringify({ reason: "compiler-artifact", target });
 const finished = (success) => JSON.stringify({ reason: "build-finished", success });
 
@@ -52,9 +54,70 @@ test("passes warnings and deny lints in the app crate outside the module", () =>
     message("warning", "src-tauri/src/windows/mod.rs", { code: "unused_imports" }),
     message("warning", "src-tauri/src/windows/e2e_names.rs"),
     message("error", "src-tauri/src/commands/fs.rs", { code: "clippy::never_loop" }),
+    aborting(APP),
     finished(false),
   ];
   assert.deepEqual(clippyProblems(lines.join("\n")), []);
+});
+
+test("fails closed when the app crate's check ends without rustc's summary after a lint", () => {
+  // A killed rustc leaves the lint it had printed and no "aborting due to" summary, so the
+  // lint pass may never have reached the module.
+  const lines = [
+    message("error", "src-tauri/src/commands/fs.rs", { code: "clippy::never_loop" }),
+    finished(false),
+  ];
+  assert.deepEqual(clippyProblems(lines.join("\n")), [
+    "the app crate's check ended without rustc's summary (a crash or a killed rustc), so the module may not have been linted",
+  ]);
+});
+
+test("fails closed when an app compile error ends without rustc's summary", () => {
+  // Any error in the app crate, not only a lint, needs the crate's own summary to show its
+  // check was not cut short.
+  const lines = [
+    message("error", "src-tauri/src/lib.rs", { code: "E0425", text: "cannot find value" }),
+    finished(false),
+  ];
+  assert.deepEqual(clippyProblems(lines.join("\n")), [
+    "src-tauri/src/lib.rs:7: error: cannot find value",
+    "the app crate's check ended without rustc's summary (a crash or a killed rustc), so the module may not have been linted",
+  ]);
+});
+
+test("a dependency's summary does not stand in for the app crate's", () => {
+  const lines = [
+    message("error", "src-tauri/src/commands/fs.rs", { code: "clippy::never_loop" }),
+    aborting(PLATFORM),
+    finished(false),
+  ];
+  assert.deepEqual(clippyProblems(lines.join("\n")), [
+    "the app crate's check ended without rustc's summary (a crash or a killed rustc), so the module may not have been linted",
+  ]);
+});
+
+test("fails an error level it does not know, even with the app crate's summary", () => {
+  const lines = [
+    message("error", "src-tauri/src/commands/fs.rs", { code: "clippy::never_loop" }),
+    message("error: a new kind", null, { code: null, text: "something went wrong" }),
+    aborting(APP),
+    finished(false),
+  ];
+  assert.deepEqual(clippyProblems(lines.join("\n")), [
+    "the compiler reported an error level this script does not know (error: a new kind): something went wrong",
+  ]);
+});
+
+test("fails a compiler crash anywhere, even with the app crate's summary", () => {
+  const lines = [
+    message("error", "src-tauri/src/commands/fs.rs", { code: "clippy::never_loop" }),
+    message("error: internal compiler error", null, { code: null, text: "unexpected panic" }),
+    aborting(APP),
+    finished(false),
+  ];
+  assert.deepEqual(clippyProblems(lines.join("\n")), [
+    "the compiler crashed (error: internal compiler error): unexpected panic",
+  ]);
 });
 
 test("fails any lint or warning in the module or a file under it", () => {
@@ -62,6 +125,7 @@ test("fails any lint or warning in the module or a file under it", () => {
     message("warning", "src-tauri/src/windows/e2e.rs"),
     message("warning", "src-tauri/src/windows/e2e/seed.rs", { code: "unused_mut" }),
     message("error", "/home/runner/work/x/x/src-tauri/src/windows/e2e.rs"),
+    aborting(APP),
     finished(false),
   ];
   assert.deepEqual(clippyProblems(lines.join("\n")), [
@@ -79,6 +143,18 @@ test("fails a compile error in the app crate", () => {
   ];
   assert.deepEqual(clippyProblems(lines.join("\n")), [
     "src-tauri/src/lib.rs:7: error: cannot find value",
+  ]);
+});
+
+test("fails a spanless app crate error, even beside a lint elsewhere and the app's summary", () => {
+  const lines = [
+    message("error", "src-tauri/src/commands/fs.rs", { code: "clippy::never_loop" }),
+    message("error", null, { code: null, text: "could not write output" }),
+    aborting(APP),
+    finished(false),
+  ];
+  assert.deepEqual(clippyProblems(lines.join("\n")), [
+    "error in the app crate: could not write output",
   ]);
 });
 
