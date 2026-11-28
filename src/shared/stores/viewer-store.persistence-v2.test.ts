@@ -1626,4 +1626,29 @@ describe("mosaic leaves saved before leaves carried an id", () => {
     expect(s.tabGridLayout[gridKey].root).toEqual(inMemory);
     applyOwnedViewerPrefs({}, true);
   });
+
+  it("saves foreground and tab-grid layouts through one body, a root of none as none", async () => {
+    resetViewer();
+    useViewerStore.setState({
+      foregroundLayout: {
+        [TEAM_KEY]: { sizes: [40, 60], direction: "row", preset: "rows", root: null },
+      },
+      foregroundLayoutByRail: {
+        [TEAM_KEY]: { epic: { sizes: [], direction: "column", preset: "rows", root: null } },
+      },
+      tabGridLayout: { [gridKey]: { preset: "grid", root: inMemory as never } },
+    });
+    const viewer = (await persisted()).viewer;
+    const fg = viewer.foregroundLayout as Record<string, { root?: unknown }>;
+    const byRail = viewer.foregroundLayoutByRail as Record<
+      string,
+      Record<string, { root?: unknown }>
+    >;
+    // The saved state leaves a root of none out, which a load reads back as none.
+    expect(fg[TEAM_KEY]).toMatchObject({ sizes: [40, 60], direction: "row", preset: "rows" });
+    expect(fg[TEAM_KEY].root ?? null).toBeNull();
+    expect(byRail[TEAM_KEY].epic).toMatchObject({ sizes: [], direction: "column", preset: "rows" });
+    expect(byRail[TEAM_KEY].epic.root ?? null).toBeNull();
+    expect(viewer.terminalTabGridSizes).toEqual({ [gridKey]: { preset: "grid", root: bothKeys } });
+  });
 });

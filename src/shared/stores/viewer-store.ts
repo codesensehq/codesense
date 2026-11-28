@@ -1883,10 +1883,11 @@ function restoredForegroundLayoutsByRail(
   );
 }
 
-/** The saved form of foreground layouts: every root's leaves carry both keys. */
-function savedForegroundLayouts(
-  layouts: Record<string, ForegroundLayout>,
-): Record<string, Omit<ForegroundLayout, "root"> & { root: SavedMosaicNode | null }> {
+/** Layouts in their saved form, foreground and tab-grid alike: every root's
+ *  leaves carry both keys, and a root of none saves as `null`. */
+function savedLayouts<T extends { root: MosaicNode | null }>(
+  layouts: Record<string, T>,
+): Record<string, Omit<T, "root"> & { root: SavedMosaicNode | null }> {
   return Object.fromEntries(
     Object.entries(layouts).map(([k, v]) => [k, { ...v, root: serializeMosaicNode(v.root) }]),
   );
@@ -1895,18 +1896,9 @@ function savedForegroundLayouts(
 /** Every team's per-rail foreground layouts, in their saved form. */
 function savedForegroundLayoutsByRail(
   byTeam: Record<string, Record<string, ForegroundLayout>>,
-): Record<string, ReturnType<typeof savedForegroundLayouts>> {
+): Record<string, ReturnType<typeof savedLayouts<ForegroundLayout>>> {
   return Object.fromEntries(
-    Object.entries(byTeam).map(([tk, byRail]) => [tk, savedForegroundLayouts(byRail)]),
-  );
-}
-
-/** The tab-grid layouts in their saved form: every leaf carries both keys. */
-function savedTabGridLayouts(
-  grids: Record<string, SavedPresetTree>,
-): Record<string, Omit<SavedPresetTree, "root"> & { root: SavedMosaicNode | null }> {
-  return Object.fromEntries(
-    Object.entries(grids).map(([k, v]) => [k, { ...v, root: serializeMosaicNode(v.root) }]),
+    Object.entries(byTeam).map(([tk, byRail]) => [tk, savedLayouts(byRail)]),
   );
 }
 
@@ -6164,7 +6156,7 @@ function serializedViewerPrefs(state: ViewerState): Record<string, unknown> {
     agentsPaneHiddenTeams,
     agentsWorkspaceFilter,
     // Saved with both leaf keys, so a build that reads only `workspaceId` still opens it.
-    foregroundLayout: savedForegroundLayouts(foregroundLayout),
+    foregroundLayout: savedLayouts(foregroundLayout),
     // SW-EW-40: persist the per-rail foreground arrangement (railKeyByWorkspaceId
     // is runtime-only — a pure tree derivation — so it is NOT serialized here,
     // like selectedEpicDirName).
@@ -6206,7 +6198,7 @@ function serializedViewerPrefs(state: ViewerState): Record<string, unknown> {
     // Remote tab focus belongs to this viewer; local focus comes from its host.
     terminalViewerFocus: state.terminalLayout.focus ?? {},
     // The sizes each workspace's tab grid was dragged to (this viewer's own).
-    terminalTabGridSizes: savedTabGridLayouts(state.tabGridLayout),
+    terminalTabGridSizes: savedLayouts(state.tabGridLayout),
     statusNavExpandedPaths,
     settings,
     pipelineScope,

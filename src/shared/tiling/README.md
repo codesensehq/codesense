@@ -58,7 +58,9 @@ Saved state goes through one parse and one serializer:
 - `parseMosaicNode(value)` reads a leaf's `workspaceId`, then its `id`. When
   both are set and differ, `workspaceId` wins. A leaf with neither is dropped,
   and its split keeps the other children (sizes renormalized) or becomes its
-  one remaining child. Any other malformed node makes the whole value `null`.
+  one remaining child. A split whose leaves all have neither key is pruned from
+  its parent the same way, so the top-level value is `null` only when no leaf
+  survives. Any other malformed node makes the whole value `null`.
 - `serializeMosaicNode(tree)` writes both `id` and `workspaceId` on every
   leaf, so a build that only reads `workspaceId` still opens the layout.
 
