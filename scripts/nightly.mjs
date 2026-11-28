@@ -8,7 +8,8 @@
 //     Writes "tiles-nightly: no @nightly tile specs yet" to the job summary when the @nightly tile
 //     run had no test; a missing or unreadable report fails.
 //   NEEDS='<needs as JSON>' node scripts/nightly.mjs issue --run-url <url> [--date YYYY-MM-DD]
-//     Opens or updates the one nightly issue with gh (GH_TOKEN and GH_REPO set) when a lane failed.
+//     Opens or updates the one nightly issue with gh (GH_TOKEN and GH_REPO set) when a lane
+//     timed out or failed.
 // The perf lane's contract: the harness measures with MEASURE_PERF_BASELINE=1 into
 // PERF_BASELINE_OUT, then the tool compares that (or records it) against the set whose runner is
 // macos-15, never the M1 set measured by hand. Its exit codes: 0 pass, 1 regression, 2 bad input.
@@ -43,7 +44,7 @@ export const emptyLane = (report) => reportRuns(report).length === 0;
 
 export const failedLanes = (needs) =>
   Object.entries(needs ?? {})
-    .filter(([, job]) => job?.result === "failure")
+    .filter(([, job]) => job?.result === "failure" || job?.result === "cancelled")
     .map(([name]) => name);
 
 // The open issue gets a comment; with none open, the newest closed one is reopened, so a red
@@ -63,7 +64,7 @@ export function trackNightly(lanes, { gh, runUrl, date }) {
       "number,state,body",
     ]),
   );
-  const line = `${date}: ${lanes.join(", ")} failed: ${runUrl}`;
+  const line = `${date}: ${lanes.join(", ")} timed out or failed: ${runUrl}`;
   const matches = issues
     .filter((issue) => issue.body?.includes(MARKER))
     .sort((a, b) => b.number - a.number);
@@ -139,7 +140,7 @@ function main(argv) {
   }
   if (command === "issue" && option("--run-url")) {
     const lanes = failedLanes(JSON.parse(process.env.NEEDS ?? "{}"));
-    if (!lanes.length) return console.log("nightly: no lane failed");
+    if (!lanes.length) return console.log("nightly: no lane timed out or failed");
     // gh prints its own error to stderr; the thrown message names the command, not its arguments.
     const gh = (args) => {
       try {

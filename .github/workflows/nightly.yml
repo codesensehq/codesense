@@ -326,9 +326,9 @@ jobs:
 
   nightly-issue:
     name: Track the nightly
-    # One issue for every red night, opened or updated only by a scheduled run on main.
+    # One issue for every red night (a lane that failed or timed out), opened or updated only by a scheduled run on main.
     needs: [tiles-nightly, pane-harness, perf, load, frame-media]
-    if: ${{ !cancelled() && contains(needs.*.result, 'failure') && github.event_name == 'schedule' && github.ref == 'refs/heads/main' && !github.event.repository.fork }}
+    if: ${{ !cancelled() && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')) && github.event_name == 'schedule' && github.ref == 'refs/heads/main' && !github.event.repository.fork }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     concurrency:
