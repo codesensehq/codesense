@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 /**
  * The sites that mean "the pane on the right" rather than "a dashboard frame", with a frame a tile
- * hosts: reveal and Escape focus return here; Inbox recovery in `slot-dashboard-host.test.tsx`
+ * hosts: reveal, the panel sweep and Escape focus return here; Inbox recovery in `slot-dashboard-host.test.tsx`
  * and Escape through the page's own message in `html-viewer.test.tsx`.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -132,6 +132,41 @@ describe("reveal", () => {
     revealSlot("right-pane", { dashboard: ref, focus: true });
     expect(useViewerStore.getState().rightPaneOpen).toBe(true);
     unregister();
+  });
+});
+
+describe("the panel sweep", () => {
+  function frameIn(element: HTMLIFrameElement, panelId: string) {
+    const hide = vi.fn();
+    const unregister = registerFrame({
+      frameId: `frame-${Math.random()}`,
+      dashboard: TILE,
+      panelId,
+      slotId: "right-pane",
+      element,
+      post: () => {},
+      hide,
+    });
+    return { hide, unregister };
+  }
+
+  it("leaves a tile's frame live when the right pane's layout changes", () => {
+    const { iframe } = tileWithFrame();
+    const tile = frameIn(iframe, `tile:${TILE}`);
+    const layout = defaultRightPaneLayout();
+    useViewerStore.getState().setRightPaneLayout(layout);
+    expect(tile.hide).not.toHaveBeenCalled();
+    expect(useViewerStore.getState().rightPaneLayout).toBe(layout);
+    tile.unregister();
+  });
+
+  it("still retires a right-pane frame whose panel leaves the layout", () => {
+    const loose = document.createElement("iframe");
+    document.body.append(loose);
+    const pane = frameIn(loose, "pane:acme:dev/gone");
+    useViewerStore.getState().setRightPaneLayout(defaultRightPaneLayout());
+    expect(pane.hide).toHaveBeenCalled();
+    pane.unregister();
   });
 });
 

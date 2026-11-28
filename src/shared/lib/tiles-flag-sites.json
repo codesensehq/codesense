@@ -36,7 +36,11 @@
   },
   {
     "file": "src/features/shell/components/tile-host-mount.tsx",
-    "what": "mounts the tile host over the content area"
+    "what": "mounts the tile host over the content area, each tile kind's body in its tab frame"
+  },
+  {
+    "file": "src/shared/tiling/hosted-frame.ts",
+    "what": "tells a tile's dashboard frame from the right pane's for reveal, the panel sweep, Escape focus return, Inbox recovery and a dashboard's shown commands"
   },
   {
     "file": "src-tauri/src/live_hub/groups.rs",
