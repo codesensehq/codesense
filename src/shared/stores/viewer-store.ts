@@ -1251,6 +1251,8 @@ function moveWorkspaceTerminals(
       const { [fromKey]: _moved, ...rest } = st.tabGridLayout;
       return { tabGridLayout: { ...rest, [toKey]: gridSizes } };
     });
+    // The new key's group file holds the grid from now on (the tiles flag on).
+    saveLayout({ kind: "tabGrid", workspaceKey: toKey }, gridSizes.root);
   }
   for (const member of Object.values(s.terminalLayout.members)) {
     if (member.target.member.machineId !== "local") continue;
@@ -8052,6 +8054,8 @@ const viewerStore: StateCreator<ViewerState> = (set, get) => ({
       };
     });
 
+    saveActiveForeground(get(), teamKey, { op: "replace", from: F, to: incomingWorkspaceId });
+
     // Watcher lifecycle: release F's surface watch, (re)open incoming's — mirrors
     // the close + reopen paths. F's terminals keep running.
     get().closeWorkspaceWatch(teamKey, F);
@@ -8307,6 +8311,7 @@ const viewerStore: StateCreator<ViewerState> = (set, get) => ({
       };
     });
     get().persistState();
+    saveActiveForeground(get(), teamKey);
   },
 
   setEpicReposOpen: (workspaceId, open) => {
