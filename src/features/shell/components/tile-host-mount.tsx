@@ -24,6 +24,7 @@ import { pathToTeamContentDirSync } from "@/shared/lib/team-content-path";
 import { tilesEnabled } from "@/shared/lib/tiles-enabled";
 import { useOrgStore } from "@/shared/stores/org-store";
 import { activeForegroundLayout, useViewerStore } from "@/shared/stores/viewer-store";
+import { readTileFlag } from "@/shared/tiling/hosted-frame";
 import { TileHost, type TileBodyContext } from "@/shared/tiling/tile-host";
 
 import { tileBodyKinds } from "./tile-body-kinds";
@@ -97,6 +98,8 @@ function useTilesOn(): boolean {
     let live = true;
     void (async () => {
       const enabled = await tilesEnabled();
+      // The frame checks read the same flag; they have it before any tile frame exists.
+      if (enabled) await readTileFlag();
       if (live) setOn(enabled);
     })();
     return () => {

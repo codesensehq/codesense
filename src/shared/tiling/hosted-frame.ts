@@ -5,7 +5,7 @@
  * them apart; its place in the tile host's DOM can. With the tiles flag off no host is mounted, and
  * this reads false everywhere whatever the DOM holds.
  */
-import { useContext } from "react";
+import { useContext, useSyncExternalStore } from "react";
 
 import { tilesEnabled } from "@/shared/lib/tiles-enabled";
 
@@ -13,9 +13,41 @@ import { TileKeyContext } from "./tile-host";
 
 /** The flag's boot value, once read; off until then. */
 let tilesOn = false;
-void (async () => {
-  tilesOn = await tilesEnabled();
-})();
+let read: Promise<boolean> | null = null;
+const listeners = new Set<() => void>();
+
+/**
+ * Reads the flag for the checks here, on first use rather than at import: a module can load
+ * before the app's backend answers, and a read then would fail and hold the flag off for the
+ * session. The tile host mount awaits this before it mounts, so no frame in a tile is ever
+ * checked with the flag unread.
+ */
+export function readTileFlag(): Promise<boolean> {
+  read ??= (async () => {
+    try {
+      tilesOn = await tilesEnabled();
+    } catch {
+      // A read that can't be made holds the flag off, as a failed read in `tilesEnabled` does.
+      tilesOn = false;
+    }
+    listeners.forEach((listener) => listener());
+    return tilesOn;
+  })();
+  return read;
+}
+
+/** The flag, starting its read: asked only for a frame or component that sits in a tile. */
+function flagOn(): boolean {
+  void readTileFlag();
+  return tilesOn;
+}
+
+const flagAsRead = () => tilesOn;
+
+function onFlagRead(listener: () => void) {
+  listeners.add(listener);
+  return () => void listeners.delete(listener);
+}
 
 const TILE_BODY = "[data-tile-body]";
 
@@ -29,12 +61,13 @@ const tileBodyOf = (frame: FrameLike) => elementOf(frame)?.closest<HTMLElement>(
 
 /** Whether `frame` sits in a tile host's body. */
 export function isTileHosted(frame: FrameLike): boolean {
-  return tilesOn && !!tileBodyOf(frame);
+  return !!tileBodyOf(frame) && flagOn();
 }
 
 /** The same read from inside a component: whether it renders in a tile's body. */
 export function useTileHosted(): boolean {
-  return useContext(TileKeyContext) !== null && tilesOn;
+  const inTile = useContext(TileKeyContext) !== null;
+  return useSyncExternalStore(onFlagRead, inTile ? flagOn : flagAsRead) && inTile;
 }
 
 /** Whether `frame` sits in a tile whose shown tab it is. */

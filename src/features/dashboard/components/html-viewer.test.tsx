@@ -13,10 +13,13 @@ vi.mock("../lib/verb-dispatch", () => ({
   verbAnswer: vi.fn(),
 }));
 vi.mock("@/shared/lib/tiles-enabled", () => ({ tilesEnabled: async () => true }));
+// The frame checks read the flag before any tile frame exists, as the tile host mount has them.
+beforeAll(() => readTileFlag());
 vi.mock("@/shared/lib/local-profile-session", () => ({ rendererPrincipal: async () => "42" }));
 import { FrameMessageEvent } from "../../../../tests/support/fixtures/frame";
 import { runRenderedDocumentRequest } from "@/shared/hooks/use-rendered-document-bridge";
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from "vitest";
+import { readTileFlag } from "@/shared/tiling/hosted-frame";
 import { StrictMode } from "react";
 import { render, screen, waitFor, cleanup, fireEvent, act } from "@testing-library/react";
 import { HtmlViewer, NETWORK_PROBLEM_GRACE_MS } from "./html-viewer";

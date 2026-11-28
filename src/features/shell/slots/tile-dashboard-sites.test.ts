@@ -4,20 +4,22 @@
  * hosts: reveal, the panel sweep and Escape focus return here; Inbox recovery in `slot-dashboard-host.test.tsx`
  * and Escape through the page's own message in `html-viewer.test.tsx`.
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { dashboardRefKey } from "@/features/dashboard/lib/dashboard-ref";
 import { useDashboardProfileStore } from "@/features/dashboard/lib/dashboard-profile";
 import { registerFrame } from "@/features/dashboard/lib/frame-lifecycle";
 import { useOrgStore } from "@/shared/stores/org-store";
 import { useViewerStore } from "@/shared/stores/viewer-store";
-import { focusTileTab, isTileHosted } from "@/shared/tiling/hosted-frame";
+import { focusTileTab, isTileHosted, readTileFlag } from "@/shared/tiling/hosted-frame";
 
 import { defaultRightPaneLayout } from "../right-pane/right-pane-layout";
 import { usePaneStore } from "../right-pane/panes/pane-store";
 import { revealSlot } from "./reveal-slot";
 
 vi.mock("@/shared/lib/tiles-enabled", () => ({ tilesEnabled: async () => true }));
+// The frame checks read the flag before any tile frame exists, as the tile host mount has them.
+beforeAll(() => readTileFlag());
 vi.mock("@/tauri/commands", async (original) => ({
   ...(await original<typeof import("@/tauri/commands")>()),
   readDashboardProfile: vi.fn(async () => null),

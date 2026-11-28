@@ -2,7 +2,8 @@
 import agentListHtml from "@/features/shell/slots/__fixtures__/agent-list-pane.html?raw";
 import { StickyNote } from "lucide-react";
 import { usePanelRegistry } from "@/features/shell/right-pane/panel-registry";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { readTileFlag } from "@/shared/tiling/hosted-frame";
 
 const { rebuildMenu, toastWarning, commandsSync } = vi.hoisted(() => ({
   rebuildMenu: vi.fn(),
@@ -22,6 +23,8 @@ vi.mock("@/tauri/commands", async (importOriginal) => ({
   commandsSync: (...args: unknown[]) => commandsSync(...(args as [])),
 }));
 vi.mock("@/shared/lib/tiles-enabled", () => ({ tilesEnabled: async () => true }));
+// The frame checks read the flag before any tile frame exists, as the tile host mount has them.
+beforeAll(() => readTileFlag());
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) }));
 vi.mock("sonner", () => ({ toast: Object.assign(vi.fn(), { warning: toastWarning }) }));
 
