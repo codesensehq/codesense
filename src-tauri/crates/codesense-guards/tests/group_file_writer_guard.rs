@@ -23,9 +23,11 @@
 //! that only tests include (`*_tests.rs`, `tests.rs`, `tests/`). Point `CODESENSE_GUARD_ROOT` at
 //! another checkout's `src-tauri` to run it there; the planted self-tests show each form failing.
 
+mod common;
+
 use codesense_guards::guard_support;
+use common::{is_test_file, names_test, rust_files};
 use proc_macro2::{TokenStream, TokenTree};
-use std::path::Path;
 use syn::visit::{self, Visit};
 
 /// The store: the one file that may name a group folder.
@@ -40,41 +42,6 @@ const ALLOWED: &[(&str, &str)] = &[(
 
 /// The names that resolve to a group folder.
 const FOLDER_NAMES: &[&str] = &["groups_dir", "GROUPS_DIR"];
-
-fn is_test_file(label: &str) -> bool {
-    let name = label.rsplit('/').next().unwrap_or(label);
-    name.ends_with("_tests.rs")
-        || name == "tests.rs"
-        || label.contains("/tests/")
-        || label.starts_with("tests/")
-}
-
-/// Whether `meta` (a `cfg` predicate) holds only in a test build: `test`, or an `all(..)` with
-/// one. `not(test)` and `any(test, ..)` build in production, so they are scanned.
-fn test_only(meta: &syn::Meta) -> bool {
-    match meta {
-        syn::Meta::Path(path) => path.is_ident("test"),
-        syn::Meta::List(list) if list.path.is_ident("all") => list
-            .parse_args_with(
-                syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated,
-            )
-            .is_ok_and(|args| args.iter().any(test_only)),
-        _ => false,
-    }
-}
-
-fn names_test(attrs: &[syn::Attribute]) -> bool {
-    attrs.iter().any(|attr| {
-        let path = attr.path();
-        if path.is_ident("test") {
-            return true;
-        }
-        path.is_ident("cfg")
-            && attr
-                .parse_args::<syn::Meta>()
-                .is_ok_and(|meta| test_only(&meta))
-    })
-}
 
 /// The string `groups` as an expression, bare or wrapped as `String::from("groups")`,
 /// `Path::new("groups")`, `"groups".to_string()` or `&"groups"`.
@@ -297,20 +264,6 @@ fn violations(label: &str, src: &str) -> Vec<String> {
         });
     }
     scan.found
-}
-
-fn rust_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            rust_files(&path, out);
-        } else if path.extension().is_some_and(|e| e == "rs") {
-            out.push(path);
-        }
-    }
 }
 
 #[test]
