@@ -569,3 +569,30 @@ test("case 12: the committed M1 numbers pass compare against themselves", (t) =>
     0,
   );
 });
+
+// --- the open-time budget --------------------------------------------------------------------
+
+const BUDGET = { runner: "m1", p95Ms: 200, keys: ["open_warm"] };
+
+/** An m1 set whose warm open has p50 156, with the budget block or without it. */
+function budgeted({ budget = BUDGET, keys = ["open_warm"] } = {}) {
+  const file = baseline({
+    keys,
+    sets: [
+      { ...baseline().sets[0], keys: { open_warm: setKey(156), open_cold: setKey(340) } },
+      { ...baseline().sets[1], keys: { open_warm: setKey(156) } },
+    ],
+  });
+  return budget === undefined ? file : { ...file, budget };
+}
+
+test("budget: the committed file holds the open-time budget for both open keys of the m1 set", () => {
+  const file = JSON.parse(fs.readFileSync(FIXTURE, "utf8"));
+  const keys = ["open_other_team_agent_cold", "open_other_team_agent_warm"];
+  assert.deepEqual(file.budget, { runner: "m1", p95Ms: 200, keys });
+  assert.deepEqual(Object.keys(file), ["compare", "budget", "sets"]);
+  const m1 = file.sets.find((set) => set.runner === file.budget.runner);
+  // Each key is checked against the m1 set itself, not against `compare.keys`.
+  for (const key of file.budget.keys) assert.ok(m1.keys[key], `m1 has ${key}`);
+  assert.doesNotMatch(JSON.stringify(file.budget), /[A-Z]{2,}-[A-Z]*-?\d+/);
+});

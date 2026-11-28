@@ -11,6 +11,14 @@
       "fps": 3
     }
   },
+  "budget": {
+    "runner": "m1",
+    "p95Ms": 200,
+    "keys": [
+      "open_other_team_agent_cold",
+      "open_other_team_agent_warm"
+    ]
+  },
   "sets": [
     {
       "runner": "m1",
