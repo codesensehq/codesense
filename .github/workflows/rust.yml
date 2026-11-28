@@ -759,7 +759,8 @@ jobs:
     if: ${{ !cancelled() && needs.changes.outputs.rust != 'false' && github.event_name != 'merge_group' }}
     runs-on: ubuntu-24.04
     # Measured: about 38 minutes (compile 5, Secret Service 5, the suites 26), before the updater's
-    # beta build, which compiles the app once more.
+    # beta build, which compiles the app once more. That step has its own 15-minute ceiling, and
+    # the steps before it took about 23 minutes in the last measured runs.
     timeout-minutes: 60
     permissions:
       contents: read
@@ -883,6 +884,10 @@ jobs:
           done <<< "$SUITES"
           exit "$status"
       - name: Test the updater on the beta channel
+        timeout-minutes: 15
+        # Green, the step takes 4-5 minutes, its own recompile of the app included. The limit is for
+        # a hang outside nextest's per-test timer (in cargo, or in nextest listing the test binary):
+        # two such hangs ran until the job's 60-minute limit cancelled the job and its log with it.
         # The license module (the beta channels' updater) compiles only off the internal channel,
         # the default, so its tests need a beta build of the app of their own, with the dashboard
         # publishing a beta release turns on. The beta channel reads only public config
