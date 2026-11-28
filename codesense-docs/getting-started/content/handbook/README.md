@@ -7,7 +7,7 @@ CodeSense is a macOS app for teams that build software with coding agents: your 
 ## Browse by topic
 
 - **Context:** [The context repo](concepts/context-repo.md), [Teams and inheritance](concepts/teams-and-inheritance.md), [Context in a worktree](concepts/agent-context.md).
-- **Work:** [The planning model](concepts/planning-model.md), [Agents and profiles](concepts/agents-and-profiles.md), [Remote machines](concepts/remote-machines.md).
+- **Work:** [The planning model](concepts/planning-model.md), [Agents and profiles](concepts/agents-and-profiles.md), [Remote machines](concepts/remote-machines.md), [Windows](concepts/windows.md).
 - **Coordinate:** [The Inbox](concepts/inbox.md), [Routines](concepts/routines.md).
 - **Build on the engine:** [Panes and slots](concepts/panes-and-slots.md), [Dashboards and pages](concepts/dashboards.md), [Dashboard uses](guides/dashboard-uses.md).
 - **Team and trust:** [Attribution and cost](concepts/attribution-and-cost.md), [Sharing through git](concepts/sharing.md), [Security and privacy](concepts/security-and-privacy.md).

@@ -55,6 +55,8 @@ On a Mac the terminal shortcuts use <kbd>⌘</kbd>, never <kbd>⌃</kbd>: Contro
 
 A shortcut you set in **Settings → Shortcuts** can also hold <kbd>⌃</kbd> with <kbd>⌘</kbd>, for example <kbd>⌃⌥⌘→</kbd>. It shows its <kbd>⌃</kbd> there, fires only with both keys held, takes the key ahead of a plain <kbd>⌘</kbd> shortcut on it, and, for an action that leaves a terminal only on a <kbd>⌘</kbd> chord, never fires from one. These chords work on a Mac only, so elsewhere Settings won't record one.
 
+With tiles on, a workspace and its terminals can open in a window of their own, and keep running when they move: see [Windows](windows.md).
+
 ## Over the terminal
 
 Four tools float over the focused terminal tile, so you can look at an agent's work without leaving its terminal. Each one belongs to the tile's active tab. Turn them on with the shortcut or from the tile's **View options** menu.
