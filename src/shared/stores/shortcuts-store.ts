@@ -210,6 +210,9 @@ const debouncedPersist = createDebouncedAction(
  * regardless of whether the menu display succeeds.
  */
 function triggerMenuRebuild(): void {
+  // The native menu is app-wide and main's: a satellite's rebind reaches main
+  // through the prefs broadcast, and main rebuilds when it reloads the shortcuts.
+  if (!isMainWindow()) return;
   // SW-RP-1: route through rebuildNativeMenu so a shortcut rebind keeps the
   // registry-driven View → Panels submenu intact (and vice-versa).
   rebuildNativeMenu();
@@ -395,9 +398,9 @@ export const useShortcutsStore = create<ShortcutsState>((set, get) => ({
     // Push the effective overrides to the Rust menu so accelerator
     // display reflects the user's rebinds on first paint. Fire-and-
     // forget — macOS-only, and the keyboard handler is already live
-    // regardless of whether the menu renders the hint. The native menu is
-    // app-wide and main's, so a satellite's load leaves it alone.
-    if (isMainWindow()) triggerMenuRebuild();
+    // regardless of whether the menu renders the hint. A satellite's load
+    // leaves main's menu alone (triggerMenuRebuild checks).
+    triggerMenuRebuild();
   },
 }));
 

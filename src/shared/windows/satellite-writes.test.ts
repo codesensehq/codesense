@@ -79,6 +79,7 @@ describe("a satellite's app-state writes", () => {
     expect(count("save_app_state")).toBe(0);
     expect(count("patch_app_state_keys")).toBe(1);
     expect(Object.keys(JSON.parse(writes()[0].state!))).toEqual(["shortcuts"]);
+    expect(count("rebuild_menu")).toBe(0);
   });
 
   it("a dashboard pref change is one patch_app_state_keys of dashboardPrefs and no save_app_state", async () => {
@@ -135,5 +136,6 @@ describe("a satellite's app-state writes", () => {
     await shortcuts.flushShortcutsForProfileSwitch();
     expect(count("save_app_state")).toBe(1);
     expect(count("patch_app_state_keys")).toBe(0);
+    expect(count("rebuild_menu")).toBe(1);
   });
 });
