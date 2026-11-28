@@ -4,9 +4,11 @@
  * module, and every surface reads that set. Frontend and docs code that still says a
  * needs-you or permission predicate is in the shared allow-list with its exact hit count,
  * so a new file fails, a new predicate in a listed file fails, and a stale entry fails.
- * The list only shrinks, and its length is capped per release by
- * `tests/fixtures/allowlist-ceilings.json`. The Rust guard
- * (`needs_you_predicates_guard.rs`) applies the same rules to the Rust entries.
+ * The list's length and the sum of its counts must equal their ceilings for the release
+ * in progress in `tests/fixtures/allowlist-ceilings.json`, and no ceiling rises from one
+ * release to the next. What counts as a predicate, and which files are test code, comes
+ * from `tests/fixtures/needs-you-predicates.txt`, which the Rust guard
+ * (`needs_you_predicates_guard.rs`) reads too, for the Rust entries.
  */
 import { readdirSync, readFileSync } from "node:fs";
 import { relative, resolve } from "node:path";
@@ -15,44 +17,50 @@ import { describe, expect, it } from "vitest";
 const repo = resolve(__dirname, "../../..");
 const ALLOWLIST = "src-tauri/crates/codesense-guards/tests/needs_you_predicates_allowlist.txt";
 const CEILINGS = "tests/fixtures/allowlist-ceilings.json";
+const PATTERNS = "tests/fixtures/needs-you-predicates.txt";
 const LIST = "needsYouPredicates";
+const LIST_HITS = "needsYouPredicatesHits";
 
-/** Literal text that compares or names a needs-you or permission state. */
-const LITERALS = [
-  '"needs-permission"',
-  "'needs-permission'",
-  '"needs-you"',
-  "'needs-you'",
-  '"needs_you"',
-  "'needs_you'",
-  '=== "needs"',
-  '!== "needs"',
-];
-/** Identifiers that are a needs-you or permission predicate or its input. */
-const IDENTS = new Set([
-  "needsYouKind",
-  "needs_you_kind",
-  "NeedsPermission",
-  "needsYouBySender",
-  "needsMailBySender",
-  "needsBySender",
-  "ASK_USER_STATE",
-  "kindOf",
-]);
-/** A function or hook named for what needs you (`isNeedsYouStatus`, `selectNeedsYouKind`). */
-const PREFIXES = ["is", "has", "select", "get", "count", "use"];
+/** The rules in the shared patterns file, `<rule> <value>` per line, by rule. */
+function parsePatterns(text: string): Map<string, string[]> {
+  const rules = new Map<string, string[]>();
+  for (const line of text.split("\n")) {
+    if (line.startsWith("#") || line.trim() === "") continue;
+    const space = line.indexOf(" ");
+    const [rule, value] = space < 0 ? [line, ""] : [line.slice(0, space), line.slice(space + 1)];
+    rules.set(rule, [...(rules.get(rule) ?? []), value]);
+  }
+  return rules;
+}
+
+const rules = parsePatterns(readFileSync(resolve(repo, PATTERNS), "utf8"));
+const rule = (name: string): string[] => rules.get(name) ?? [];
+
+/** `NeedsYou` → `needs_you`. */
+const snake = (stem: string): string => stem.replace(/(?!^)([A-Z])/g, "_$1").toLowerCase();
 
 function predicateIdent(token: string): boolean {
-  if (IDENTS.has(token)) return true;
-  return (
-    token.includes("NeedsYou") &&
-    PREFIXES.some((prefix) => token.startsWith(prefix) && /^[A-Z]/.test(token.slice(prefix.length)))
-  );
+  if (rule("ident").includes(token)) return true;
+  return rule("prefix").some((prefix) => {
+    if (!token.startsWith(prefix)) return false;
+    const rest = token.slice(prefix.length);
+    if (/^[A-Z]/.test(rest)) return rule("stem").some((stem) => rest.includes(stem));
+    if (rest.startsWith("_")) return rule("stem").some((stem) => rest.includes(`_${snake(stem)}`));
+    return false;
+  });
 }
 
 function lineHits(line: string): boolean {
+  const flat = line.replace(/\s+/g, "").replaceAll("'", '"');
+  const arm =
+    flat.includes("=>") &&
+    rule("arm").some(
+      (state) =>
+        flat.includes(`${state}|`) || flat.includes(`|${state}`) || flat.includes(`${state}=>`),
+    );
   return (
-    LITERALS.some((literal) => line.includes(literal)) ||
+    arm ||
+    rule("literal").some((literal) => flat.includes(literal)) ||
     line.split(/[^A-Za-z0-9_]/).some((token) => token !== "" && predicateIdent(token))
   );
 }
@@ -60,10 +68,10 @@ function lineHits(line: string): boolean {
 function isTestFile(rel: string): boolean {
   const name = rel.split("/").pop() ?? rel;
   return (
-    name.includes(".test.") ||
-    name.includes(".spec.") ||
-    rel.includes("/tests/") ||
-    rel.includes("/evals/")
+    rule("test-name").includes(name) ||
+    rule("test-name-suffix").some((suffix) => name.endsWith(suffix)) ||
+    rule("test-name-part").some((part) => name.includes(part)) ||
+    rule("test-dir").some((dir) => rel.includes(dir))
   );
 }
 
@@ -111,14 +119,29 @@ function allowlist(): Map<string, number> {
 
 type Ceilings = { current: string; ceilings: Record<string, Record<string, number>> };
 
-/** Whether a list of `count` entries is within its ceiling for release `current`. */
+/** Whether `list` has exactly its ceiling for release `current`: above it a surface was
+ *  added, below it a removal was not locked in by lowering the ceiling. */
 function checkCeiling(file: Ceilings, list: string, current: string, count: number): string | null {
   const ceiling = file.ceilings[list]?.[current];
   if (ceiling === undefined) return `\`${list}\` has no ceiling for release \`${current}\``;
-  return count > ceiling
-    ? `\`${list}\` has ${count} entries, above release ${current}'s ceiling of ${ceiling}`
-    : null;
+  if (count > ceiling)
+    return `\`${list}\` is ${count}, above release ${current}'s ceiling of ${ceiling}: read the needs-you set instead`;
+  if (count < ceiling)
+    return `\`${list}\` is ${count}, below release ${current}'s ceiling of ${ceiling}: lower it to ${count} for ${current} and every later release`;
+  return null;
 }
+
+/** Whether no ceiling of `list` is above the one before it, in release order. */
+function checkNeverRising(file: Ceilings, list: string): string | null {
+  const ceilings = Object.entries(file.ceilings[list] ?? {});
+  for (let i = 1; i < ceilings.length; i++)
+    if (ceilings[i][1] > ceilings[i - 1][1])
+      return `\`${list}\` rises from ${ceilings[i - 1][1]} at ${ceilings[i - 1][0]} to ${ceilings[i][1]} at ${ceilings[i][0]}`;
+  return null;
+}
+
+const ceilingsFile = (): Ceilings =>
+  JSON.parse(readFileSync(resolve(repo, CEILINGS), "utf8")) as Ceilings;
 
 describe("needs-you predicates stay in the owner and the allow-list", () => {
   it("frontend and docs code says a predicate only in listed files, as often as pinned", () => {
@@ -138,31 +161,47 @@ describe("needs-you predicates stay in the owner and the allow-list", () => {
     expect(problems).toEqual([]);
   });
 
-  it("the allow-list stays within the ceiling for the current release", () => {
-    const file = JSON.parse(readFileSync(resolve(repo, CEILINGS), "utf8")) as Ceilings;
-    expect(checkCeiling(file, LIST, file.current, allowlist().size)).toBeNull();
+  it("the allow-list matches its ceilings for the current release", () => {
+    const file = ceilingsFile();
+    const allowed = allowlist();
+    const total = [...allowed.values()].reduce((sum, count) => sum + count, 0);
+    expect([
+      checkCeiling(file, LIST, file.current, allowed.size),
+      checkCeiling(file, LIST_HITS, file.current, total),
+    ]).toEqual([null, null]);
   });
 
-  it("the ceiling check follows the release it is given", () => {
+  it("the ceilings never rise in release order", () => {
+    const file = ceilingsFile();
+    expect([checkNeverRising(file, LIST), checkNeverRising(file, LIST_HITS)]).toEqual([null, null]);
+  });
+
+  it("the ceiling checks follow the release they are given", () => {
     const file: Ceilings = {
       current: "R1",
-      ceilings: { [LIST]: { R0: 3, R1: 2, R2: 0 }, other: { R0: 9 } },
+      ceilings: {
+        [LIST]: { R0: 3, R1: 2, R2: 0 },
+        [LIST_HITS]: { R0: 9, R1: 9 },
+        other: { R0: 1, R1: 4 },
+      },
     };
     expect(checkCeiling(file, LIST, "R0", 3)).toBeNull();
     expect(checkCeiling(file, LIST, "R0", 4)).toMatch(/above release R0's ceiling of 3/);
+    expect(checkCeiling(file, LIST, "R0", 2)).toMatch(/below release R0's ceiling of 3/);
     expect(checkCeiling(file, LIST, "R2", 0)).toBeNull();
     expect(checkCeiling(file, LIST, "R2", 1)).not.toBeNull();
+    expect(checkCeiling(file, LIST_HITS, "R1", 9)).toBeNull();
+    expect(checkCeiling(file, LIST_HITS, "R2", 9)).toMatch(/no ceiling/);
     expect(checkCeiling(file, LIST, "R9", 0)).toMatch(/no ceiling/);
-    expect(checkCeiling(file, "other", "R1", 0)).toMatch(/no ceiling/);
+    expect(checkCeiling(file, "missing", "R0", 0)).toMatch(/no ceiling/);
+    expect(checkNeverRising(file, LIST)).toBeNull();
+    expect(checkNeverRising(file, LIST_HITS)).toBeNull();
+    expect(checkNeverRising(file, "other")).toMatch(/rises from 1 at R0 to 4 at R1/);
   });
 
-  it("matches predicates and leaves prose and look-alikes alone", () => {
-    expect(lineHits("if (row.needsYouKind === null) return;")).toBe(true);
-    expect(lineHits("const waiting = selectNeedsYouKind(state);")).toBe(true);
-    expect(lineHits('if (state === "needs") return;')).toBe(true);
-    expect(lineHits("kind: 'needs-you',")).toBe(true);
-    expect(lineHits("const needsYouHandlers = {};")).toBe(false);
-    expect(lineHits("// what needs you")).toBe(false);
-    expect(lineHits("let NeedsPermissionish = 1;")).toBe(false);
+  it("flags each shared hit example and none of the misses", () => {
+    expect(rule("hit").length).toBeGreaterThan(0);
+    expect(rule("hit").filter((line) => !lineHits(line))).toEqual([]);
+    expect(rule("miss").filter(lineHits)).toEqual([]);
   });
 });
