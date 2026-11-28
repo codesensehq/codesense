@@ -1361,8 +1361,10 @@ describe("Tauri IPC Contract", () => {
     // +1 on both sides for leadDiff/lead_diff (a lead's combined, read-only diff), so 559/578.
     // +2 on both sides for the two-window driver's seed/e2e_seed and open/e2e_open_window,
     // so 561/580.
-    const EXPECTED_TS_COMMAND_COUNT = 561;
-    const EXPECTED_RUST_COMMAND_COUNT = 580;
+    // Group files: +2 on both sides (groupRead/group_read, groupCommit/group_commit), so
+    // 563/582.
+    const EXPECTED_TS_COMMAND_COUNT = 563;
+    const EXPECTED_RUST_COMMAND_COUNT = 582;
     // The Rust count runs ahead of the TS count by the RUST_ONLY_COMMANDS that have no
     // renderer IPC wrapper (the access revocation and two session watchers plus the WV-B5/C6
     // scope-layer and harvest-norm Tauri commands whose FE wrappers land in later WV stories):

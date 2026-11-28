@@ -1793,6 +1793,8 @@ pub fn run() {
             commands::system::get_log_debug_enabled,
             commands::system::get_platform_caps,
             flags::tiles_enabled,
+            groups::commands::group_read,
+            groups::commands::group_commit,
             // HTTP API
             commands::system::get_http_api_port,
             commands::frames::mint_frame,

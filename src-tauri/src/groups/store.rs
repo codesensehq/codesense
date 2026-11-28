@@ -261,6 +261,11 @@ impl GroupStore {
         self
     }
 
+    /// Whether this store runs with tiles on.
+    pub fn tiles(&self) -> bool {
+        self.tiles
+    }
+
     /// Tells `hook` of each collision a person's write meets.
     pub fn with_collision_hook(mut self, hook: CollisionHook) -> Self {
         self.collision_hook = Some(hook);
@@ -307,6 +312,19 @@ impl GroupStore {
         match read_head(&path) {
             Head::Absent | Head::Deleted(_) => Err(StoreError::NotFound),
             Head::File(loaded) => Ok(loaded),
+            Head::Unreadable => Err(StoreError::Unreadable),
+        }
+    }
+
+    /// The group `id`'s head for a client: `None` when it never existed, its `rev` and no tree
+    /// when it was deleted (a new file continues from that `rev`), else its `rev` and tree,
+    /// repaired in memory. Reads only.
+    pub fn head(&self, id: &str) -> Result<Option<(u64, Option<SavedNode>)>, StoreError> {
+        let path = self.group_file(id)?;
+        match read_head(&path) {
+            Head::Absent => Ok(None),
+            Head::Deleted(rev) => Ok(Some((rev, None))),
+            Head::File(loaded) => Ok(Some((loaded.file.rev, loaded.file.root))),
             Head::Unreadable => Err(StoreError::Unreadable),
         }
     }
