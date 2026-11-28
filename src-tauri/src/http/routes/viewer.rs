@@ -2819,9 +2819,9 @@ mod frame_security_tests {
         .unwrap();
         let ipv6_app = app.clone();
         tokio::spawn(async move {
-            axum::serve(v6, ipv6_app).await.unwrap();
+            crate::http::serve_api(v6, ipv6_app).await.unwrap();
         });
-        axum::serve(v4, app).await.unwrap();
+        crate::http::serve_api(v4, app).await.unwrap();
     }
 }
 
