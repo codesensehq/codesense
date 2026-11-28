@@ -2,7 +2,8 @@
 import agentListHtml from "@/features/shell/slots/__fixtures__/agent-list-pane.html?raw";
 import { StickyNote } from "lucide-react";
 import { usePanelRegistry } from "@/features/shell/right-pane/panel-registry";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { readTileFlag } from "@/shared/tiling/hosted-frame";
 
 const { rebuildMenu, toastWarning, commandsSync } = vi.hoisted(() => ({
   rebuildMenu: vi.fn(),
@@ -21,6 +22,9 @@ vi.mock("@/tauri/commands", async (importOriginal) => ({
   pushViewerState: () => Promise.resolve(),
   commandsSync: (...args: unknown[]) => commandsSync(...(args as [])),
 }));
+vi.mock("@/shared/lib/tiles-enabled", () => ({ tilesEnabled: async () => true }));
+// The frame checks read the flag before any tile frame exists, as the tile host mount has them.
+beforeAll(() => readTileFlag());
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) }));
 vi.mock("sonner", () => ({ toast: Object.assign(vi.fn(), { warning: toastWarning }) }));
 
@@ -781,6 +785,39 @@ describe("scopes", () => {
     );
     iframe.focus();
     expect(chord("f")).toBe(id(INBOX, "f"));
+  });
+
+  it("slot-visible commands are offered while a tile shows the dashboard and the right pane is shut", () => {
+    install([
+      pane(inboxRef, "Inbox", [
+        { ...ARCHIVE, id: "v", defaultChord: "CmdOrCtrl+Alt+Shift+V", scope: "slot-visible" },
+      ]),
+    ]);
+    const chord = () => key("v", { metaKey: true, altKey: true, shiftKey: true });
+    expect(chord()).toBeUndefined();
+    const body = document.createElement("div");
+    body.dataset.tileBody = INBOX;
+    body.dataset.tileShown = "true";
+    const iframe = document.createElement("iframe");
+    body.append(iframe);
+    document.body.append(body);
+    frames.push(
+      registerFrame({
+        frameId: "tile-frame",
+        dashboard: INBOX,
+        panelId: `tile:${INBOX}`,
+        slotId: "right-pane",
+        element: iframe,
+        post: () => {},
+        hide: () => {},
+      }),
+    );
+    expect(useViewerStore.getState().rightPaneOpen).toBe(false);
+    expect(chord()).toBe(id(INBOX, "v"));
+    // Another tab of that tile is shown: the dashboard is not on screen.
+    body.dataset.tileShown = "false";
+    expect(chord()).toBeUndefined();
+    body.remove();
   });
 });
 

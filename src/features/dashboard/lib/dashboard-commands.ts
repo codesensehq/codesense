@@ -18,6 +18,7 @@ import { createListenerGroup } from "@/shared/lib/tauri-listeners";
 import { useConfigStore } from "@/shared/stores/config-store";
 import { useOrgStore } from "@/shared/stores/org-store";
 import { useShortcutsStore } from "@/shared/stores/shortcuts-store";
+import { isShownInTile } from "@/shared/tiling/hosted-frame";
 import { useViewerStore } from "@/shared/stores/viewer-store";
 import { isConsoleLayout, isTerminalColumnShown } from "@/features/viewer/lib/terminal-column";
 import {
@@ -81,7 +82,11 @@ interface SlotDashboard {
 function slotShown({ slot, pane, key }: SlotDashboard): boolean {
   const viewer = useViewerStore.getState();
   if (slot === "right-pane") {
-    return paneOnScreen(pane.panelId, viewer.rightPaneOpen, viewer.rightPaneLayout);
+    // A tile that shows the dashboard shows it as much as the right pane does.
+    return (
+      paneOnScreen(pane.panelId, viewer.rightPaneOpen, viewer.rightPaneLayout) ||
+      hasLiveFrames((f) => f.dashboard === key && f.slotId === slot && isShownInTile(f))
+    );
   }
   if (slot === "file-nav") {
     const { activeOrgSlug: org, activeTeamName: team } = useOrgStore.getState();

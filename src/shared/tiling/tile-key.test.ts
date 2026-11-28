@@ -38,7 +38,16 @@ describe("tabKey", () => {
 describe("tileKey", () => {
   it("has a row of each kind", () => {
     const keys = tiles.map((r) => r.key);
-    for (const prefix of ["agent:", "doc:", "generic:"]) {
+    for (const prefix of [
+      "agent:",
+      "doc:",
+      "generic:",
+      "story-page:",
+      "dashboard:",
+      "inbox:",
+      "diff:",
+      "notes:",
+    ]) {
       expect(
         keys.some((k) => k.startsWith(prefix)),
         prefix,

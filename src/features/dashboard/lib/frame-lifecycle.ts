@@ -348,6 +348,10 @@ export function remintFrames(select: (frame: LiveFrame) => boolean): void {
 export function hasLiveFrames(select: (frame: LiveFrame) => boolean): boolean {
   return [...frames.values()].some((e) => !e.tornDown && select(e.frame));
 }
+/** The first live frame `select` picks, if any. */
+export function findLiveFrame(select: (frame: LiveFrame) => boolean): LiveFrame | undefined {
+  return [...frames.values()].find((e) => !e.tornDown && select(e.frame))?.frame;
+}
 /** Keep the caller's host mounted, hidden and inert until all its frames settle. */
 export async function retireAfterFlush(
   select: (frame: LiveFrame) => boolean,

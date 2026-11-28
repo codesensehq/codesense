@@ -12,10 +12,14 @@ vi.mock("../lib/verb-dispatch", () => ({
   verbSettle: nativeSettle,
   verbAnswer: vi.fn(),
 }));
+vi.mock("@/shared/lib/tiles-enabled", () => ({ tilesEnabled: async () => true }));
+// The frame checks read the flag before any tile frame exists, as the tile host mount has them.
+beforeAll(() => readTileFlag());
 vi.mock("@/shared/lib/local-profile-session", () => ({ rendererPrincipal: async () => "42" }));
 import { FrameMessageEvent } from "../../../../tests/support/fixtures/frame";
 import { runRenderedDocumentRequest } from "@/shared/hooks/use-rendered-document-bridge";
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from "vitest";
+import { readTileFlag } from "@/shared/tiling/hosted-frame";
 import { StrictMode } from "react";
 import { render, screen, waitFor, cleanup, fireEvent, act } from "@testing-library/react";
 import { HtmlViewer, NETWORK_PROBLEM_GRACE_MS } from "./html-viewer";
@@ -496,6 +500,31 @@ describe("HtmlViewer postMessage listener", () => {
       ctrlKey: false,
     });
     expect(onNavigate).toHaveBeenCalledWith("/org/backend/content/stories/x.md", {});
+  });
+
+  it("Escape in a tile's pane returns focus to the tile's shown tab", async () => {
+    mockGetHttpApiPort.mockResolvedValue(9123);
+    render(
+      <div data-tile-body="dashboard:team:acme:dev/board" data-tile-shown="true">
+        <div role="tab" aria-selected="true" tabIndex={0}>
+          Board
+        </div>
+        <HtmlViewer
+          filePath="/org/backend/panes/board.html"
+          teamContentPath="/org/backend/content"
+          pane={{
+            contentRoot: "/org/backend/content",
+            panesDir: "/org/backend/panes",
+            fileName: "board.html",
+          }}
+        />
+      </div>,
+    );
+    await waitFor(() => {
+      expect(document.querySelector("iframe")?.getAttribute("src")).toContain("/pane/");
+    });
+    dispatchIframeMessage({ type: "codesense:key-escape" });
+    expect(document.activeElement).toBe(screen.getByRole("tab", { name: "Board" }));
   });
 
   it("normalizes relative paths with ..", async () => {

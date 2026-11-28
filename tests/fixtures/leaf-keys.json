@@ -7,6 +7,39 @@
     { "leaf": "doc:core/notes/plan.md", "layer": "private", "valid": true },
     { "leaf": "doc:core/notes/plan.md", "layer": "shared", "valid": true },
     { "leaf": "doc:core/README.md", "layer": "shared", "valid": true },
+    { "leaf": "story-page:DEMO-63", "layer": "shared", "valid": true },
+    { "leaf": "story-page:DEMO-63", "layer": "private", "valid": true },
+    { "leaf": "inbox:acme", "layer": "shared", "valid": true },
+    { "leaf": "inbox:acme/app", "layer": "shared", "valid": true },
+    { "leaf": "dashboard:built-in:acme/inbox", "layer": "shared", "valid": true },
+    { "leaf": "dashboard:team:acme/app:core/board", "layer": "shared", "valid": true },
+    { "leaf": "dashboard:private:acme/board", "layer": "private", "valid": true },
+    { "leaf": "dashboard:private:acme/board", "layer": "shared", "valid": false, "why": "a private dashboard is the person's own pane" },
+    { "leaf": "diff:context:ctx-demo", "layer": "private", "valid": true },
+    { "leaf": "diff:source:feat-demo", "layer": "private", "valid": true },
+    { "leaf": "diff:source:wt-demo-63", "layer": "private", "valid": true },
+    { "leaf": "dashboard:team:acme:core/board", "layer": "shared", "valid": true },
+    { "leaf": "dashboard:team:acme:core/board", "layer": "private", "valid": true },
+    { "leaf": "inbox:acme", "layer": "private", "valid": true },
+    { "leaf": "agent:team-2/review.bot_1", "layer": "private", "valid": true },
+    { "leaf": "doc:core/dashboards/status.html", "layer": "private", "valid": true },
+    { "leaf": "diff:context:ctx-demo", "layer": "shared", "valid": false, "why": "a worktree id is machine-local" },
+    { "leaf": "notes:scratch", "layer": "private", "valid": true },
+    { "leaf": "notes:scratch", "layer": "shared", "valid": false, "why": "a scratch note is machine-local" },
+    { "leaf": "story-page:", "layer": "private", "valid": false, "why": "no story" },
+    { "leaf": "story-page:a/b", "layer": "private", "valid": false, "why": "a slash" },
+    { "leaf": "inbox:", "layer": "private", "valid": false, "why": "no org" },
+    { "leaf": "inbox:a/b/c", "layer": "private", "valid": false, "why": "an org of three parts" },
+    { "leaf": "dashboard:team:acme/board", "layer": "private", "valid": false, "why": "a team dashboard without its team" },
+    { "leaf": "dashboard:built-in:acme/Board", "layer": "private", "valid": false, "why": "an upper-case pane id" },
+    { "leaf": "dashboard:built-in:acme", "layer": "private", "valid": false, "why": "no pane id" },
+    { "leaf": "dashboard:public:acme/board", "layer": "private", "valid": false, "why": "an unknown scope" },
+    { "leaf": "dashboard:built-in:acme/../board", "layer": "private", "valid": false, "why": "a .. part in the org" },
+    { "leaf": "diff:branch:ctx-demo", "layer": "private", "valid": false, "why": "neither a context nor a source worktree" },
+    { "leaf": "diff:context:", "layer": "private", "valid": false, "why": "no worktree id" },
+    { "leaf": "diff:context:/home/me/wt", "layer": "private", "valid": false, "why": "a path, not a worktree id" },
+    { "leaf": "notes:", "layer": "private", "valid": false, "why": "no note" },
+    { "leaf": "notes:../x", "layer": "private", "valid": false, "why": "a path, not a note id" },
     { "leaf": "ws-1a2b3c", "layer": "private", "valid": true },
     { "leaf": "tab_7F3e", "layer": "private", "valid": true },
     { "leaf": "ws-1a2b3c", "layer": "shared", "valid": false, "why": "a workspace id is machine-local" },
@@ -101,6 +134,31 @@
       "leaf": { "kind": "leaf", "id": "doc:core/notes/plan.md", "workspaceId": "doc:core/notes/plan.md" },
       "layer": "shared",
       "key": "doc:core/notes/plan.md"
+    },
+    {
+      "leaf": { "kind": "leaf", "id": "story-page:DEMO-63", "workspaceId": "story-page:DEMO-63" },
+      "layer": "shared",
+      "key": "story-page:DEMO-63"
+    },
+    {
+      "leaf": { "kind": "leaf", "id": "dashboard:team:acme/app:core/board", "workspaceId": "dashboard:team:acme/app:core/board" },
+      "layer": "shared",
+      "key": "dashboard:team:acme/app:core/board"
+    },
+    {
+      "leaf": { "kind": "leaf", "id": "inbox:acme", "workspaceId": "inbox:acme" },
+      "layer": "shared",
+      "key": "inbox:acme"
+    },
+    {
+      "leaf": { "kind": "leaf", "id": "diff:context:ctx-demo", "workspaceId": "diff:context:ctx-demo" },
+      "layer": "private",
+      "key": "diff:context:ctx-demo"
+    },
+    {
+      "leaf": { "kind": "leaf", "id": "notes:scratch", "workspaceId": "notes:scratch" },
+      "layer": "private",
+      "key": "notes:scratch"
     },
     {
       "leaf": { "kind": "leaf", "id": "generic:/home/me/code/app", "workspaceId": "generic:/home/me/code/app" },

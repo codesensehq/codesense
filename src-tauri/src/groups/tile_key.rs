@@ -114,7 +114,16 @@ mod tests {
     #[test]
     fn every_tile_row_reads_back_as_its_key() {
         let rows = leaf_keys().tiles;
-        for prefix in ["agent:", "doc:", "generic:"] {
+        for prefix in [
+            "agent:",
+            "doc:",
+            "generic:",
+            "story-page:",
+            "dashboard:",
+            "inbox:",
+            "diff:",
+            "notes:",
+        ] {
             assert!(
                 rows.iter().any(|r| r.key.starts_with(prefix)),
                 "no {prefix} row"
@@ -122,7 +131,10 @@ mod tests {
         }
         assert!(rows.iter().any(|r| !r.key.contains(':')), "no local id row");
         for row in rows {
-            let SavedNode::Leaf { id, workspace_id } = row.leaf else {
+            let SavedNode::Leaf {
+                id, workspace_id, ..
+            } = row.leaf
+            else {
                 panic!("{}: a tile row holds a leaf", row.key);
             };
             assert_eq!(id, workspace_id, "{}", row.key);

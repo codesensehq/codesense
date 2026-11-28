@@ -22,6 +22,17 @@
 //!   (the epic's folder name and a repo). Each other part keeps the local id's charset and
 //!   length bound.
 //!
+//! - a content tab's key, one per kind a tile shows besides agents, docs and terminals:
+//!   - `story-page:<story id>` (a story's page) and `inbox:<org>` (an org's Inbox): portable,
+//!     valid in any layer;
+//!   - `dashboard:<scope>:<org>[:<team>]/<pane id>`: a `built-in` or `team` dashboard is
+//!     portable; a `private` one names the person's own pane and stays in the private layer;
+//!   - `diff:<context|source>:<worktree id>` (a worktree's diff) and `notes:<note id>` (a
+//!     scratch note): machine-local, valid only in the private layer.
+//!
+//!   A story, worktree or note id keeps the local id's charset and length bound; an org is
+//!   `<owner>/<name>` or `<name>`, each part a local id; a pane id is `[a-z0-9][a-z0-9-]*`.
+//!
 //! A team and a name are `[a-z0-9][a-z0-9._-]{0,63}`. Any other prefix or shape is refused.
 //! The cases live in one fixture, `tests/fixtures/leaf-keys.json`, which other checks of a
 //! tile key read too.
@@ -39,6 +50,11 @@ const GENERIC_PREFIX: &str = "generic:";
 const ROOT_PREFIX: &str = "root:";
 const STORY_PREFIX: &str = "story:";
 const INTEGRATION_PREFIX: &str = "integration:";
+const STORY_PAGE_PREFIX: &str = "story-page:";
+const INBOX_PREFIX: &str = "inbox:";
+const DASHBOARD_PREFIX: &str = "dashboard:";
+const DIFF_PREFIX: &str = "diff:";
+const NOTES_PREFIX: &str = "notes:";
 const GENERIC_PATH_MAX: usize = 4096;
 const LOCAL_ID_MAX: usize = 128;
 const SEGMENT_MAX: usize = 64;
@@ -59,6 +75,13 @@ pub fn leaf_ref_problem(leaf: &str, layer: Layer) -> Option<String> {
         };
         return team_problem(leaf, team).or_else(|| doc_path_problem(leaf, path));
     }
+    if let Some(problem) = content_tab_problem(leaf) {
+        return match problem {
+            Err(why) => Some(format!("{leaf:?}: {why}")),
+            Ok(Reach::Portable) => None,
+            Ok(Reach::Private) => private_only(leaf, layer),
+        };
+    }
     if let Some(dir) = leaf.strip_prefix(GENERIC_PREFIX) {
         if let Some(why) = generic_dir_problem(dir) {
             return Some(format!("{leaf:?}: {why}"));
@@ -75,9 +98,92 @@ pub fn leaf_ref_problem(leaf: &str, layer: Layer) -> Option<String> {
         return machine_local(leaf, layer);
     }
     Some(format!(
-        "{leaf:?}: not a tile ref (agent:, doc:, generic:, root:, story:, integration:, a \
-         workspace or a terminal tab id)"
+        "{leaf:?}: not a tile ref (agent:, doc:, story-page:, inbox:, dashboard:, diff:, notes:, \
+         generic:, root:, story:, integration:, a workspace or a terminal tab id)"
     ))
+}
+
+/// Which layers a valid content tab's key may be stored in.
+enum Reach {
+    Portable,
+    Private,
+}
+
+/// For a content tab's key, why its rest is refused or where it may be stored; `None` for any
+/// other ref.
+fn content_tab_problem(leaf: &str) -> Option<Result<Reach, &'static str>> {
+    let check = |valid: bool, reach: Reach, why: &'static str| {
+        Some(if valid { Ok(reach) } else { Err(why) })
+    };
+    if let Some(story) = leaf.strip_prefix(STORY_PAGE_PREFIX) {
+        return check(
+            is_local_id(story),
+            Reach::Portable,
+            "a story page ref is story-page:<story id>",
+        );
+    }
+    if let Some(org) = leaf.strip_prefix(INBOX_PREFIX) {
+        return check(
+            is_repo_slug(org),
+            Reach::Portable,
+            "an inbox ref is inbox:<org>",
+        );
+    }
+    if let Some(rest) = leaf.strip_prefix(DIFF_PREFIX) {
+        let valid = match rest.split_once(':') {
+            Some(("context" | "source", id)) => is_local_id(id),
+            _ => false,
+        };
+        return check(
+            valid,
+            Reach::Private,
+            "a diff ref is diff:<context|source>:<worktree id>",
+        );
+    }
+    if let Some(id) = leaf.strip_prefix(NOTES_PREFIX) {
+        return check(
+            is_local_id(id),
+            Reach::Private,
+            "a notes ref is notes:<note id>",
+        );
+    }
+    if let Some(rest) = leaf.strip_prefix(DASHBOARD_PREFIX) {
+        return Some(dashboard_reach(rest).ok_or(
+            "a dashboard ref is dashboard:<built-in|private>:<org>/<pane id> or \
+             dashboard:team:<org>:<team>/<pane id>",
+        ));
+    }
+    None
+}
+
+/// Where a `dashboard:` ref's rest may be stored, or `None` when it is not valid. An org may
+/// hold `/`; a pane id never does.
+fn dashboard_reach(rest: &str) -> Option<Reach> {
+    let (scope, owner) = rest.split_once(':')?;
+    let (owner, id) = owner.rsplit_once('/')?;
+    if !crate::panes::is_valid_pane_id(id) {
+        return None;
+    }
+    match scope {
+        "built-in" => is_repo_slug(owner).then_some(Reach::Portable),
+        "private" => is_repo_slug(owner).then_some(Reach::Private),
+        "team" => {
+            let (org, team) = owner.rsplit_once(':')?;
+            (is_repo_slug(org) && is_segment(team)).then_some(Reach::Portable)
+        }
+        _ => None,
+    }
+}
+
+/// A key that names this machine's or this person's own things: the private layer only.
+fn private_only(leaf: &str, layer: Layer) -> Option<String> {
+    match layer {
+        Layer::Private => None,
+        Layer::Shared => Some(format!(
+            "{leaf:?}: a diff, notes or private dashboard ref is this machine's or this person's \
+             own and stays in the private layer"
+        )),
+    }
 }
 
 /// A machine-local ref is valid in the private layer only.
@@ -252,7 +358,14 @@ mod tests {
     /// The portable kinds are valid in both layers; the machine-local kinds only in the private one.
     #[test]
     fn the_layer_decides_only_the_machine_local_kinds() {
-        for leaf in ["agent:core/dev", "doc:core/notes/plan.md"] {
+        for leaf in [
+            "agent:core/dev",
+            "doc:core/notes/plan.md",
+            "story-page:DEMO-63",
+            "inbox:acme",
+            "dashboard:built-in:acme/inbox",
+            "dashboard:team:acme/app:core/board",
+        ] {
             assert_eq!(leaf_ref_problem(leaf, Layer::Private), None);
             assert_eq!(leaf_ref_problem(leaf, Layer::Shared), None);
         }
@@ -265,6 +378,9 @@ mod tests {
             "story:ab-12-cli-overlay.story",
             "integration:/home/me/org/_epic/demo/README.md",
             "integration:demo:acme/app",
+            "diff:context:ctx-demo",
+            "notes:scratch",
+            "dashboard:private:acme/board",
         ] {
             assert_eq!(leaf_ref_problem(leaf, Layer::Private), None);
             assert!(leaf_ref_problem(leaf, Layer::Shared).is_some());

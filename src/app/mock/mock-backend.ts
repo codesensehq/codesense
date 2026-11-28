@@ -37,6 +37,7 @@ import { needsYouHandlers } from "./handlers/needs-you";
 import { fileSurfaceHandlers } from "./handlers/file-surface";
 import { notesHandlers } from "./handlers/notes";
 import { sourceDiffHandlers } from "./handlers/source-diff";
+import { tilesHandlers } from "./handlers/tiles";
 import { MockEventBus } from "./mock-events";
 import { resolveScenario } from "./scenario";
 import type { MockScenario } from "./scenario";
@@ -79,6 +80,7 @@ export function createMockBackend(
   const state = createMockState();
   const terminals = terminalLayoutHandlers(search, events);
   const contentFiles = contentFileHandlers(state);
+  const tiles = tilesHandlers(search, events);
   const handlers: HandlerRegistry = {
     ...bootHandlers(scenario),
     ...verbHandlers,
@@ -109,6 +111,7 @@ export function createMockBackend(
     ...sessionTimerHandlers(events, search),
     ...sourceDiffHandlers(search),
     ...notesHandlers(events, search),
+    ...tiles.handlers,
   };
   // SW-XS-15: the left nav's agent context world, opt-in (`?context=demo`).
   if (isAgentContextWorld(search))
@@ -156,7 +159,8 @@ export function createMockBackend(
   };
   const sourceSubscribe = handlers.live_hub_subscribe;
   handlers.live_hub_subscribe = async (args) =>
-    args.topic === "agentDefinitions"
+    tiles.subscribe(args) ??
+    (args.topic === "agentDefinitions"
       ? handlers.agent_definitions_prepare({})
       : ["paneSources", "profile", "workspaceConfig", "prefs"].includes(String(args.topic))
         ? sourceSubscribe(args)
@@ -172,7 +176,7 @@ export function createMockBackend(
                       Record<string, unknown>
                     >) ?? []
                   ).map((row) => ({ id: row.handle, ...row })),
-          });
+          }));
   if (["live-hub", "tile-host"].includes(new URLSearchParams(search).get("harness") ?? ""))
     Object.assign(handlers, liveHubFixture(events));
   Object.assign(handlers, recordsHandlers(events, { ...handlers }));

@@ -22,6 +22,7 @@ import {
 } from "@/shared/lib/context-navigation";
 import { patchAppState, serializeAppStateWrite } from "@/shared/lib/app-state-write";
 import { fieldPatch, applyFieldPatch } from "@/shared/lib/field-patch";
+import { isTileHosted } from "@/shared/tiling/hosted-frame";
 import { readPrefsState, usePrefsStore } from "@/features/dashboard/lib/prefs-client";
 import type { TeamFocusRestore } from "@/features/viewer/lib/agents-pane-team-focus";
 import { DEFAULT_NAV_LENS, normalizeNavLens, type NavLensState } from "@/shared/lib/nav-lens";
@@ -1632,6 +1633,10 @@ export interface ViewerSettings {
   // → `setQuitOnClose`, read on the window-close path. Optional — undefined reads as
   // `false` (background-on-close, the shipped default).
   quitOnClose?: boolean;
+  // The tiles release flag's local setting. The app reads it once at launch, with the remote
+  // kill, so a change acts at the next launch; `tilesEnabled()` is the session's value. No
+  // Settings row draws it yet. Optional — missing or non-boolean reads as `false` (off).
+  tiles?: boolean;
   // Show this instance's terminal server in the macOS menu bar or Linux tray (status,
   // Open, Restart, Stop/Start, Quit; a no-op where the terminal-server-tray
   // capability is off). Pushed to Rust via
@@ -8714,8 +8719,9 @@ const viewerStore: StateCreator<ViewerState> = (set, get) => ({
     }
     for (const panelId of pendingPanelCloses) layout = removePanel(layout, panelId);
     const present = new Set(layout.sections.flatMap((s) => s.group.panelIds));
+    // A tile's dashboard frames under `right-pane` too, but its tile, not this layout, holds it.
     const leaving = (f: import("@/features/dashboard/lib/frame-lifecycle").LiveFrame) =>
-      !!f.panelId && f.slotId === "right-pane" && !present.has(f.panelId);
+      !!f.panelId && f.slotId === "right-pane" && !present.has(f.panelId) && !isTileHosted(f);
     const apply = () => {
       if (revision !== paneLayoutRevision) return;
       pendingPanelCloses.clear();
@@ -13246,6 +13252,10 @@ function normalizeViewerSettings(settings: unknown): ViewerSettings {
   // fail arg-deserialization and never reach the close-path gate.
   if (typeof merged.quitOnClose !== "boolean") {
     merged.quitOnClose = false;
+  }
+  // A non-boolean tiles setting reads as off; missing stays missing.
+  if (merged.tiles !== undefined && typeof merged.tiles !== "boolean") {
+    merged.tiles = false;
   }
   // SV-8: same for the menu-bar item (a strictly-typed Rust `bool` push).
   if (typeof merged.terminalServerMenuBar !== "boolean") {

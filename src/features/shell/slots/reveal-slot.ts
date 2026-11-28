@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-import { requestFrameFocus } from "@/features/dashboard/lib/frame-lifecycle";
+import { findLiveFrame, requestFrameFocus } from "@/features/dashboard/lib/frame-lifecycle";
 import { dashboardRefKey } from "@/features/dashboard/lib/dashboard-ref";
 import { DOCK_DEFAULT_HTML_AGENT_LIST } from "@/features/dashboard/lib/dock-default";
 import {
@@ -18,6 +18,7 @@ import {
 import { isTerminalColumnShown } from "@/features/viewer/lib/terminal-column";
 import { useOrgStore } from "@/shared/stores/org-store";
 import { useViewerStore } from "@/shared/stores/viewer-store";
+import { focusTileFrame, isTileHosted } from "@/shared/tiling/hosted-frame";
 import type { DashboardRef, DashboardSlotChoice, PaneEntry } from "@/tauri/commands";
 import { INBOX_PANEL_ID } from "../right-pane/right-pane-layout";
 import { paneOnScreen, usePaneOnScreen } from "../right-pane/panes/pane-visibility";
@@ -318,6 +319,16 @@ function revealDock(options: RevealSlotOptions): void {
     requestFrameFocus(DOCK_FRAME_PANEL_ID);
   } else if (shown) focusAgentsList(teamKey);
 }
+/** A dashboard a tile shows is revealed in its tile, never a second time in the right pane. An
+ *  intent still reaches it; with `focus`, focus moves into the tile's frame when its tab is shown. */
+function revealInTile(dashboard: string, options: RevealSlotOptions): boolean {
+  const frame = findLiveFrame((f) => f.dashboard === dashboard && isTileHosted(f));
+  if (!frame) return false;
+  if (options.intent && frame.panelId)
+    usePaneStore.getState().setIntent(frame.panelId, options.intent);
+  if (options.focus) focusTileFrame(frame);
+  return true;
+}
 export function revealSlot(slot: SlotId, options: RevealSlotOptions = {}): void {
   if (slot === "file-nav") {
     const viewer = useViewerStore.getState();
@@ -334,10 +345,12 @@ export function revealSlot(slot: SlotId, options: RevealSlotOptions = {}): void 
     revealDock(options);
     return;
   }
-  const { panelId } = resolveSlot(slot, options);
+  const { panelId, dashboard } = resolveSlot(slot, options);
   const viewer = useViewerStore.getState();
   const inbox = canonicalSurface(options.surface) === "inbox";
   if (!panelId) return;
+  if (dashboard?.dashboardRef && revealInTile(dashboardRefKey(dashboard.dashboardRef), options))
+    return;
   if (inbox && !options.intent && !options.dashboard && options.presentation !== "overlay") {
     if (paneOnScreen(panelId, viewer.rightPaneOpen, viewer.rightPaneLayout)) {
       viewer.toggleRightPane();

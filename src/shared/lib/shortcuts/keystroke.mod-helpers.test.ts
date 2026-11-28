@@ -8,6 +8,7 @@ import {
   hasCtrlAndCmd,
   hasMod,
   hasPlatformMod,
+  isCloseKey,
   isCtrlChordUnavailable,
   keydownEvent,
   matchesKeystroke,
@@ -167,5 +168,15 @@ describe("isCtrlChordUnavailable", () => {
     setPlatform("Linux x86_64");
     expect(isCtrlChordUnavailable("CmdOrCtrl++")).toBe(false);
     expect(isCtrlChordUnavailable("+")).toBe(false);
+  });
+
+  it("isCloseKey is Delete, or Backspace on macOS", () => {
+    setPlatform("MacIntel");
+    expect(isCloseKey({ key: "Delete" })).toBe(true);
+    expect(isCloseKey({ key: "Backspace" })).toBe(true);
+    setPlatform("Win32");
+    expect(isCloseKey({ key: "Delete" })).toBe(true);
+    expect(isCloseKey({ key: "Backspace" })).toBe(false);
+    expect(isCloseKey({ key: "x" })).toBe(false);
   });
 });
