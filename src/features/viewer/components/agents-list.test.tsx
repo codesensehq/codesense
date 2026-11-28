@@ -5,6 +5,7 @@ import { resolve } from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, waitFor, within } from "@/test-utils";
 
+import sampleDay from "../../../../tests/fixtures/sample-day-1402.json";
 import type { RunOutcomeRead } from "@/shared/lib/run-outcome";
 import type { AgentSessionRow, RoleConfig } from "@/tauri/commands";
 import type { AgentStatus } from "@/shared/lib/agent-status-config";
@@ -123,6 +124,20 @@ vi.mock(
     };
   },
 );
+// The row menu's body renders only while a menu is open: counting it pins that the Interrupt item
+// is decided when a menu opens, never per row.
+const { rowMenuRenders } = vi.hoisted(() => ({ rowMenuRenders: { count: 0 } }));
+vi.mock("@/features/viewer/components/agent-row-menu", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/features/viewer/components/agent-row-menu")>();
+  return {
+    ...actual,
+    RowMenu: (props: Parameters<typeof actual.RowMenu>[0]) => {
+      rowMenuRenders.count += 1;
+      return actual.RowMenu(props);
+    },
+  };
+});
 vi.mock("sonner", () => ({ toast: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn() }) }));
 const launchOpen = vi.fn((_arg: unknown, _hooks: unknown) =>
   Promise.resolve({ sessionId: "sid-c" }),
@@ -9285,5 +9300,49 @@ describe("line one with a launch prompt", () => {
     const quiet = rowOf("quiet-brief");
     expect(quiet.querySelector(".ag-title-word")).toBeNull();
     expect(quiet.querySelector(".ag-title-more")).toHaveTextContent("Sweep the support channel");
+  });
+
+  it("another team's update does not re-render the rows, and no row menu body renders unopened", async () => {
+    const agents = sampleDay.agents;
+    rowMenuRenders.count = 0;
+    workspaces = { "team-1": [{ id: "ws-a" }], "acme:ops": [{ id: "ws-x" }] };
+    terminalTabIndex = {
+      "team-1": {
+        "ws-a": agents.map((a) => ({ id: `t-${a.session}`, sessionId: a.session })),
+      },
+    };
+    listResult = agents.map((a) => row({ handle: a.handle, sessionId: a.session }));
+    vi.useFakeTimers({ toFake: [...FAKE_TIMERS] });
+    try {
+      renderList();
+      await settleRows();
+      expect(rowOf(agents[0].handle)).not.toBeNull();
+      expect(rowMenuRenders.count).toBe(0);
+      await settleRows();
+      const before = new Map(rowRenders);
+      // Another team's data lands in a shared store the rows do not read.
+      const { useAvatarPacksStore } = await import("@/shared/hooks/use-avatar-packs");
+      await act(async () =>
+        useAvatarPacksStore.setState((state) => ({
+          byTeam: {
+            ...state.byTeam,
+            "acme:ops": { packs: [], warnings: [], defaultPack: null, agentAvatars: {} },
+          },
+        })),
+      );
+      await settleRows();
+      expect(rowRenders).toEqual(before);
+      expect(rowMenuRenders.count).toBe(0);
+      // Positive controls: the counters do move. A status change re-renders its row, and
+      // opening a row's menu renders the menu body.
+      const target = agents[0];
+      await act(async () => hooked(target.session));
+      expect(rowRenders.get(target.session)).toBeGreaterThan(before.get(target.session) ?? 0);
+      fireEvent.contextMenu(rowOf(target.handle));
+      await settleRows();
+      expect(rowMenuRenders.count).toBeGreaterThan(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

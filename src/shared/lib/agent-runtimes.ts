@@ -71,3 +71,20 @@ export function registeredCliOfBinary(
 export function isPreviewRuntime(cli: string | null | undefined): boolean {
   return registeredCli(cli)?.preview === true;
 }
+
+/** The key prefix of a built-in starter agent: `builtin/<runtime>`. */
+export const STARTER_PREFIX = "builtin/";
+
+/** The runtime a starter key or an agent CLI names, or undefined when it names none of ours. */
+export function namedRuntimeOf(
+  agentKey: string | null,
+  cli: string | null | undefined,
+): AgentRuntime | undefined {
+  const named = agentKey?.startsWith(STARTER_PREFIX) ? agentKey.slice(STARTER_PREFIX.length) : cli;
+  return AGENT_RUNTIMES.find((runtime) => named?.startsWith(runtime));
+}
+
+/** The runtime a starter key or an agent CLI names; Claude unless it names another CLI. */
+export function runtimeOf(agentKey: string | null, cli: string | null | undefined): AgentRuntime {
+  return namedRuntimeOf(agentKey, cli) ?? "claude";
+}

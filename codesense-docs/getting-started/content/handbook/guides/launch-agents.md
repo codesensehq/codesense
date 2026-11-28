@@ -72,7 +72,7 @@ Open a tile's **View options** menu and choose **Source diff** (or press ⌘⇧D
 
 ## 6. The agents list
 
-The team's running agents are listed in the **Agents** list on the left of the terminal area. An agent that launched others has them nested under it. Click a row to go to its terminal; right-click it for **Open inbox**, **Open story**, **Stop…** and more. The stop button in the list's header stops every background agent running unattended; terminals you opened stay open.
+The team's running agents are listed in the **Agents** list on the left of the terminal area. An agent that launched others has them nested under it. Click a row to go to its terminal; right-click it for **Interrupt**, **Open inbox**, **Open story**, **Stop…** and more. **Interrupt** stops a Claude or Codex agent's current turn, as Esc does in its terminal; the agent keeps running. The stop button in the list's header stops every background agent running unattended; terminals you opened stay open.
 
 When an agent finishes, it calls `signal_done` to record the result. Moving the story on is a plain status edit, by you or the agent. See [Statuses and phases](../concepts/statuses-and-phases.md).
 
