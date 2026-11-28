@@ -77,36 +77,23 @@ const AGENT_TEAM_VIEWER_SHARE = 0.38;
  *  teams' workspaces without scrolling in a review capture. */
 const AGENT_TEAMS_VIEWER_SHARE = 0.12;
 
-/** The `?terminals=demo` world's persisted viewer state: two workspaces of the
- *  fixture team, one whose terminals the host still runs, one whose ended, with the CLI
- *  shown. The agent team worlds add their story workspaces and a split, and
- *  `?agents=teams` its second team, open with its own active workspace and workspace order. */
-function demoAppState(
-  storyWorkspaces: readonly object[] = [],
+/** The viewer's share in the `?perf=tiles12` world: the CLI gets nearly all of the main area, so
+ *  the tiles are what the capture is about. */
+const PERF_TILES_VIEWER_SHARE = 0.12;
+
+/**
+ * A demo world's persisted viewer state: the mock's saved state with `changes(viewer)` laid over
+ * it, no Foreman landing and the CLI shown with its split.
+ */
+function worldAppState(
+  changes: (viewer: Record<string, unknown>) => Record<string, unknown>,
   splitRatio?: number,
-  secondTeam = false,
 ): string {
   const state = JSON.parse(mockAppState) as { viewer: Record<string, unknown> };
-  const secondContent = SECOND_TEAM_WORKSPACES[0].id;
   state.viewer = {
     ...state.viewer,
     schemaVersion: 10,
-    ...(secondTeam && {
-      openedTeams: [...(state.viewer.openedTeams as string[]), SECOND_TEAM_KEY],
-      workspaceOrderByTeam: { [SECOND_TEAM_KEY]: SECOND_TEAM_WORKSPACES.map((ws) => ws.id) },
-    }),
-    workspaces: {
-      [TEAM_KEY]: [
-        { id: CONTENT_WS, kind: "generic", cwd: TEAM_CONTENT_PATH, status: "ready" },
-        { id: SCRATCH_WS, kind: "generic", cwd: SCRATCH_DIR, status: "ready" },
-        ...storyWorkspaces,
-      ],
-      ...(secondTeam && { [SECOND_TEAM_KEY]: SECOND_TEAM_WORKSPACES }),
-    },
-    activeWorkspace: {
-      [TEAM_KEY]: CONTENT_WS,
-      ...(secondTeam && { [SECOND_TEAM_KEY]: secondContent }),
-    },
+    ...changes(state.viewer),
     // A demo world is about its own team: the Foreman's start landing opens the Foreman in the
     // docs team and makes that team active, so these worlds start without it.
     settings: { ...(state.viewer.settings as object | undefined), openForemanOnStart: false },
@@ -117,23 +104,58 @@ function demoAppState(
   return JSON.stringify(state);
 }
 
+/** The `?terminals=demo` world's persisted viewer state: two workspaces of the
+ *  fixture team, one whose terminals the host still runs, one whose ended, with the CLI
+ *  shown. The agent team worlds add their story workspaces and a split, and
+ *  `?agents=teams` its second team, open with its own active workspace and workspace order. */
+function demoAppState(
+  storyWorkspaces: readonly object[] = [],
+  splitRatio?: number,
+  secondTeam = false,
+): string {
+  const secondContent = SECOND_TEAM_WORKSPACES[0].id;
+  return worldAppState(
+    (viewer) => ({
+      ...(secondTeam && {
+        openedTeams: [...(viewer.openedTeams as string[]), SECOND_TEAM_KEY],
+        workspaceOrderByTeam: { [SECOND_TEAM_KEY]: SECOND_TEAM_WORKSPACES.map((ws) => ws.id) },
+      }),
+      workspaces: {
+        [TEAM_KEY]: [
+          { id: CONTENT_WS, kind: "generic", cwd: TEAM_CONTENT_PATH, status: "ready" },
+          { id: SCRATCH_WS, kind: "generic", cwd: SCRATCH_DIR, status: "ready" },
+          ...storyWorkspaces,
+        ],
+        ...(secondTeam && { [SECOND_TEAM_KEY]: SECOND_TEAM_WORKSPACES }),
+      },
+      activeWorkspace: {
+        [TEAM_KEY]: CONTENT_WS,
+        ...(secondTeam && { [SECOND_TEAM_KEY]: secondContent }),
+      },
+    }),
+    splitRatio,
+  );
+}
+
 /** The `?perf=tiles12` world's persisted viewer state: only its 12 workspaces, tiled flat on the
- *  `grid` preset (4 × 3), with the CLI given nearly all of the main area. */
+ *  `grid` preset (4 × 3). */
 function perfTilesAppState(): string {
-  const state = JSON.parse(mockAppState) as { viewer: Record<string, unknown> };
-  state.viewer = {
-    ...state.viewer,
-    schemaVersion: 10,
-    workspaces: {
-      [TEAM_KEY]: PERF_TILES.map(({ id, cwd }) => ({ id, kind: "generic", cwd, status: "ready" })),
-    },
-    activeWorkspace: { [TEAM_KEY]: PERF_TILES[0].id },
-    trayMode: { [TEAM_KEY]: "flat" },
-    foregroundLayout: { [TEAM_KEY]: { sizes: [], direction: "row", preset: "grid", root: null } },
-    settings: { ...(state.viewer.settings as object | undefined), openForemanOnStart: false },
-    cliChrome: { visible: true, splitRatio: AGENT_TEAMS_VIEWER_SHARE },
-  };
-  return JSON.stringify(state);
+  return worldAppState(
+    () => ({
+      workspaces: {
+        [TEAM_KEY]: PERF_TILES.map(({ id, cwd }) => ({
+          id,
+          kind: "generic",
+          cwd,
+          status: "ready",
+        })),
+      },
+      activeWorkspace: { [TEAM_KEY]: PERF_TILES[0].id },
+      trayMode: { [TEAM_KEY]: "flat" },
+      foregroundLayout: { [TEAM_KEY]: { sizes: [], direction: "row", preset: "grid", root: null } },
+    }),
+    PERF_TILES_VIEWER_SHARE,
+  );
 }
 
 function descriptor(
