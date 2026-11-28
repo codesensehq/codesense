@@ -5,7 +5,7 @@ import type { ItemKey } from "./item-key";
 /** The event a window's new slice arrives on. */
 export const WINDOW_SLICE_EVENT = "window:slice";
 
-export type WindowKind = "main" | "satellite";
+type WindowKind = "main" | "satellite";
 
 /** One window's entry, as that window reads it. */
 export interface WindowSlice {
