@@ -231,9 +231,14 @@ function renderApp(): void {
     if (import.meta.env.MODE === "webdriver" || import.meta.env.MODE === "mock") {
       const probe = new URLSearchParams(window.location.search).get("probe");
       if (probe) {
-        void import("./app/e2e-satellite-probe").then(({ SatelliteProbe }) =>
-          mountRoot(<SatelliteProbe path={probe} />),
-        );
+        void Promise.all([
+          import("./app/e2e-satellite-probe"),
+          import("@/shared/windows/satellite-registry"),
+        ]).then(([{ SatelliteProbe }, { startSatelliteRegistry }]) => {
+          // The probe shows its own slice; the registry client still reports this window ready.
+          startSatelliteRegistry();
+          mountRoot(<SatelliteProbe path={probe} />);
+        });
         return;
       }
     }
