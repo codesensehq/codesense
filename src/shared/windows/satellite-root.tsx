@@ -34,11 +34,11 @@ for (const row of SATELLITE_ROWS) {
 /** What the renderer is handed: the one item, or the layout the slice names. */
 export type SatelliteContent = { item: SliceItem } | { layoutRef: string };
 
-export type SatelliteRenderer = (content: SatelliteContent) => ReactNode;
+type SatelliteRenderer = (content: SatelliteContent) => ReactNode;
 
 /** The provisional renderer: a tab item's existing tab body with no chrome. A layout
  *  draws nothing yet; the story that shows the window replaces this renderer. */
-export const defaultSatelliteRenderer: SatelliteRenderer = (content) => {
+const defaultSatelliteRenderer: SatelliteRenderer = (content) => {
   if (!("item" in content) || content.item.kind !== TAB_ITEM_KIND) return null;
   const { item } = content;
   return renderViewer({ hostTeamKey: item.team, filePath: item.id, teamContentPath: "" }, {});

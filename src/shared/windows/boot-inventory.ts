@@ -61,7 +61,7 @@ setSessionLocator(
   (sessionId) => selectSessionHome(useViewerStore.getState(), sessionId)?.workspaceId,
 );
 
-export type BootClass = "run" | "read-only" | "skip";
+type BootClass = "run" | "read-only" | "skip";
 
 export interface BootRow {
   /** The hook `App` calls, the `// boot:` marker of an inline effect, or a module row's name. */

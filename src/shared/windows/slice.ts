@@ -19,7 +19,7 @@ import { isMainWindow } from "@/shared/lib/current-window";
 export const TAB_ITEM_KIND = "tab";
 
 /** The item kind of a workspace tile. No slice holds one yet. */
-export const WORKSPACE_ITEM_KIND = "workspace";
+const WORKSPACE_ITEM_KIND = "workspace";
 
 export interface SliceItem {
   kind: string;
