@@ -17,7 +17,7 @@ The new window shows the tab full-window under a small caption bar with its name
 Some tabs can't move, and their row stays in the menu, dimmed, with the reason:
 
 - An agent or terminal tab moves with its workspace: open the workspace in a new window instead.
-- A tab with an unsaved edit says "Finish or discard your edit first".
+- A tab with an unsaved edit says "‹name› has an unsaved edit; finish or discard it first".
 - A tab that can't be reopened elsewhere says "This tab can't be reopened in another window".
 
 ## Open a workspace or group in a new window
@@ -45,14 +45,18 @@ A move that can't happen leaves everything where it was and says why, in the men
 - "‹name› is already moving"
 - "Couldn't move ‹name›: the other window didn't answer"
 - "Couldn't move ‹name›: the new window didn't open"
+- "Couldn't move ‹name›: the other window closed"
+- "That window already has an item open"
 - "‹name› can't be opened in a new window: ‹reason›", or "‹name› couldn't open in a new window" when it timed out
+
+A tab you start editing while it moves stays where it was and says "Finish or discard your edit first (Done · Esc)".
 
 Terminals move only when they run on this Mac:
 
 - "Terminals on other Machines can't move to another window yet. ‹Machine› has terminals here." A workspace or group with a terminal on a [remote machine](remote-machines.md) stays in its window.
 - "Update the terminal server to move terminals between windows" means this Mac's terminal server is from an older CodeSense. Update it, then move again.
 
-While a move is on its way, the new window says "Moving ‹name›… It opens here when window ‹n› lets go." If the move hasn't finished after 10 seconds, it gives up and the window it came from says so.
+While a move is on its way, the new window says "Moving ‹name›… It opens here when window ‹n› lets go." If the move doesn't finish within a few seconds, it gives up and the window it came from says so.
 
 A window whose last item moved out or was closed stays open and says "Nothing in this window", with **Go to main window** and **Close window**.
 
