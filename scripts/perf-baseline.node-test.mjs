@@ -47,6 +47,14 @@ test("summarize gives p50 and p95 for a time key, p50 and p5 for an fps key", ()
   });
 });
 
+test("summarize gives p50 and p95 for a memory key in MiB, where lower is better", () => {
+  assert.deepEqual(summarize({ unit: "MiB", samples: [410, 400, 430, 405, 420] }), {
+    unit: "MiB",
+    p50: 410,
+    p95: 430,
+  });
+});
+
 test("spread is (max - min) / median, with the absolute range beside it", () => {
   assert.deepEqual(spread([100, 95, 105, 98, 102]), { ratio: 0.1, range: 10 });
 });
@@ -388,6 +396,47 @@ test("upsertSet appends a new runner, replaces it on a second record and leaves 
   assert.equal(JSON.stringify(twice.sets[0]), m1Text);
   // The input is never changed in place.
   assert.equal(before.sets.length, 1);
+});
+
+test("upsertSet records a MiB key from its samples' mib field as p50 and p95", () => {
+  const memory = {
+    unit: "MiB",
+    samples: [410, 400, 430, 405, 420].map((value) => ({ mib: value, endState: "webcontent:1" })),
+  };
+  const after = upsertSet(baseline(), current({ rss_tiles: memory }), "m1");
+  assert.deepEqual(after.sets[0].keys.rss_tiles, {
+    unit: "MiB",
+    p50: 410,
+    p95: 430,
+    samples: [410, 400, 430, 405, 420],
+    endState: "webcontent:1",
+  });
+  // A MiB sample read as ms would be a silent misreading: it is refused.
+  const asMs = { unit: "MiB", samples: [1, 2, 3].map((value) => ({ ms: value })) };
+  assert.throws(
+    () => upsertSet(baseline(), current({ rss_tiles: asMs }), "m1"),
+    (err) => err.exitCode === 2 && /rss_tiles: a sample has no mib value/.test(err.message),
+  );
+});
+
+test("an unknown unit is an input error, never read as ms", () => {
+  const kib = { unit: "KiB", samples: [1, 2, 3].map((value) => ({ ms: value })) };
+  assert.throws(
+    () => upsertSet(baseline(), current({ rss_tiles: kib }), "m1"),
+    (err) => err.exitCode === 2 && /rss_tiles: unknown unit KiB/.test(err.message),
+  );
+});
+
+test("record exits 2 on an unknown unit and leaves the baseline alone", (t) => {
+  const { write } = tmp(t);
+  const startText = formatBaseline(baseline());
+  const base = write("base.json", startText);
+  const kib = { unit: "KiB", samples: [1, 2, 3].map((value) => ({ ms: value })) };
+  const cur = write("cur.json", current({ rss_tiles: kib }));
+  const c = capture();
+  assert.equal(run(["record", "--current", cur, "--runner", "m1", "--baseline", base], c.io), 2);
+  assert.match(c.err.join("\n"), /unknown unit KiB/);
+  assert.equal(fs.readFileSync(base, "utf8"), startText);
 });
 
 test("upsertSet keeps the extra fields a hand-measured key carries in that runner's set", () => {

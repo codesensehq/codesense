@@ -8,11 +8,14 @@
  *   node scripts/perf-baseline.mjs record  --current <file> --runner <name> [--baseline <file>]
  *
  * The measured file is what `tests/e2e-mock/perf-baseline.spec.ts` writes (`PERF_BASELINE_OUT`):
- * `{engine, runs, commit, date, throttle, keys: {<key>: {unit, samples: [{ms|fps, endState}]}}}`.
+ * `{engine, runs, commit, date, throttle, keys: {<key>: {unit, samples: [{ms|fps|mib, endState}]}}}`,
+ * where `unit` is `ms`, `fps` or `MiB` and the sample field is `ms`, `fps` or `mib` to match; any
+ * other unit is an input error.
  * The baseline (default `tests/fixtures/perf-baseline.json`) holds one set per runner, a `compare`
  * block and an optional open-time `budget`: `{compare: {keys, tolerancePercent, floor: {ms, fps}},
  * budget: {runner, p95Ms, keys}, sets: [{runner, engine, runs, commit, date, throttle, keys: {<key>:
- * {unit, p50, p95|p5, samples, endState}}}]}`.
+ * {unit, p50, p95|p5, samples, endState}}}]}`: p95 for `ms` and `MiB` (lower is better), p5 for
+ * `fps`.
  *
  * compare: for each `compare.keys` key, the current median against the runner set's p50. A time key
  * regresses when median > p50 × (1 + tol) and median − p50 > floor.ms; an fps key when median < p50
@@ -60,7 +63,7 @@ export function percentile(values, q) {
 
 const higherIsBetter = (unit) => unit === "fps";
 
-/** p50 plus the tail that matters: p95 for a time, p5 for a frame rate. */
+/** p50 plus the tail that matters: p95 for a time or a memory size, p5 for a frame rate. */
 export function summarize({ unit, samples }) {
   return higherIsBetter(unit)
     ? { unit, p50: percentile(samples, 0.5), p5: percentile(samples, 0.05) }
@@ -79,7 +82,10 @@ function measuredKey(file, key) {
   const entry = file.keys?.[key];
   if (!entry) throw new InputError(`${key}: not in the current file`);
   if (!Array.isArray(entry.samples)) throw new InputError(`${key}: samples is not a list`);
-  const field = higherIsBetter(entry.unit) ? "fps" : "ms";
+  if (!["ms", "fps", "MiB"].includes(entry.unit)) {
+    throw new InputError(`${key}: unknown unit ${entry.unit}`);
+  }
+  const field = entry.unit === "MiB" ? "mib" : higherIsBetter(entry.unit) ? "fps" : "ms";
   const values = entry.samples.map((sample) => sample?.[field]);
   if (values.some((value) => typeof value !== "number" || !Number.isFinite(value))) {
     throw new InputError(`${key}: a sample has no ${field} value`);
