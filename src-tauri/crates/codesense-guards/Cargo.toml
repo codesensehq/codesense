@@ -9,3 +9,5 @@ publish = false
 syn = { version = "2", features = ["full", "visit"] }
 # `span-locations`: the X1 guard prints the line of each call it cannot resolve.
 proc-macro2 = { version = "1", features = ["span-locations"] }
+# The tiles flag-sites guard reads `src/shared/lib/tiles-flag-sites.json`.
+serde_json = "1"
