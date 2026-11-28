@@ -21,7 +21,13 @@ fn swept(topic: &str) -> bool {
     topic.starts_with("ui:")
         || matches!(
             topic,
-            "sessions" | "inbox" | "messageDelivery" | "storyTotals" | "machineStats" | "agentList"
+            "sessions"
+                | "inbox"
+                | "messageDelivery"
+                | "storyTotals"
+                | "machineStats"
+                | "agentList"
+                | "needsYou"
         )
 }
 pub const PAGE_SIZE: usize = 200;
@@ -593,6 +599,7 @@ impl Default for TopicRegistry {
                 "storyTotals",
                 "pins",
                 "messageDelivery",
+                "needsYou",
             ]
             .into_iter()
             .map(|t| (t.into(), CachedProjection::new(t)))

@@ -14,6 +14,7 @@ mod inbox_gate_tests;
 #[cfg(test)]
 mod inbox_offlock_tests;
 pub(crate) mod machine_stats;
+pub mod needs_you;
 pub mod pane_sources;
 pub mod pins;
 pub mod projection;
@@ -183,6 +184,11 @@ struct Model {
     processes: BTreeMap<String, String>,
     agent_rows: Vec<agent_list::AgentListRow>,
     spend_rows: Vec<serde_json::Value>,
+    /// Each live handle's work item, read from the launch registry with `rows`.
+    work_items: BTreeMap<String, String>,
+    /// Whether the needs-you set's last recompute published: until then it reads as an error,
+    /// never as nobody waiting.
+    needs_you_projected: bool,
     agent_views: BTreeSet<String>,
     agent_ready: bool,
     agent_home_team: String,
@@ -195,6 +201,9 @@ struct Model {
     files: files::Files,
     nav_files: BTreeMap<String, stories::NativeFiles>,
     inbox: std::sync::Arc<inbox::InboxProjection>,
+    /// Whether an Inbox refresh has read every team it looked for, even when that came to no
+    /// mail: until then the needs-you set reads as loading, never as nobody waiting.
+    inbox_hydrated: bool,
     inbox_pending: BTreeMap<String, (crate::commands::dashboard_launch::LaunchTeam, BTreeSet<i64>)>,
     activity_captured_at: BTreeMap<String, u64>,
     status_request_id: Option<String>,
@@ -476,9 +485,43 @@ impl LiveHub {
         };
         inbox.human_unread_total()
     }
+    /// The needs-you set as the hub last published it, in one view: `all`, or a team's
+    /// `team:<org>/<team>`. Errors until a recompute has published it, and while an Inbox the
+    /// view covers is still loading, so missing cards never read as nobody waiting: every view
+    /// needs a complete Inbox refresh first, a team's view its own team's Inbox, and `all` the
+    /// Inbox of every team a session row names.
+    pub(crate) fn needs_you_rows(&self, view: &str) -> Result<Vec<serde_json::Value>, String> {
+        let mut model = self.model.lock().unwrap();
+        if !model.needs_you_projected {
+            return Err("the needs-you set is not projected yet".into());
+        }
+        let held: BTreeSet<String> = model
+            .inbox
+            .held_teams()
+            .iter()
+            .map(|team| view_key::team_key(&team.org, &team.team))
+            .collect();
+        let loading = if !model.inbox_hydrated {
+            true
+        } else if view == "all" {
+            model
+                .rows
+                .iter()
+                .filter_map(|row| row.team.as_ref())
+                .any(|team| !held.contains(&view_key::team_key(&team.org, &team.team)))
+        } else {
+            !held.contains(view)
+        };
+        if loading {
+            return Err("inbox projection is loading".into());
+        }
+        Ok(TopicRegistry::snapshot(&mut model.projections, needs_you::TOPIC, view)?.snapshot)
+    }
     /// `team`'s pending needs-you mail to the human: the sum of its `counts` row's
-    /// `needsYouBySender`. Errors while the team's projection is loading.
-    pub(crate) fn needs_you_count(
+    /// `needsYouBySender`, the bridge's `inbox({kind:'needs-you', countOnly:true})`. It counts
+    /// the set's Inbox cards only, never its agent asks, caps or failures, which
+    /// [`Self::needs_you_rows`] holds too. Errors while the team's projection is loading.
+    pub(crate) fn needs_you_mail_count(
         &self,
         team: &crate::commands::dashboard_launch::LaunchTeam,
     ) -> Result<u32, String> {
@@ -489,7 +532,7 @@ impl LiveHub {
             }
             std::sync::Arc::clone(&model.inbox)
         };
-        Ok(needs_you_total(&inbox, team))
+        Ok(needs_you_mail_total(&inbox, team))
     }
     pub(crate) fn inbox_view(
         &self,
@@ -529,8 +572,8 @@ impl LiveHub {
 }
 
 /// The sum of `team`'s `counts` row `needsYouBySender`: its pending (unread,
-/// unarchived) needs-you mail to the human.
-pub(crate) fn needs_you_total(
+/// unarchived) needs-you mail to the human, the set's cards and nothing else.
+pub(crate) fn needs_you_mail_total(
     projection: &inbox::InboxProjection,
     team: &crate::commands::dashboard_launch::LaunchTeam,
 ) -> u32 {
@@ -1304,7 +1347,49 @@ fn project_agent_views(model: &mut Model) -> Result<Vec<projection::Delta>, Stri
             )?);
         }
     }
+    deltas.extend(project_needs_you(model)?);
     Ok(deltas)
+}
+
+/// Each session row's work item from the launch registry, keyed by handle as
+/// [`needs_you::hub_inputs`] reads it. A row with none is left out.
+fn work_items_by_handle(
+    rows: &[SessionListRow],
+    work_item: impl Fn(&str) -> Option<crate::work_item::WorkItemId>,
+) -> BTreeMap<String, String> {
+    rows.iter()
+        .filter_map(|row| Some((row.handle.clone(), work_item(&row.handle)?.to_string())))
+        .collect()
+}
+
+/// Recompute the needs-you set on the events that refresh its inputs (sessions, the Inbox
+/// and spend), never on a timer. An unchanged set publishes nothing.
+fn project_needs_you(model: &mut Model) -> Result<Vec<projection::Delta>, String> {
+    let sessions = TopicRegistry::snapshot(&mut model.projections, "sessions", "all")?.snapshot;
+    let inputs = needs_you::hub_inputs(
+        &model.rows,
+        &sessions,
+        model.inbox.needs_you_cards(),
+        &model.spend_rows,
+        &model.work_items,
+    );
+    let rows = needs_you::rows(&needs_you::needs_you(&inputs));
+    model.needs_you_projected = false;
+    let deltas = TopicRegistry::replace(&mut model.projections, needs_you::TOPIC, rows, None)?;
+    model.needs_you_projected = true;
+    Ok(deltas)
+}
+
+/// New spend rows: the agent views and the set recomputed on them. `None` when unchanged.
+fn apply_spend(
+    model: &mut Model,
+    rows: Vec<serde_json::Value>,
+) -> Result<Option<Vec<projection::Delta>>, String> {
+    if rows == model.spend_rows {
+        return Ok(None);
+    }
+    model.spend_rows = rows;
+    project_agent_views(model).map(Some)
 }
 
 pub(crate) fn spend_changed<R: tauri::Runtime>(
@@ -1316,12 +1401,10 @@ pub(crate) fn spend_changed<R: tauri::Runtime>(
     };
     let deltas = {
         let mut model = hub.model.lock().unwrap();
-        let rows = agent_list::spend::rows(value);
-        if rows == model.spend_rows {
-            return Ok(());
+        match apply_spend(&mut model, agent_list::spend::rows(value))? {
+            Some(deltas) => deltas,
+            None => return Ok(()),
         }
-        model.spend_rows = rows;
-        project_agent_views(&mut model)?
     };
     publish(app, deltas);
     Ok(())
@@ -1734,6 +1817,8 @@ async fn rebuild(app: &tauri::AppHandle, cause: u8) -> Result<(), String> {
         &hub.providers,
     );
     let workspace_rollups = agent_list::presentation::workspace_rollups(&resolved.rows, &wire);
+    // Read before the hub lock: the registry is never locked under it.
+    let work_items = work_items_by_handle(&rows, |handle| launch.work_item(handle));
     let deltas = {
         let mut model = hub.model.lock().unwrap();
         let previous = model.projections.snapshot("sessions", "all")?.snapshot;
@@ -1774,6 +1859,7 @@ async fn rebuild(app: &tauri::AppHandle, cause: u8) -> Result<(), String> {
             .chain(launch_deadline)
             .min();
         model.agent_definitions.sessions(&rows);
+        model.work_items = work_items;
         model.rows = rows;
         model.active_team = active.clone();
         model.agent_ready = durable_ready
@@ -2435,6 +2521,8 @@ async fn refresh_inbox_with_host<R: tauri::Runtime>(
             }
         }
     }
+    // Every team was discovered, resolved and read: the Inbox has loaded, mail or none.
+    let read_all = complete && pending.is_empty();
     if !pending.is_empty() {
         restore_pending(&hub, pending);
     }
@@ -2499,6 +2587,7 @@ async fn refresh_inbox_with_host<R: tauri::Runtime>(
     let (deltas, resets) = {
         let mut model = hub.model.lock().unwrap();
         model.inbox = std::sync::Arc::new(inbox);
+        model.inbox_hydrated |= read_all;
         let mut deltas = model
             .projections
             .patch_view("inbox", updates, removes, None)?;

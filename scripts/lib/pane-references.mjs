@@ -523,7 +523,7 @@ export function liveHubOutputs(app) {
   const md =
     "# LiveHub topics\n\n" +
     `${topics.length} built-in topics and ${families.length} dynamic topic family. Row shapes are read from actual producers; Value expressions and dynamic roster/collection state remain explicitly untyped. Topics with untyped fields: ${untyped.join(", ")}.\n\n` +
-    `View keys: \`${model.viewKeys.all}\` for non-team grants; \`${model.viewKeys.team}\` for a pinned team; \`${model.viewKeys.orderingSuffix}\` is the agentList status ordering suffix. For sessions, inbox and agentList, team grants cannot read other teams. Records instead use \`${model.viewKeys.records.pattern}\`: private owner is the org; team owner is org/team. Global UI topics ${globalUiTopics.map((t) => "\`" + t + "\`").join(", ")} always use \`all\`, including in a team-pinned frame. Other UI topics follow the frame view.\n\n` +
+    `View keys: \`${model.viewKeys.all}\` for non-team grants; \`${model.viewKeys.team}\` for a pinned team; \`${model.viewKeys.orderingSuffix}\` is the agentList status ordering suffix. For sessions, inbox, agentList and needsYou, team grants cannot read other teams. Records instead use \`${model.viewKeys.records.pattern}\`: private owner is the org; team owner is org/team. Global UI topics ${globalUiTopics.map((t) => "\`" + t + "\`").join(", ")} always use \`all\`, including in a team-pinned frame. Other UI topics follow the frame view.\n\n` +
     "[SDK subscribe/page signatures and envelopes](codesense.d.ts) · [Machine reference](live-hub.json)\n\n" +
     [...topics, ...families.map((f) => ({ name: f.name, rows: [f.row] }))]
       .map(

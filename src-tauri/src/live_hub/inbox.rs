@@ -142,6 +142,26 @@ impl TeamInbox {
         }
     }
 }
+/// `team`'s needs-you cards to the human that still wait on them, as needs-you inputs.
+fn team_cards(team: &LaunchTeam, state: &TeamInbox) -> Vec<super::needs_you::CardInput> {
+    state
+        .needs
+        .values()
+        .flatten()
+        .filter_map(|id| {
+            let (m, _) = state.messages.get(id)?;
+            Some(super::needs_you::CardInput {
+                message_id: m.id,
+                from: m.from.clone(),
+                org: Some(team.org.clone()),
+                team: Some(team.team.clone()),
+                summary: m.summary.clone(),
+                text: m.text.clone(),
+                work_item: None,
+            })
+        })
+        .collect()
+}
 #[derive(Default, Clone)]
 pub(crate) struct InboxProjection {
     /// Team history is shared copy-on-write: ordinary no-mail refreshes never deep-copy messages.
@@ -348,11 +368,12 @@ impl InboxProjection {
             .flat_map(|s| s.unread.iter())
             .map(|(k, v)| (k.clone(), v.len()))
             .collect();
-        let needs: BTreeMap<_, _> = state
-            .into_iter()
-            .flat_map(|s| s.needs.iter())
-            .map(|(k, v)| (k.clone(), v.len()))
-            .collect();
+        // The set's cards by sender, so this count and the set cannot drift.
+        let cards = super::needs_you::NeedsYouInputs {
+            cards: state.map(|s| team_cards(team, s)).unwrap_or_default(),
+            ..Default::default()
+        };
+        let needs = super::needs_you::cards_by_sender(&super::needs_you::needs_you(&cards));
         let fields: BTreeMap<_, _> = self
             .session_fields
             .iter()
@@ -360,6 +381,14 @@ impl InboxProjection {
             .map(|(h, v)| (h.clone(), v.clone()))
             .collect();
         json!({"id":format!("counts:{key}"),"rowType":"counts","team":team,"humanUnread":recipients.get(HUMAN).copied().unwrap_or(0),"recipients":recipients,"needsYouBySender":needs,"sessions":fields})
+    }
+    /// Every team's needs-you cards to the human that still wait on them: the cards
+    /// `needsYouBySender` counts.
+    pub(crate) fn needs_you_cards(&self) -> Vec<super::needs_you::CardInput> {
+        self.teams
+            .values()
+            .flat_map(|(team, state)| team_cards(team, state))
+            .collect()
     }
     pub fn count_rows(&self) -> Vec<(Option<String>, Value)> {
         self.teams

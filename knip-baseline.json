@@ -467,7 +467,6 @@
   "types src/app/mock/handlers/routines.ts MockAgent",
   "types src/app/mock/lib/mock-agent-context.ts MockContextEdit",
   "types src/app/mock/mock-state.ts StoredContentFile",
-  "types src/app/mock/sample-day.ts SampleDayAgent",
   "types src/app/mock/sample-day.ts SampleDayCard",
   "types src/app/mock/sample-day.ts SampleDayNeedsYouItem",
   "types src/app/mock/sample-day.ts SampleDayTeam",
