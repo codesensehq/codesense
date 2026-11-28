@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { expect, test, type Browser, type Page } from "@playwright/test";
+import { percentile } from "../../scripts/perf-baseline.mjs";
 
 /**
  * Frontend perf baselines: open another team's agent (cold and warm), switch team, open a tab
@@ -79,6 +80,8 @@ declare global {
   interface Window {
     __perf: {
       ends: Record<Ends, (arg: string) => string | null>;
+      /** Whether an element is drawn: visible, not inert, with a box. */
+      shown: (el: Element | null) => boolean;
       done: Promise<Sample> | null;
       start: { ms: number; endState: string } | null;
       navPaint?: { ms: number; endState: string };
@@ -187,7 +190,7 @@ function installClock(page: Page) {
           ? "shell"
           : null;
 
-      window.__perf = { ends: { agent, team, schedule }, done: null, start: null };
+      window.__perf = { ends: { agent, team, schedule }, shown, done: null, start: null };
       const startFrame = () => {
         // The 5,000-file world's scan stamps its own start (`perf-worlds.ts`); keep it.
         if (window.__perf.start) return;
@@ -431,10 +434,7 @@ const NAV_WHEEL_PX = 1_000;
 const tilesReady = (page: Page) =>
   page.waitForFunction(
     (selector) => {
-      const shown = (el: Element | null) => {
-        const box = el?.getBoundingClientRect();
-        return !!box && box.width > 0 && box.height > 0;
-      };
+      const { shown } = window.__perf;
       const panels = [...document.querySelectorAll(selector)].filter(shown);
       return panels.length === 12 && panels.every((p) => shown(p.querySelector(".xterm-screen")));
     },
@@ -668,7 +668,7 @@ test.describe("perf baseline: 12 tiles and a 5,000-file nav (measurement)", () =
         const opened = await page.evaluate(async (list) => {
           const nav = document.querySelector<HTMLElement>(list)!;
           const frame = () => new Promise((resolve) => requestAnimationFrame(resolve));
-          const shown = (el: Element) => el.getBoundingClientRect().height > 0;
+          const { shown } = window.__perf;
           nav.scrollTop = 0;
           let clicks = 0;
           for (let guard = 0; guard < 2_000; guard++) {
@@ -724,7 +724,7 @@ test.describe("perf baseline: 12 tiles and a 5,000-file nav (measurement)", () =
         }
         await expect(page.locator(NAV_FILE("file-04999.md"))).toBeVisible();
         if (!steps.length) throw new Error("the nav was already at its end");
-        const p95 = [...steps].sort((a, b) => a - b)[Math.ceil(0.95 * steps.length) - 1];
+        const p95 = percentile(steps, 0.95);
 
         record("nav_first_paint", "ms", paint.ms, paint.endState);
         record("nav_scroll", "ms", p95, `steps:${steps.length} opened:${opened}`);
