@@ -20,6 +20,7 @@ use std::task::{Context, Poll};
 use std::time::Duration;
 
 use axum::body::Body;
+use axum::http::uri::{Authority, PathAndQuery};
 use axum::http::{header, HeaderValue, Method, StatusCode};
 use axum::Router;
 use hyper::body::Incoming;
@@ -77,8 +78,8 @@ enum Verdict {
 /// `<label>.localhost` names pass, in any case. IP literals and a trailing dot
 /// do not.
 fn verdict(authority: &str, api_port: u16) -> Verdict {
-    if authority.is_empty()
-        || authority.bytes().any(|b| {
+    if str::is_empty(authority)
+        || str::bytes(authority).any(|b| {
             b.is_ascii_whitespace()
                 || b.is_ascii_control()
                 || matches!(b, b'%' | b'@' | b'/' | b'?' | b'#' | b'\\')
@@ -90,24 +91,27 @@ fn verdict(authority: &str, api_port: u16) -> Verdict {
         return Verdict::BadRequest;
     };
     let port = match port {
-        digits if !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()) => {
-            digits.parse::<u16>().ok().filter(|&port| port != 0)
+        digits
+            if !str::is_empty(digits)
+                && Iterator::all(&mut str::bytes(digits), |b| b.is_ascii_digit()) =>
+        {
+            Result::ok(digits.parse::<u16>()).filter(|&port| port != 0)
         }
         _ => None,
     };
     let Some(port) = port else {
         return Verdict::BadRequest;
     };
-    if host.is_empty() {
+    if str::is_empty(host) {
         return Verdict::BadRequest;
     }
     let host = host.to_ascii_lowercase();
     let localhost = host == "localhost"
         || host.strip_suffix(".localhost").is_some_and(|label| {
             (1..=63).contains(&label.len())
-                && label
-                    .bytes()
-                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+                && Iterator::all(&mut str::bytes(label), |b| {
+                    b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-'
+                })
         });
     match (localhost, port == api_port) {
         (false, _) => Verdict::Forbidden,
@@ -189,7 +193,7 @@ impl Api {
     async fn connect(&self, request: Request<Incoming>) -> Response<Body> {
         let uri = request.uri();
         let authority = match (uri.scheme(), uri.authority(), uri.path_and_query()) {
-            (None, Some(authority), None) => authority.as_str().to_owned(),
+            (None, Some(authority), None) => Authority::as_str(authority).to_owned(),
             _ => {
                 log::debug!(target: "tunnel", "CONNECT not to an authority: 400");
                 return refuse(StatusCode::BAD_REQUEST);
@@ -265,7 +269,7 @@ impl Api {
 /// refused (a dev server may listen on `::1` alone).
 async fn dial(port: u16) -> io::Result<TcpStream> {
     match TcpStream::connect((Ipv4Addr::LOCALHOST, port)).await {
-        Err(e) if e.kind() == io::ErrorKind::ConnectionRefused => {
+        Err(e) if io::Error::kind(&e) == io::ErrorKind::ConnectionRefused => {
             TcpStream::connect((Ipv6Addr::LOCALHOST, port)).await
         }
         dialled => dialled,
@@ -361,7 +365,7 @@ fn origin_form<B>(mut request: Request<B>) -> Result<Request<B>, StatusCode> {
     let Some(authority) = request.uri().authority().cloned() else {
         return Ok(request);
     };
-    if request.uri().scheme_str() != Some("http") || authority.as_str().contains('@') {
+    if request.uri().scheme_str() != Some("http") || Authority::as_str(&authority).contains('@') {
         return Err(StatusCode::BAD_REQUEST);
     }
     let mut hosts = request.headers().get_all(header::HOST).iter();
@@ -369,13 +373,13 @@ fn origin_form<B>(mut request: Request<B>) -> Result<Request<B>, StatusCode> {
         (Some(host), None)
             if host
                 .as_bytes()
-                .eq_ignore_ascii_case(authority.as_str().as_bytes()) => {}
+                .eq_ignore_ascii_case(Authority::as_str(&authority).as_bytes()) => {}
         _ => return Err(StatusCode::BAD_REQUEST),
     }
     let target = request
         .uri()
         .path_and_query()
-        .map_or("/", |target| target.as_str())
+        .map_or("/", PathAndQuery::as_str)
         .parse()
         .map_err(|_| StatusCode::BAD_REQUEST)?;
     *request.uri_mut() = target;
