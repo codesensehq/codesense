@@ -75,8 +75,8 @@ codesense-session-server = { path = "crates/codesense-session-server" }
 codesense-pty-core = { path = "crates/codesense-pty-core" }
 codesense-fs-core = { path = "crates/codesense-fs-core" }
 # OS mechanisms: the command-line tool lookup, the passphrase dialog, the tray host check and PDF
-# rendering.
-codesense-platform = { path = "crates/codesense-platform", features = ["tray-host", "pdf"] }
+# rendering, and the web views' `localhost` proxy.
+codesense-platform = { path = "crates/codesense-platform", features = ["tray-host", "pdf", "webview-proxy"] }
 sysinfo = "0.32"
 dirs = "5"
 uuid = { version = "1", features = ["v4"] }
