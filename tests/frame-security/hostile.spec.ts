@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-import { test, expect } from "../support/quarantine-playwright";
+import { test as base, expect } from "../support/quarantine-playwright";
 import { spawn, type ChildProcess } from "node:child_process";
 import { createServer, type Server } from "node:http";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
@@ -7,6 +7,22 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildViewerUrl } from "../../src/shared/lib/viewer-file-type";
 import { LINUX_WEBKIT_MEDIA_SKIP, resolveFrameFixtureBinary } from "./support/fixture-guard.mjs";
+
+// macOS WebKit can't resolve the fixture's `f-<id>.localhost` frame hosts, so on
+// darwin its contexts send them to the fixture as a proxy, much as the app's web views
+// reach the API listener (#490). The host page and every other `127.0.0.1` load stay direct.
+const test = base.extend({
+  contextOptions: async ({ contextOptions, browserName }, provide) => {
+    await provide(
+      process.platform === "darwin" && browserName === "webkit"
+        ? {
+            ...contextOptions,
+            proxy: { server: `http://127.0.0.1:${port}`, bypass: "127.0.0.1" },
+          }
+        : contextOptions,
+    );
+  },
+});
 
 let rust: ChildProcess;
 let host: Server;

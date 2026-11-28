@@ -36,6 +36,16 @@ pdf = [
     "dep:block2",
     "dep:dispatch2",
 ]
+# Sending the web views' `localhost` loads to the API listener (`webview_proxy`): a CONNECT
+# proxy on the default WKWebsiteDataStore on macOS 14 and later. Only the app enables it.
+webview-proxy = [
+    "dep:log",
+    "dep:objc2",
+    "dep:objc2-foundation",
+    "objc2-foundation/NSArray",
+    "dep:objc2-web-kit",
+    "objc2-web-kit/WKWebsiteDataStore",
+]
 
 [dependencies]
 dirs = "5"

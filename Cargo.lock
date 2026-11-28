@@ -917,6 +917,8 @@ dependencies = [
  "globset",
  "gray_matter",
  "http-body-util",
+ "hyper",
+ "hyper-util",
  "iana-time-zone",
  "image-webp",
  "indexmap 2.14.0",

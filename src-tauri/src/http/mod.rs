@@ -3,6 +3,9 @@ pub mod app_origins;
 pub mod frame_boundary;
 pub mod registry;
 pub mod routes;
+mod tunnel;
+
+pub use tunnel::serve_api;
 
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
@@ -150,6 +153,38 @@ pub fn http_port_file_path() -> PathBuf {
     port_file_path()
 }
 
+/// How long the server task waits for the main thread to install the web view proxy.
+const WEBVIEW_PROXY_INSTALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Hand `job` to the main thread through `run` and wait for it to finish, at most
+/// `limit`; logs when it doesn't. Only this task waits: the main thread never waits
+/// on it, so the hop can't deadlock. Returns whether `job` finished in time.
+async fn on_main_thread_within<E: std::fmt::Display>(
+    run: impl FnOnce(Box<dyn FnOnce() + Send>) -> Result<(), E>,
+    job: impl FnOnce() + Send + 'static,
+    limit: std::time::Duration,
+) -> bool {
+    let (done, finished) = tokio::sync::oneshot::channel();
+    if let Err(e) = run(Box::new(move || {
+        job();
+        let _ = done.send(());
+    })) {
+        log::warn!(target: "http", "Could not reach the main thread to install the web view proxy: {}", e);
+        return false;
+    }
+    match tokio::time::timeout(limit, finished).await {
+        Ok(Ok(())) => true,
+        Ok(Err(_)) => {
+            log::warn!(target: "http", "The main thread dropped the web view proxy install");
+            false
+        }
+        Err(_) => {
+            log::warn!(target: "http", "The web view proxy install took over {:?}; serving without waiting", limit);
+            false
+        }
+    }
+}
+
 /// Starts the HTTP API server on localhost.
 ///
 /// - Binds to `localhost:0` (OS-assigned port) unless `CODESENSE_HTTP_PORT`
@@ -186,6 +221,17 @@ pub fn start_http_server(app_handle: tauri::AppHandle) {
                 return;
             }
         };
+
+        // From here on the web views' `localhost` loads come to this listener
+        // (macOS 14 and later). No frame can start before `HttpApiPort` is
+        // managed, so none loads before the proxy is in place.
+        let installer = app_handle.clone();
+        on_main_thread_within(
+            |job| installer.run_on_main_thread(job),
+            move || codesense_platform::webview_proxy::install(bound_port),
+            WEBVIEW_PROXY_INSTALL_TIMEOUT,
+        )
+        .await;
 
         // Store port in Tauri managed state for internal consumers.
         app_handle.manage(HttpApiPort(bound_port));
@@ -227,11 +273,11 @@ pub fn start_http_server(app_handle: tauri::AppHandle) {
 
         let ipv6_app = app.clone();
         tauri::async_runtime::spawn(async move {
-            if let Err(e) = axum::serve(listener_v6, ipv6_app).await {
+            if let Err(e) = serve_api(listener_v6, ipv6_app).await {
                 log::error!(target: "http", "IPv6 HTTP server error: {}", e);
             }
         });
-        if let Err(e) = axum::serve(listener, app.into_make_service()).await {
+        if let Err(e) = serve_api(listener, app).await {
             log::error!(target: "http", "HTTP server error: {}", e);
         }
     });
@@ -323,10 +369,10 @@ mod tests {
         let app = axum::Router::new().route("/health", axum::routing::get(|| async { "ok" }));
         let app6 = app.clone();
         let t4 = tokio::spawn(async move {
-            axum::serve(v4, app).await.unwrap();
+            serve_api(v4, app).await.unwrap();
         });
         let t6 = tokio::spawn(async move {
-            axum::serve(v6, app6).await.unwrap();
+            serve_api(v6, app6).await.unwrap();
         });
         let client = reqwest::Client::builder().no_proxy().build().unwrap();
         for address in [
@@ -347,6 +393,85 @@ mod tests {
         }
         t4.abort();
         t6.abort();
+    }
+
+    /// The proxy install runs on the main thread before the port is published; the
+    /// server task waits for it, but never past the limit.
+    #[tokio::test(start_paused = true)]
+    async fn the_main_thread_hop_waits_for_the_job_within_the_limit() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+        let limit = WEBVIEW_PROXY_INSTALL_TIMEOUT;
+
+        // Run at once: finished.
+        let ran = Arc::new(AtomicBool::new(false));
+        let flag = ran.clone();
+        let inline = |job: Box<dyn FnOnce() + Send>| -> Result<(), String> {
+            job();
+            Ok(())
+        };
+        assert!(
+            on_main_thread_within(inline, move || flag.store(true, Ordering::SeqCst), limit).await
+        );
+        assert!(ran.load(Ordering::SeqCst));
+
+        // Run later on another thread, inside the limit: still waited for.
+        let later = |job: Box<dyn FnOnce() + Send>| -> Result<(), String> {
+            tokio::spawn(async move {
+                tokio::time::sleep(limit / 2).await;
+                job();
+            });
+            Ok(())
+        };
+        assert!(on_main_thread_within(later, || {}, limit).await);
+
+        // Never run: gives up at the limit.
+        let parked = std::sync::Mutex::new(None);
+        let never = |job: Box<dyn FnOnce() + Send>| -> Result<(), String> {
+            *parked.lock().unwrap() = Some(job);
+            Ok(())
+        };
+        let started = tokio::time::Instant::now();
+        assert!(!on_main_thread_within(never, || {}, limit).await);
+        assert_eq!(started.elapsed(), limit);
+
+        // Dropped, or the main thread is gone: not waited for.
+        let dropped = |job: Box<dyn FnOnce() + Send>| -> Result<(), String> {
+            drop(job);
+            Ok(())
+        };
+        assert!(!on_main_thread_within(dropped, || {}, limit).await);
+        let refused = |_job: Box<dyn FnOnce() + Send>| Err("event loop closed");
+        assert!(!on_main_thread_within(refused, || {}, limit).await);
+    }
+
+    /// The Network.framework proxy functions are looked up at run time, never linked,
+    /// so the app still launches on macOS 11-13, which lack them.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_web_view_proxy_functions_are_not_linked() {
+        let exe = std::env::current_exe().unwrap();
+        let out = std::process::Command::new("nm")
+            .arg("-u")
+            .arg(&exe)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "nm -u {}: {:?}", exe.display(), out);
+        let undefined = String::from_utf8_lossy(&out.stdout);
+        let symbols: Vec<&str> = undefined.lines().map(str::trim).collect();
+        assert!(
+            symbols.contains(&"_objc_msgSend"),
+            "nm lists the executable's imports"
+        );
+        let linked: Vec<&&str> = symbols
+            .iter()
+            .filter(|s| {
+                s.starts_with("_nw_proxy_config_")
+                    || **s == "_nw_endpoint_create_host"
+                    || **s == "_nw_release"
+            })
+            .collect();
+        assert!(linked.is_empty(), "hard-linked: {linked:?}");
     }
 
     #[test]
@@ -382,9 +507,7 @@ mod tests {
         let app = routes::health::router();
 
         tokio::spawn(async move {
-            axum::serve(listener, app.into_make_service())
-                .await
-                .unwrap();
+            serve_api(listener, app).await.unwrap();
         });
 
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
