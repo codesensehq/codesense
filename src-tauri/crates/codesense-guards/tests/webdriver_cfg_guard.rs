@@ -1023,7 +1023,8 @@ fn follows_path_and_include_loads_of_the_module() {
         ("other.rs", "include!(\"windows/e2e/part.rs\");"),
     ]);
     assert_eq!(hits, vec![module_hit("windows/e2e/part.rs")]);
-    // Gated, the same `#[path]` and `include!` pass.
+    // Gated, the same `#[path]` and `include!` pass. A file `#[path]` loads owns its directory,
+    // as rustc has it, so this e2e.rs declares no `mod part;`: that would load windows/part.rs.
     assert_eq!(
         tree(&[
             (
@@ -1031,7 +1032,7 @@ fn follows_path_and_include_loads_of_the_module() {
                 "mod windows;\n#[cfg(feature = \"e2e-webdriver\")]\n#[path = \"windows/e2e.rs\"]\nmod again;\n#[cfg(test)]\nmod t {\n    include!(\"windows/e2e/part.rs\");\n}"
             ),
             ("windows/mod.rs", gated_e2e),
-            ("windows/e2e.rs", "mod part;"),
+            ("windows/e2e.rs", helpers),
             ("windows/e2e/part.rs", helpers),
         ]),
         Vec::<String>::new()
