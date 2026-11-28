@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 import { useEffect } from "react";
 import { listenScoped } from "@/shared/windows/listen-scoped";
+import { ownsSession } from "@/shared/windows/slice";
 import {
   getViewerState,
   TERMINAL_WIRE_STATUSES,
@@ -130,77 +131,95 @@ export function useTerminalStatusEvents() {
     const unwatchTabAgents = watchTerminalTabAgents();
 
     group.track(
-      listenScoped<TerminalStatusPayload>("terminal-status-update", "owning-window", (event) => {
-        if (cancelled) return;
-        const { tab_session_id, status, hook_event } = event.payload;
-        if (!admitsAgentUpdate(tab_session_id)) return;
-        logger.debug("http", `terminal-status-update: session=${tab_session_id} status=${status}`);
+      listenScoped<TerminalStatusPayload>(
+        "terminal-status-update",
+        "owning-window",
+        (event) => {
+          if (cancelled) return;
+          const { tab_session_id, status, hook_event } = event.payload;
+          if (!admitsAgentUpdate(tab_session_id)) return;
+          logger.debug(
+            "http",
+            `terminal-status-update: session=${tab_session_id} status=${status}`,
+          );
 
-        const hookEvent = asClaudeHookEvent(hook_event);
-        const signal: ExplicitSignal | null = hookEvent
-          ? { kind: "claude-hook", event: hookEvent }
-          : asMcpSignal(event.payload);
-        const wasBlocked =
-          useAgentStateStore.getState().bySession[tab_session_id]?.state === "blocked";
-        if (signal) {
-          useAgentStateStore.getState().recordSignal(tab_session_id, { tier: 1, signal });
-        }
+          const hookEvent = asClaudeHookEvent(hook_event);
+          const signal: ExplicitSignal | null = hookEvent
+            ? { kind: "claude-hook", event: hookEvent }
+            : asMcpSignal(event.payload);
+          const wasBlocked =
+            useAgentStateStore.getState().bySession[tab_session_id]?.state === "blocked";
+          if (signal) {
+            useAgentStateStore.getState().recordSignal(tab_session_id, { tier: 1, signal });
+          }
 
-        if (!VALID_STATUSES.has(status)) return;
+          if (!VALID_STATUSES.has(status)) return;
 
-        const store = getViewerState();
-        // A sibling tool call's PreToolUse must not clear a pending permission.
-        if (
-          hookEvent &&
-          !hookClearsPermission(hookEvent) &&
-          !wasBlocked &&
-          store.aiStatusBySession[tab_session_id] === "needs-permission"
-        ) {
-          return;
-        }
+          const store = getViewerState();
+          // A sibling tool call's PreToolUse must not clear a pending permission.
+          if (
+            hookEvent &&
+            !hookClearsPermission(hookEvent) &&
+            !wasBlocked &&
+            store.aiStatusBySession[tab_session_id] === "needs-permission"
+          ) {
+            return;
+          }
 
-        // SW-FX-52: status is keyed by the globally-unique PTY `sessionId` in the
-        // flat `aiStatusBySession` slice, so no team gating is needed — the write
-        // is O(1) and team-agnostic. Readers only render the active team's tiles,
-        // so the observable result is unchanged from the prior active-team scope.
-        store.setSessionAiStatus(
-          tab_session_id,
-          status === "idle" ? undefined : (status as TerminalWireStatus),
-        );
-      }),
+          // Status is keyed by the globally-unique PTY `sessionId` in the
+          // flat `aiStatusBySession` slice, so no team gating is needed — the write
+          // is O(1) and team-agnostic. Readers only render the active team's tiles,
+          // so the observable result is unchanged from the prior active-team scope.
+          store.setSessionAiStatus(
+            tab_session_id,
+            status === "idle" ? undefined : (status as TerminalWireStatus),
+          );
+        },
+        (payload) => ownsSession(payload.tab_session_id),
+      ),
     );
 
     group.track(
-      listenScoped<PtyExitPayload>("pty-exit", "owning-window", (event) => {
-        if (cancelled) return;
-        const { session_id } = event.payload;
-        const store = getViewerState();
-        const record = useAgentStateStore.getState().recordPtyExit(session_id, {
-          code: numberOrNull(event.payload.exit_code),
-          signal: typeof event.payload.signal === "string" ? event.payload.signal : null,
-          requested: event.payload.requested === true,
-        });
-        // A pruned session (its tab closed) is ignored: its dot is already gone.
-        if (record === undefined) return;
-        store.setSessionAiStatus(session_id, deathDot(record ?? undefined));
-        // SW-AM-4: drop a stale in-progress note when the PTY exits, but KEEP a
-        // `settled` summary (written by `signal_done`, which fires just before
-        // exit) so AC-4's terminal summary survives until the row is torn down.
-        const prog = store.progressBySession[session_id];
-        if (prog && !prog.settled) store.setSessionProgress(session_id, undefined);
-      }),
+      listenScoped<PtyExitPayload>(
+        "pty-exit",
+        "owning-window",
+        (event) => {
+          if (cancelled) return;
+          const { session_id } = event.payload;
+          const store = getViewerState();
+          const record = useAgentStateStore.getState().recordPtyExit(session_id, {
+            code: numberOrNull(event.payload.exit_code),
+            signal: typeof event.payload.signal === "string" ? event.payload.signal : null,
+            requested: event.payload.requested === true,
+          });
+          // A pruned session (its tab closed) is ignored: its dot is already gone.
+          if (record === undefined) return;
+          store.setSessionAiStatus(session_id, deathDot(record ?? undefined));
+          // Drop a stale in-progress note when the PTY exits, but KEEP a
+          // `settled` summary (written by `signal_done`, which fires just before
+          // exit) so AC-4's terminal summary survives until the row is torn down.
+          const prog = store.progressBySession[session_id];
+          if (prog && !prog.settled) store.setSessionProgress(session_id, undefined);
+        },
+        (payload) => ownsSession(payload.session_id),
+      ),
     );
 
     group.track(
-      listenScoped<PtyOsc133Payload>("pty-osc133", "owning-window", (event) => {
-        if (cancelled || event.payload.kind !== "command-end") return;
-        const code = numberOrNull(event.payload.exit_code);
-        if (code === null) return;
-        const { session_id } = event.payload;
-        const record = useAgentStateStore.getState().recordCommandEnd(session_id, code);
-        if (record === undefined) return;
-        getViewerState().setSessionAiStatus(session_id, deathDot(record));
-      }),
+      listenScoped<PtyOsc133Payload>(
+        "pty-osc133",
+        "owning-window",
+        (event) => {
+          if (cancelled || event.payload.kind !== "command-end") return;
+          const code = numberOrNull(event.payload.exit_code);
+          if (code === null) return;
+          const { session_id } = event.payload;
+          const record = useAgentStateStore.getState().recordCommandEnd(session_id, code);
+          if (record === undefined) return;
+          getViewerState().setSessionAiStatus(session_id, deathDot(record));
+        },
+        (payload) => ownsSession(payload.session_id),
+      ),
     );
 
     return () => {

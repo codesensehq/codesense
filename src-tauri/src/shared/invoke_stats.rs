@@ -590,10 +590,12 @@ pub fn count(command: &str) {
     emit(global().count_at(Kind::Invoke, command, since_start()));
 }
 
-/// Wrap the Tauri `invoke_handler` so every frontend invoke is counted.
+/// Wrap the Tauri `invoke_handler` so every frontend invoke is counted, and one the invoking
+/// window may not call is refused (`windows::command_acl`).
 pub fn counted<R: tauri::Runtime>(
     handler: impl Fn(tauri::ipc::Invoke<R>) -> bool + Send + Sync + 'static,
 ) -> impl Fn(tauri::ipc::Invoke<R>) -> bool + Send + Sync + 'static {
+    let handler = crate::windows::command_acl::guarded(handler);
     move |invoke| {
         count(tauri::ipc::InvokeMessage::command(&invoke.message));
         handler(invoke)

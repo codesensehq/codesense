@@ -72,6 +72,7 @@ import {
   syncDashboardCommands,
 } from "@/features/dashboard/lib/dashboard-commands";
 import { dashboardRefKey } from "@/features/dashboard/lib/dashboard-ref";
+import { applyFieldPatch } from "@/shared/lib/field-patch";
 import { matchShortcut } from "@/shared/hooks/use-shortcut-handler";
 import { useShortcutsStore } from "@/shared/stores/shortcuts-store";
 import { revealSlot, resolveSlot, resolveInboxDashboard } from "@/features/shell/slots/reveal-slot";
@@ -579,7 +580,9 @@ function inboxIpc(cmd: string, args: Record<string, any> | undefined): unknown {
     case "load_app_state":
       return appState;
     case "save_app_state":
-      appState = args?.state;
+      appState = args?.patch
+        ? JSON.stringify(applyFieldPatch(JSON.parse(appState), JSON.parse(args.state)))
+        : args?.state;
       return null;
     case "bridge_resolve_open_target":
       return { path: STORY, org: ORG, team: TEAM, contentRoot: CONTENT };

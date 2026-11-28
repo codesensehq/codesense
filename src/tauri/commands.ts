@@ -274,6 +274,10 @@ export const saveAppState = async (state: string, patch = false) => {
   });
 };
 
+/** A satellite's app-state write: a key patch of the keys in `app_state_patch_keys.json`. */
+export const patchAppStateKeys = async (state: string) =>
+  invoke<void>("patch_app_state_keys", { state, expectedPrincipal: await rendererPrincipal() });
+
 export const loadAppState = async () =>
   invoke<string>("load_app_state", { expectedPrincipal: await rendererPrincipal() });
 

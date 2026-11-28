@@ -2,6 +2,7 @@
 import { create } from "zustand";
 
 import { logger } from "@/shared/lib/logger";
+import { isMainWindow } from "@/shared/lib/current-window";
 import { createDebouncedAction } from "@/shared/lib/debounced-action";
 import {
   formatKeystroke,
@@ -18,8 +19,7 @@ import {
   SHORTCUT_ACTIONS,
   useDynamicShortcutActions,
 } from "@/shared/lib/shortcuts/registry";
-import { saveAppState } from "@/tauri/commands";
-import { serializeAppStateWrite } from "@/shared/lib/app-state-write";
+import { patchAppState, serializeAppStateWrite } from "@/shared/lib/app-state-write";
 import { fieldPatch } from "@/shared/lib/field-patch";
 import { readPrefsState } from "@/features/dashboard/lib/prefs-client";
 // NOTE: panel-menu imports useShortcutsStore back — a deliberate import cycle
@@ -188,7 +188,7 @@ const debouncedPersist = createDebouncedAction(
           version: CURRENT_SHORTCUTS_VERSION,
           shortcuts: patch as Record<string, string>,
         };
-        await saveAppState(JSON.stringify({ shortcuts: persisted }), true);
+        await patchAppState({ shortcuts: persisted });
         for (const key of Object.keys(patch)) {
           if (pendingShortcutPatch[key] === patch[key]) delete pendingShortcutPatch[key];
         }
@@ -210,6 +210,9 @@ const debouncedPersist = createDebouncedAction(
  * regardless of whether the menu display succeeds.
  */
 function triggerMenuRebuild(): void {
+  // The native menu is app-wide and main's: a satellite's rebind reaches main
+  // through the prefs broadcast, and main rebuilds when it reloads the shortcuts.
+  if (!isMainWindow()) return;
   // SW-RP-1: route through rebuildNativeMenu so a shortcut rebind keeps the
   // registry-driven View → Panels submenu intact (and vice-versa).
   rebuildNativeMenu();
@@ -377,7 +380,7 @@ export const useShortcutsStore = create<ShortcutsState>((set, get) => ({
         // migration never re-runs. Reuses the existing debounced path —
         // no extra synchronous write, no added startup blocking. Ordered
         // after the stateLoaded flip so the persist guard doesn't drop it.
-        if (didMigrate) get().persistState();
+        if (didMigrate && isMainWindow()) get().persistState();
       } else {
         set({
           shortcuts: Object.fromEntries(
@@ -395,7 +398,8 @@ export const useShortcutsStore = create<ShortcutsState>((set, get) => ({
     // Push the effective overrides to the Rust menu so accelerator
     // display reflects the user's rebinds on first paint. Fire-and-
     // forget — macOS-only, and the keyboard handler is already live
-    // regardless of whether the menu renders the hint.
+    // regardless of whether the menu renders the hint. A satellite's load
+    // leaves main's menu alone (triggerMenuRebuild checks).
     triggerMenuRebuild();
   },
 }));

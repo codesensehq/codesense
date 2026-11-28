@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 import { useCallback, useEffect, useSyncExternalStore, type RefObject } from "react";
 import { listenScoped } from "@/shared/windows/listen-scoped";
+import { ownsSession } from "@/shared/windows/slice";
 
 import * as commands from "@/tauri/commands";
 import type { RuntimeSessionReference, SessionPrompt } from "@/tauri/commands";
@@ -186,6 +187,7 @@ function subscribeMarks(): () => void {
             if (session_id && (kind === "prompt-start" || kind === "command-end"))
               onMark(session_id);
           },
+          (payload) => ownsSession(payload?.session_id),
         ),
       )
         .then((un) => {

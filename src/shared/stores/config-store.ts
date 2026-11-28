@@ -6,10 +6,10 @@ import {
 import { resolveTeamContentContext } from "@/shared/lib/team-content-context";
 import { teamAllContextId } from "@/shared/lib/context-model";
 import { parseTeamKey } from "@/shared/lib/team-key";
-import { serializeAppStateWrite } from "@/shared/lib/app-state-write";
+import { patchAppState, serializeAppStateWrite } from "@/shared/lib/app-state-write";
+import { fieldPatch } from "@/shared/lib/field-patch";
 import { create } from "zustand";
 import {
-  saveAppState,
   loadAppState,
   createContextRepo,
   loadWorkspaceConfig,
@@ -351,6 +351,10 @@ export const useConfigStore = create<ConfigState>((set, get) => {
       try {
         const raw = await loadAppState();
         const parsed = JSON.parse(raw);
+        persistedConfig = {
+          repos: parsed.repos,
+          worktreeSetupApprovals: parsed.worktreeSetupApprovals,
+        };
         const repos = migrateRepos(parsed.repos ?? []);
         set({
           initialized: true,
@@ -483,12 +487,12 @@ function migrateRepos(rawRepos: unknown[]): RepoState[] {
     .filter((r): r is RepoState => r !== null && r.repoPath.length > 0);
 }
 
-/** Read-modify-write the on-disk state so we don't clobber other top-level
- *  keys (notably `viewer`, owned by viewer-store). A straight overwrite was
- *  wiping the viewer key on every config mutation; viewer-store's debounced
- *  persist usually restored it on the next write, but the gap window meant
- *  a crash or app close right after a config change lost tabs/drill/expanded/
- *  pipelineScope state. Mirror viewer-store's RMW pattern.
+/** The config keys as this store last read or wrote them, which `persist` patches against.
+ *  Nothing else writes them (satellites never do), so no pre-write load is needed. */
+let persistedConfig: Record<string, unknown> = {};
+
+/** Patch this store's own keys (`repos`, `worktreeSetupApprovals`) against what it last read
+ *  or wrote, so other top-level keys are left alone.
  *
  *  Errors propagate to the caller. `updateRepo` uses this to drive the
  *  optimistic-revert path; `addRepo`/`removeRepo`/`updateRepoRemote` catch
@@ -496,11 +500,11 @@ function migrateRepos(rawRepos: unknown[]): RepoState[] {
 function persist(state: ConfigState): Promise<void> {
   return queueConfigWrite(() =>
     serializeAppStateWrite(async () => {
-      const raw = await loadAppState();
-      const existing = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
-      existing.repos = state.repos;
-      existing.worktreeSetupApprovals = state.worktreeSetupApprovals;
-      await saveAppState(JSON.stringify(existing));
+      const next = { repos: state.repos, worktreeSetupApprovals: state.worktreeSetupApprovals };
+      const patch = fieldPatch(persistedConfig, next) as Record<string, unknown> | undefined;
+      if (patch === undefined) return;
+      await patchAppState(patch);
+      persistedConfig = next;
     }),
   );
 }

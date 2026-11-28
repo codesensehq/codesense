@@ -12,12 +12,17 @@ import { serializeAppStateWrite } from "@/shared/lib/app-state-write";
 const mockLoadAppState = vi.fn<() => Promise<string>>();
 const mockSaveAppState = vi.fn<(state: string, patch?: boolean) => Promise<void>>();
 const mockRebuildMenu = vi.fn<(overrides: Record<string, string>) => Promise<void>>();
+const mockPatchAppStateKeys = vi.fn<(patch: string) => Promise<void>>();
 
 vi.mock("@/tauri/commands", () => ({
   loadAppState: () => mockLoadAppState(),
   saveAppState: (state: string, patch?: boolean) => mockSaveAppState(state, patch),
+  patchAppStateKeys: (patch: string) => mockPatchAppStateKeys(patch),
   rebuildMenu: (overrides: Record<string, string>) => mockRebuildMenu(overrides),
 }));
+
+const { windowState } = vi.hoisted(() => ({ windowState: { main: true } }));
+vi.mock("@/shared/lib/current-window", () => ({ isMainWindow: () => windowState.main }));
 
 const { mockWarn } = vi.hoisted(() => ({ mockWarn: vi.fn() }));
 vi.mock("@/shared/lib/logger", () => ({
@@ -36,9 +41,12 @@ import {
 // ---------- Setup ----------
 
 beforeEach(async () => {
+  windowState.main = true;
   mockLoadAppState.mockReset();
   mockSaveAppState.mockReset();
   mockRebuildMenu.mockReset();
+  mockPatchAppStateKeys.mockReset();
+  mockPatchAppStateKeys.mockResolvedValue(undefined);
   mockLoadAppState.mockResolvedValue("{}");
   mockSaveAppState.mockResolvedValue(undefined);
   mockRebuildMenu.mockResolvedValue(undefined);
@@ -378,6 +386,33 @@ describe("useShortcutsStore — persist / load round-trip", () => {
         shortcuts: "oops" as unknown as Record<string, string>,
       });
       expect(didMigrate).toBe(false);
+    });
+  });
+
+  describe("loadPersistedState — native menu and migration persist by window", () => {
+    const legacy = JSON.stringify({
+      shortcuts: { shortcuts: { "nav.switch-workspace": "CmdOrCtrl+Shift+G" } },
+    });
+
+    it("main rebuilds the native menu after loading", async () => {
+      useShortcutsStore.setState({ shortcuts: {}, stateLoaded: false });
+      await useShortcutsStore.getState().loadPersistedState();
+      expect(mockRebuildMenu).toHaveBeenCalledTimes(1);
+    });
+
+    it("a satellite neither rebuilds the menu nor persists the migration", async () => {
+      vi.useFakeTimers();
+      windowState.main = false;
+      mockLoadAppState.mockResolvedValue(legacy);
+      useShortcutsStore.setState({ shortcuts: {}, stateLoaded: false });
+      await useShortcutsStore.getState().loadPersistedState();
+      await vi.advanceTimersByTimeAsync(500);
+      expect(useShortcutsStore.getState().shortcuts).toEqual({
+        "nav.switch-org": "CmdOrCtrl+Shift+G",
+      });
+      expect(mockRebuildMenu).not.toHaveBeenCalled();
+      expect(mockSaveAppState).not.toHaveBeenCalled();
+      expect(mockPatchAppStateKeys).not.toHaveBeenCalled();
     });
   });
 

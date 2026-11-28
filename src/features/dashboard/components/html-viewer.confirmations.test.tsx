@@ -55,8 +55,11 @@ vi.mock("@/tauri/commands", async (original) => ({
   },
   bridgeDocContext: async () => mock.location,
   loadAppState: async () => mock.state,
-  saveAppState: async (s: string) => {
-    mock.state = s;
+  saveAppState: async (s: string, patch?: boolean) => {
+    const { applyFieldPatch } = await import("@/shared/lib/field-patch");
+    mock.state = patch
+      ? JSON.stringify(applyFieldPatch(JSON.parse(mock.state || "{}"), JSON.parse(s)))
+      : s;
   },
   dashboardKillByHandle: mock.kill,
   wvRosterForSession: async () => null,

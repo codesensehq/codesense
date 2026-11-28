@@ -9,6 +9,7 @@ import {
   type TerminalTabIndex,
 } from "@/features/viewer/lib/cli-workspace/store/viewer-access";
 import { terminalManager, type TerminalManager } from "@/shared/terminal/terminal-manager";
+import { sliceTerminalIndex } from "@/shared/windows/slice";
 
 function collect(index: TerminalTabIndex, into: Set<string>): void {
   for (const byWorkspace of Object.values(index)) {
@@ -16,11 +17,12 @@ function collect(index: TerminalTabIndex, into: Set<string>): void {
   }
 }
 
-/** Every session a tab still holds: shown, Hidden, or in a minimized workspace. */
+/** Every session a tab still holds: shown, Hidden, or in a minimized workspace (in a
+ *  satellite, only in the workspaces its slice holds). */
 export function tabbedSessionIds(s: ReturnType<typeof getViewerState>): Set<string> {
   const ids = new Set<string>();
-  collect(selectRunningTerminalTabIndex(s), ids);
-  collect(selectMinimizedTerminalTabIndex(s), ids);
+  collect(sliceTerminalIndex(selectRunningTerminalTabIndex(s)), ids);
+  collect(sliceTerminalIndex(selectMinimizedTerminalTabIndex(s)), ids);
   return ids;
 }
 

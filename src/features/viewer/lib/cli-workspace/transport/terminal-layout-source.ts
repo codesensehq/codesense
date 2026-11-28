@@ -13,6 +13,7 @@
 import { acceptsPrivateAuthority } from "@/shared/lib/private-terminal-authority";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { listenScoped } from "@/shared/windows/listen-scoped";
+import { ownsTerminalLayout } from "@/shared/windows/slice";
 import {
   TERMINAL_LAYOUT_ADMISSION_CHANGED_EVENT,
   TERMINAL_LAYOUT_RESYNC_EVENT,
@@ -81,6 +82,7 @@ export function onTerminalLayoutChanged(
       if (change && acceptsPrivateAuthority(payload.privateAuthorityEpoch))
         handler(payload.target, change, payload.privateAuthorityEpoch);
     },
+    ownsTerminalLayout,
   );
 }
 
@@ -94,6 +96,7 @@ export function onTerminalAdmissionChanged(
     "owning-window",
     (event) =>
       acceptsPrivateAuthority(event.payload.privateAuthorityEpoch) && handler(event.payload),
+    ownsTerminalLayout,
   );
 }
 

@@ -2,8 +2,8 @@
 import { useMemo } from "react";
 import { fieldPatch } from "@/shared/lib/field-patch";
 import { usePrefsStore } from "./prefs-client";
-import { loadAppState, saveAppState } from "@/tauri/commands";
-import { serializeAppStateWrite } from "@/shared/lib/app-state-write";
+import { loadAppState } from "@/tauri/commands";
+import { patchAppState, serializeAppStateWrite } from "@/shared/lib/app-state-write";
 export type ConfirmPolicy = "never" | "prompt" | "prompt-once";
 export type DashboardPolicy = {
   preset: "open" | "team-safe";
@@ -39,7 +39,7 @@ export function updateDashboardPolicy(
     const state = raw ? JSON.parse(raw) : {};
     const policy = normalizePolicy(state.dashboardPolicy);
     const patch = fieldPatch(policy, update(policy));
-    if (patch !== undefined) await saveAppState(JSON.stringify({ dashboardPolicy: patch }), true);
+    if (patch !== undefined) await patchAppState({ dashboardPolicy: patch });
   });
 }
 

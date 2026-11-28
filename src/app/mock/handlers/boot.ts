@@ -59,6 +59,9 @@ const mockLocalProfileStatus: LocalProfileStatus = {
  *  NoSourceRepos). Everything else is scenario-independent. */
 export function bootHandlers(scenario: MockScenario): HandlerRegistry {
   let savedAppState: string | null = null;
+  const appState = () => savedAppState ?? (scenario.hasOrg ? mockAppState : mockFirstRunAppState);
+  const patched = (patch: string) =>
+    JSON.stringify(applyFieldPatch(JSON.parse(appState()), JSON.parse(patch)));
   const teams = scenarioTeams(scenario);
   const org: Org = { ...mockOrg, teams };
   const loadedOrg: LoadedOrg = { ...mockLoadedOrg, org };
@@ -80,19 +83,15 @@ export function bootHandlers(scenario: MockScenario): HandlerRegistry {
     // everyone else resumes their own workspace.
     // App state round-trips in memory for the session (a reload starts fresh), so
     // what the app saves — layout, settings, dashboard prefs — reads back.
-    load_app_state: () => savedAppState ?? (scenario.hasOrg ? mockAppState : mockFirstRunAppState),
+    load_app_state: appState,
     save_app_state: (args) => {
       if (typeof args.state === "string")
-        savedAppState = args.patch
-          ? JSON.stringify(
-              applyFieldPatch(
-                JSON.parse(
-                  savedAppState ?? (scenario.hasOrg ? mockAppState : mockFirstRunAppState),
-                ),
-                JSON.parse(args.state),
-              ),
-            )
-          : args.state;
+        savedAppState = args.patch ? patched(args.state) : args.state;
+      return undefined;
+    },
+    // A satellite's key patch merges like `save_app_state`'s patch; Rust checks its keys.
+    patch_app_state_keys: (args) => {
+      if (typeof args.state === "string") savedAppState = patched(args.state);
       return undefined;
     },
     // SW-LN-B20: the frontend declares the local guest session; nothing to track in mock mode.

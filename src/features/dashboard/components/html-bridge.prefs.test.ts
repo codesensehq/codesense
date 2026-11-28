@@ -10,8 +10,11 @@ const { store } = vi.hoisted(() => ({ store: { raw: "{}" } }));
 vi.mock("@/tauri/commands", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/tauri/commands")>()),
   loadAppState: vi.fn(async () => store.raw),
-  saveAppState: vi.fn(async (s: string) => {
-    store.raw = s;
+  saveAppState: vi.fn(async (s: string, patch?: boolean) => {
+    const { applyFieldPatch } = await import("@/shared/lib/field-patch");
+    store.raw = patch
+      ? JSON.stringify(applyFieldPatch(JSON.parse(store.raw || "{}"), JSON.parse(s)))
+      : s;
   }),
 }));
 

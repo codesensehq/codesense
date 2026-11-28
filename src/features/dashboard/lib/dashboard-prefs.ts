@@ -4,9 +4,10 @@
  * state. Pane keys use DashboardRef identity; a private install reads its
  * source's preferences until the first write forks its own entry.
  */
-import { serializeAppStateWrite } from "@/shared/lib/app-state-write";
+import { patchAppState, serializeAppStateWrite } from "@/shared/lib/app-state-write";
+import { fieldPatch } from "@/shared/lib/field-patch";
 import { rendererPrincipal } from "@/shared/lib/local-profile-session";
-import { loadAppState, saveAppState } from "@/tauri/commands";
+import { loadAppState } from "@/tauri/commands";
 import type { DashboardRef } from "@/tauri/commands";
 import { dashboardRefKey } from "./dashboard-ref";
 import { usePrefsStore } from "./prefs-store";
@@ -55,9 +56,7 @@ function requireKey(key: string | null | undefined): string {
   return key;
 }
 
-async function loadAll(
-  namespace: string,
-): Promise<{ state: Record<string, unknown>; all: Record<string, Entry> }> {
+async function loadAll(namespace: string): Promise<{ all: Record<string, Entry> }> {
   const raw = await loadAppState();
   const state = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
   const stored = state[namespace];
@@ -65,7 +64,18 @@ async function loadAll(
     stored && typeof stored === "object" && !Array.isArray(stored)
       ? (stored as Record<string, Entry>)
       : {};
-  return { state, all };
+  return { all };
+}
+
+/** Write `namespace`'s entries as a field patch against `all`, the entries just read, so an
+ *  entry evicted or a pref removed goes as `null` and other keys are left alone. */
+async function patchEntries(
+  namespace: string,
+  all: Record<string, Entry>,
+  updated: Record<string, Entry>,
+): Promise<void> {
+  const patch = fieldPatch(all, updated);
+  if (patch !== undefined) await patchAppState({ [namespace]: patch });
 }
 
 /** `namespace`'s entries from the live prefs store, which the app keeps current from the
@@ -122,8 +132,7 @@ export async function readDashboardPrefs(
       const e = fresh.all[storedKey];
       if (!e || Date.now() - (e.at ?? 0) <= PREFS_TOUCH_MS) return;
       const touched = { ...fresh.all, [storedKey]: { ...e, at: Date.now() } };
-      fresh.state[namespace] = touched;
-      await saveAppState(JSON.stringify(fresh.state));
+      await patchEntries(namespace, fresh.all, touched);
       keepWritten(namespace, touched, principal);
     }).catch(() => {});
   }
@@ -180,7 +189,7 @@ export function writeDashboardPrefs(
   let result: Prefs = {};
   return serializeAppStateWrite(async () => {
     const principal = await writerPrincipal();
-    const { state, all } = await loadAll(namespace);
+    const { all } = await loadAll(namespace);
     const { entry } = prefsEntry(all, k, installedFrom);
     const next: Prefs = { ...(entry && isPlainObject(entry.data) ? entry.data : {}) };
     for (const [name, value] of Object.entries(patch)) {
@@ -211,8 +220,7 @@ export function writeDashboardPrefs(
       total -= byteLength({ [old]: updated[old] }) - 2;
       delete updated[old];
     }
-    state[namespace] = updated;
-    await saveAppState(JSON.stringify(state));
+    await patchEntries(namespace, all, updated);
     keepWritten(namespace, updated, principal);
     result = { ...next };
   }).then(() => result);

@@ -81,7 +81,9 @@ it("holds selection until a pending config approval and repo snapshot reach the 
     const persisted = JSON.parse(save.mock.calls[0][0] as string);
     expect(persisted.repos[0].repoPath).toBe("/old/repo");
     expect(persisted.worktreeSetupApprovals["/old/repo::hash"].configHash).toBe("hash");
-    expect(persisted.viewer).toEqual({ selected: "old" });
+    // A key patch: the viewer key on disk is left alone.
+    expect(save.mock.calls[0][1]).toBe(true);
+    expect(persisted).not.toHaveProperty("viewer");
     expect(invoke).toHaveBeenCalledWith("select_local_profile", {
       principal: "84",
       displayName: undefined,

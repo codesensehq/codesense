@@ -37,8 +37,11 @@ vi.mock("@/tauri/commands", async (importOriginal) => {
   return {
     ...actual,
     loadAppState: async () => appState.raw,
-    saveAppState: async (raw: string) => {
-      appState.raw = raw;
+    saveAppState: async (raw: string, patch?: boolean) => {
+      const { applyFieldPatch } = await import("@/shared/lib/field-patch");
+      appState.raw = patch
+        ? JSON.stringify(applyFieldPatch(JSON.parse(appState.raw || "{}"), JSON.parse(raw)))
+        : raw;
     },
     listDirectory: () => Promise.resolve([]),
     getTeamNavPins: () => Promise.resolve([]),

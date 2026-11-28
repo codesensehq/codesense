@@ -68,7 +68,7 @@ function extractRustHandlers(): string[] {
   // `license::commands` hosts the SW-PB-9 beta license commands (registered under the beta cfg).
   // `gif::settings` hosts the GIF search settings and key commands.
   // `flags` hosts the release flags' boot-value commands.
-  // `windows::commands` hosts the window registry's commands.
+  // `windows` hosts the window commands; `windows::commands` hosts the window registry's.
   const handlerPattern =
     /(?:commands|license::commands|dashboard_publish|verbs::commands|records::commands|mcp|mcp_registration|menu|renderer_watchdog|live_hub|weft|gif|flags|windows)(?:::\w+)*::(\w+)/g;
   const commands: string[] = [];
@@ -1352,9 +1352,10 @@ describe("Tauri IPC Contract", () => {
     // +1 on both sides for getTilesEnabled/tiles_enabled (the tiles release flag's boot
     // value), so 551/570.
     // Window registry: +4 on both sides (window_get_slice, window_ready,
-    // window_set_layout, window_focus_owner), so 555/574.
-    const EXPECTED_TS_COMMAND_COUNT = 555;
-    const EXPECTED_RUST_COMMAND_COUNT = 574;
+    // window_set_layout, window_focus_owner), and +1 for patchAppStateKeys/patch_app_state_keys
+    // (a satellite's app-state key patch), so 556/575.
+    const EXPECTED_TS_COMMAND_COUNT = 556;
+    const EXPECTED_RUST_COMMAND_COUNT = 575;
     // The Rust count runs ahead of the TS count by the RUST_ONLY_COMMANDS that have no
     // renderer IPC wrapper (the access revocation and two session watchers plus the WV-B5/C6
     // scope-layer and harvest-norm Tauri commands whose FE wrappers land in later WV stories):

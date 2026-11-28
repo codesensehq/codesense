@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { beforeEach, expect, it, vi } from "vitest";
+import { applyFieldPatch } from "@/shared/lib/field-patch";
 const { load, save } = vi.hoisted(() => ({ load: vi.fn(), save: vi.fn() }));
 vi.mock("@/tauri/commands", () => ({
   loadAppState: load,
@@ -18,17 +19,18 @@ it("an in-flight org write cannot overwrite a concurrent config approval at swit
   const { useConfigStore, flushConfigForProfileSwitch } = await import("./config-store");
   let disk = '{"viewer":{"tab":"keep"}}';
   load.mockImplementation(async () => disk);
+  const write = (value: string, patch?: boolean) => {
+    disk = patch ? JSON.stringify(applyFieldPatch(JSON.parse(disk), JSON.parse(value))) : value;
+  };
   let release!: () => void;
   save
-    .mockImplementationOnce(async (value: string) => {
+    .mockImplementationOnce(async (value: string, patch?: boolean) => {
       await new Promise<void>((resolve) => {
         release = resolve;
       });
-      disk = value;
+      write(value, patch);
     })
-    .mockImplementation(async (value: string) => {
-      disk = value;
-    });
+    .mockImplementation(async (value: string, patch?: boolean) => write(value, patch));
   useOrgStore.setState({
     stateLoaded: true,
     activeOrgSlug: "owner/context",
@@ -40,7 +42,9 @@ it("an in-flight org write cannot overwrite a concurrent config approval at swit
   const drain = flushConfigForProfileSwitch();
   await Promise.resolve();
   await Promise.resolve();
-  expect(load).toHaveBeenCalledTimes(1);
+  // Key patches need no read; the approval's write queues behind the org write.
+  expect(load).not.toHaveBeenCalled();
+  expect(save).toHaveBeenCalledOnce();
   release();
   await orgWrite;
   await approval;

@@ -30,8 +30,11 @@ vi.mock("@/tauri/commands", async (importOriginal) => ({
   ...(await import("../../../../tests/support/fixtures/frame")).frameCommands(),
   getHttpApiPort: () => Promise.resolve(9123),
   loadAppState: vi.fn(async () => store.raw),
-  saveAppState: vi.fn(async (s: string) => {
-    store.raw = s;
+  saveAppState: vi.fn(async (s: string, patch?: boolean) => {
+    const { applyFieldPatch } = await import("@/shared/lib/field-patch");
+    store.raw = patch
+      ? JSON.stringify(applyFieldPatch(JSON.parse(store.raw || "{}"), JSON.parse(s)))
+      : s;
   }),
 }));
 

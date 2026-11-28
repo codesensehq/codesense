@@ -9,6 +9,7 @@ import { useWindowFocused } from "@/shared/hooks/use-window-focused";
 import { useActiveTeamKey } from "@/shared/lib/team-key";
 import { markSessionSeen, useAgentStateStore } from "@/shared/stores/agent-state-store";
 import { useViewerStore } from "@/shared/stores/viewer-store";
+import { ownsSession } from "@/shared/windows/slice";
 
 /**
  * Marks the session the user is looking at as seen: the active tab of the
@@ -25,6 +26,6 @@ export function useMarkActiveSessionSeen(): void {
   const sessionId = useViewerStore((s) => selectWatchedSessionId(s, teamKey));
   const since = useAgentStateStore((a) => (sessionId ? a.stateSince[sessionId] : undefined));
   useEffect(() => {
-    if (focused && sessionId) markSessionSeen(sessionId);
+    if (focused && sessionId && ownsSession(sessionId)) markSessionSeen(sessionId);
   }, [focused, sessionId, since]);
 }

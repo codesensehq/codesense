@@ -10,6 +10,7 @@ import {
 } from "@/features/viewer/lib/cli-workspace/store/viewer-access";
 import { getEffectiveTerminalFontPx } from "@/shared/lib/font-sizes";
 import { terminalManager, type TerminalManager } from "@/shared/terminal/terminal-manager";
+import { sliceTerminalIndex } from "@/shared/windows/slice";
 
 type ViewerState = ReturnType<typeof getViewerState>;
 
@@ -40,7 +41,7 @@ export function useTerminalDisplayWarm(manager: TerminalManager = terminalManage
           document.documentElement.classList.contains("dark") ? "dark" : "light",
         ),
       };
-      for (const byWorkspace of Object.values(running)) {
+      for (const byWorkspace of Object.values(sliceTerminalIndex(running))) {
         for (const tabs of Object.values(byWorkspace)) {
           for (const tab of tabs) {
             void manager.ensure(tab.sessionId, { ...base, life: lives[tab.sessionId] ?? 0 });
