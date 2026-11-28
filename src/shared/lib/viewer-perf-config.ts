@@ -23,6 +23,13 @@ export const VIEWER_PERF = {
    */
   keepAliveMaxViewers: 10,
   /**
+   * Max hidden tile bodies the tile host keeps mounted per window, least recently shown out
+   * first (`src/shared/tiling/tile-keep-alive.ts`). A visible body, a cell's active tab, a pin
+   * and a key a keep predicate names are never evicted but count toward it. Separate from
+   * `keepAliveMaxViewers`, which stays the cap of the view without tiles.
+   */
+  tileKeepAliveMaxHidden: 10,
+  /**
    * Route markdown parsing (`remark-parse` / `remark-gfm` /
    * `remark-frontmatter` / `remark-rehype` / `rehype-highlight`) through
    * a Web Worker (`src/shared/lib/markdown-worker/`) so the synchronous
