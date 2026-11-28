@@ -4,7 +4,8 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 
 // With the tiles flag on, every layout change the store makes reaches the layout client's
 // saveLayout, so a relaunch reads it back from the group file: a preset change, a focused-leaf
-// replace and a terminal re-key that moves a tab grid to a new key.
+// replace, a terminal re-key that moves a tab grid to a new key and a team rename that moves
+// the team's foreground to its new key.
 
 vi.mock("@/tauri/commands", () => ({
   saveAppState: vi.fn().mockResolvedValue(undefined),
@@ -76,6 +77,7 @@ beforeEach(() => {
   useOrgStore.setState({ activeOrgSlug: "acme", activeTeamName: "default" });
   useViewerStore.setState({
     foregroundLayout: {},
+    foregroundLayoutByRail: {},
     activeWorkspace: { [TEAM]: A },
     workspaces: { [TEAM]: [ws(A), ws(B)] },
     softClosedWorkspaces: { [TEAM]: { [M]: shadow(M) } },
@@ -122,5 +124,16 @@ describe("a layout change the store makes is saved to its group file", () => {
     const [after] = Object.keys(useViewerStore.getState().tabGridLayout);
     expect(after).not.toBe(before);
     expect(client.saveLayout).toHaveBeenCalledWith({ kind: "tabGrid", workspaceKey: after }, grid);
+  });
+
+  it("a team rename saves the team's foreground under its new key", () => {
+    useViewerStore.getState().setForegroundPreset(TEAM, "rows");
+    const root = shownRoot();
+    client.saveLayout.mockClear();
+    useViewerStore.getState().rekeyTeam("acme", "default", "renamed");
+    expect(client.saveLayout).toHaveBeenCalledWith(
+      { kind: "foreground", teamKey: "acme:renamed", railKey: null },
+      root,
+    );
   });
 });

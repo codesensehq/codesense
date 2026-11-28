@@ -2120,6 +2120,19 @@ function saveActiveForeground(state: ForegroundSlotState, teamKey: string, gestu
   );
 }
 
+/** Saves each foreground slot `teamKey` holds, flat and per rail, to its group file. */
+function saveForegroundSlots(state: ForegroundSlotState, teamKey: string) {
+  const rails = Object.keys(state.foregroundLayoutByRail[teamKey] ?? {});
+  const held = state.foregroundLayout[teamKey] === undefined ? rails : [null, ...rails];
+  for (const railKey of held) {
+    const slot = foregroundSlotForRail(state, teamKey, railKey);
+    saveLayout(
+      { kind: "foreground", teamKey, railKey },
+      effectiveMosaicRoot(defaultForegroundLayout(slot.layout), slot.tileIds),
+    );
+  }
+}
+
 /** SW-EW-40: rebuild the per-team rail-key index from the SAME grouping the tray
  *  uses (`trayWorkspaceOrder`+`railKeyOf`), covering the open ∪ soft-closed union
  *  of foreground-tile kinds exactly like the tray. Pure — the store caches the
@@ -10323,6 +10336,9 @@ const viewerStore: StateCreator<ViewerState> = (set, get) => ({
         // to the new key — no bespoke rewrite needed (was four per-scalar rewrites).
       };
     });
+    // The team's foreground group files are keyed by team, so each slot is saved under the new key
+    // (the tiles flag on).
+    saveForegroundSlots(get(), newKey);
     // Decisive state (like closeTeam) — don't leave the re-key to the debounce.
     get().flushPersist();
   },
