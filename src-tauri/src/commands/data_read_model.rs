@@ -613,8 +613,11 @@ mod tests {
     }
 }
 
-fn require_native_spend_window(label: &str) -> Result<(), String> {
-    if !crate::windows::is_main(label) {
+fn require_native_spend_window(
+    registry: &crate::windows::registry::WindowRegistry,
+    label: &str,
+) -> Result<(), String> {
+    if !crate::windows::human::is_human_window(registry, label) {
         return Err("Spend caps and rates are accepted from the CodeSense window".into());
     }
     Ok(())
@@ -629,7 +632,10 @@ pub async fn spend_cap_set(
     key: String,
     budget_usd: Option<session_usage::spend_caps::BudgetUsd>,
 ) -> Result<(), String> {
-    require_native_spend_window(webview.label())?;
+    require_native_spend_window(
+        &tauri::Manager::state::<crate::windows::registry::WindowRegistry>(&webview),
+        webview.label(),
+    )?;
     let caller = caller(&app).await?;
     await_blocking("spend_cap_set", move || {
         session_usage::spend_caps::set_current(
@@ -653,7 +659,10 @@ pub async fn spend_cap_accept(
     budget_usd: Option<session_usage::spend_caps::BudgetUsd>,
     keep: Option<bool>,
 ) -> Result<(), String> {
-    require_native_spend_window(webview.label())?;
+    require_native_spend_window(
+        &tauri::Manager::state::<crate::windows::registry::WindowRegistry>(&webview),
+        webview.label(),
+    )?;
     let caller = caller(&app).await?;
     await_blocking("spend_cap_accept", move || {
         let apply = if keep.unwrap_or(false) {
@@ -677,7 +686,10 @@ pub async fn spend_rate_accept(
     webview: tauri::Webview,
     request: session_usage::SetModelRateParams,
 ) -> Result<usize, String> {
-    require_native_spend_window(webview.label())?;
+    require_native_spend_window(
+        &tauri::Manager::state::<crate::windows::registry::WindowRegistry>(&webview),
+        webview.label(),
+    )?;
     await_blocking("spend_rate_accept", move || {
         session_usage::UsageStore::open(&session_usage::store_path()?)?.accept_rate(
             &request.model_prefix,
@@ -690,11 +702,25 @@ pub async fn spend_rate_accept(
 
 #[cfg(test)]
 mod native_spend_window_tests {
+    use crate::windows::registry::test_host::Recorder;
+    use crate::windows::registry::WindowRegistry;
+
     #[test]
     fn cap_and_rate_acceptance_share_the_native_window_boundary() {
-        assert!(super::require_native_spend_window("main").is_ok());
-        assert!(super::require_native_spend_window("dashboard")
-            .unwrap_err()
-            .contains("CodeSense window"));
+        let host = Recorder::default();
+        let reg = WindowRegistry::new();
+        reg.add_satellite(&host, "sat-1").unwrap();
+        reg.ready(&host, "sat-1").unwrap();
+        reg.add_satellite(&host, "sat-2").unwrap();
+        assert!(super::require_native_spend_window(&reg, "main").is_ok());
+        assert!(super::require_native_spend_window(&reg, "sat-1").is_ok());
+        for other in ["dashboard", "pane-zzz", "sat-2"] {
+            assert!(
+                super::require_native_spend_window(&reg, other)
+                    .unwrap_err()
+                    .contains("CodeSense window"),
+                "{other}"
+            );
+        }
     }
 }

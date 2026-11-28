@@ -326,9 +326,11 @@ pub async fn grant_trusted_capability(
     ttl_seconds: u64,
     budget: u32,
 ) -> Result<(), String> {
-    if !window.is_visible().unwrap_or(false) {
-        return Err("interactive_authorization_required".into());
-    }
+    crate::windows::human::grant_window_gate(
+        &tauri::Manager::state::<crate::windows::registry::WindowRegistry>(&app),
+        window.label(),
+        window.is_visible().unwrap_or(false),
+    )?;
     let ctx = crate::commands::route_to_context::derive_active_context(&app).await?;
     grant_scoped_capability(
         ctx.user_id,

@@ -55,6 +55,7 @@ import { useOrgStore } from "@/shared/stores/org-store";
 import { useShortcutsStore } from "@/shared/stores/shortcuts-store";
 import { selectSessionHome, useViewerStore } from "@/shared/stores/viewer-store";
 
+import { useMenuActionListener } from "./menu-listener";
 import { setSessionLocator, sliceSource, sliceWorkspaceIds } from "./slice";
 
 setSessionLocator(
@@ -186,6 +187,7 @@ export const BOOT_EXPORTS: Record<string, () => unknown> = {
   usePrefsLive,
   useActiveWorkspaceContext,
   useBootLoad,
+  useMenuActionListener,
   useTerminalLayoutRestore,
 };
 
@@ -263,7 +265,7 @@ export const BOOT_ROWS: readonly BootRow[] = [
   { id: "workspace-archive", kind: "effect", class: "skip", why: why.mainStore },
   { id: "dep-status-changed", kind: "effect", class: "skip", why: "main's dependency gate" },
   { id: "update-check", kind: "effect", class: "skip", why: `${why.singleton} (its toast relaunches the app)` },
-  { id: "menu-action", kind: "effect", class: "skip", why: "the native menu belongs to main" },
+  { id: "useMenuActionListener", kind: "hook", class: "run", why: "a native menu click Rust sends this window; a satellite forwards what it does not run to main" },
   { id: "worktree-file-change", kind: "effect", class: "skip", why: "path event for main's editor inset" },
   { id: "local-profiles-changed", kind: "effect", class: "skip", why: "main's account gate" },
   { id: "fsmonitor-nudge", kind: "effect", class: "skip", why: why.singleton },

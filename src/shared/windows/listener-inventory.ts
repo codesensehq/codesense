@@ -40,7 +40,6 @@ export interface ListenerRow {
 // prettier-ignore
 export const LISTENER_INVENTORY: readonly ListenerRow[] = [
   { file: "app/App.tsx", event: "dep-status-changed", scope: "every-window", why: "re-reads dependency status for this window's gate" },
-  { file: "app/App.tsx", event: "menu:action", scope: "main-only", why: "the app menu acts on main until menus follow the focused window" },
   { file: "app/App.tsx", event: "worktree-file-change", scope: "main-only", why: "path event, broadcast by Rust until it is routed to one window" },
   { file: "app/App.tsx", event: "local-profiles-changed", scope: "every-window", why: "profile event: each window re-reads auth" },
   { file: "app/App.tsx", event: "app:quit-flush", scope: "main-only", why: "Rust waits for one ack, so only main may send it" },

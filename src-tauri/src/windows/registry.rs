@@ -311,6 +311,20 @@ impl Locked<'_> {
         self.state.entries.get(label).is_some_and(|e| e.pending)
     }
 
+    /// Every registered label, `main` included, sorted.
+    pub fn window_labels(&self) -> Vec<String> {
+        Iterator::collect(self.state.entries.keys().cloned())
+    }
+
+    /// The items `label` holds, sorted; none for an unknown label.
+    pub fn items_held_by(&self, label: &str) -> Vec<ItemKey> {
+        self.state
+            .entries
+            .get(label)
+            .map(|e| Iterator::collect(e.items.iter().cloned()))
+            .unwrap_or_default()
+    }
+
     /// Whether `label`'s entry holds any item.
     pub fn holds_any_item(&self, label: &str) -> bool {
         self.state

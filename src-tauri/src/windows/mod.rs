@@ -6,14 +6,17 @@
 //! commands only `main` may call (`command_acl`), the app-state keys a satellite may patch
 //! (`app_state_patch`), the one sender of file changes, to the windows that show them
 //! (`router`), the one way items come back to `main` from a window that is going away
-//! (`returns`), and the one choice of the window an action lands in (`target`). Webdriver builds
-//! add the two-window e2e driver's commands (`e2e`).
+//! (`returns`), the one choice of the window an action lands in (`target`), the focused window a
+//! menu click goes to (`focus`), and the one check of whether a window is a person's (`human`).
+//! Webdriver builds add the two-window e2e driver's commands (`e2e`).
 
 pub mod app_state_patch;
 pub mod command_acl;
 pub mod commands;
 #[cfg(feature = "e2e-webdriver")]
 pub mod e2e;
+pub mod focus;
+pub mod human;
 pub mod item_key;
 pub mod label;
 pub mod moves;

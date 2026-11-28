@@ -196,7 +196,20 @@ export interface ShortcutAction {
   /** The OS capability the action needs. With it off the action never fires, holds no chord and
    *  has no Settings row. */
   capability?: CapabilityKey;
+  /** Which window a native menu click on this action acts in, when a satellite is focused:
+   *  `main` (the default) forwards it to `main`; `focused` runs it in the satellite
+   *  (`src/shared/windows/menu-listener.ts`). */
+  windowScope?: "focused" | "main";
+  /** How a satellite runs this action itself: `done` when it handled it, `forward` to send it
+   *  to `main`. Not called yet. */
+  satellite?: (ctx: SatelliteRunContext) => "done" | "forward";
   run: () => void;
+}
+
+/** What a satellite hands an action's `satellite` runner. */
+interface SatelliteRunContext {
+  /** The satellite's window label. */
+  label: string;
 }
 
 /** What the registry knows of a dashboard command beyond its `ShortcutAction` shape. */

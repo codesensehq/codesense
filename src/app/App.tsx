@@ -17,7 +17,6 @@ import { useLocalProfileStore } from "@/shared/stores/local-profile-store";
 import { AccountSection } from "@/features/settings/components/account-section";
 import { useUiStore } from "@/shared/stores/ui-store";
 import { useShortcutHandler } from "@/shared/hooks/use-shortcut-handler";
-import { dispatchMenuAction } from "@/app/menu-action-dispatch";
 import { currentWindow } from "@/shared/lib/current-window";
 import { startWatching, stopWatching } from "@/tauri/commands";
 import { CONTEXT_FILE_CHANGE_EVENT, type ContextFileChangePayload } from "@/tauri/events";
@@ -114,6 +113,7 @@ import {
   useBootLoad,
   useTerminalLayoutRestore,
 } from "@/shared/windows/boot-inventory";
+import { useMenuActionListener } from "@/shared/windows/menu-listener";
 
 registerVirtualTabs();
 
@@ -539,50 +539,15 @@ function App() {
     if (initialized && entered) void startUpdateCheck();
   }, [initialized, entered]);
 
-  // Listen for macOS menu-item clicks. One event, one listener, one
-  // registry lookup — see C.16's design note on why the Rust side is
-  // a dumb forwarder.
-  //
-  // The `cancelled` flag is load-bearing under React StrictMode (dev):
-  // the first mount's cleanup runs BEFORE `listen(...).then(...)`
-  // resolves, so the naive `let unlisten: …; listen().then(fn =>
-  // unlisten = fn); return () => unlisten?.();` pattern leaks the
-  // first mount's listener. That leak is invisible for idempotent
-  // events (auth-expired, etc.) but catastrophic for menu:action:
-  // each toggle would fire twice and net-zero (cancel itself out),
-  // which is exactly what was observed for Switch Repo / Toggle
-  // Terminal / Toggle Scratch Note. The fix ensures late-arriving
-  // promise resolutions unlisten immediately when the effect is
-  // already cleaned up.
-  // boot: menu-action
-  useEffect(() => {
-    let cancelled = false;
-    let unlisten: (() => void) | null = null;
-    // dispatchMenuAction applies the same scope/Settings/auth gate as the
-    // keyboard handler and routes panel toggles — see menu-action-dispatch.ts.
-    listenScoped<string>("menu:action", "main-only", (e) => dispatchMenuAction(e.payload))
-      .then((fn) => {
-        if (cancelled) {
-          safeUnlisten(fn);
-        } else {
-          unlisten = fn;
-        }
-      })
-      .catch((err) => {
-        logger.warn("App", `menu:action listen failed — ${err}`);
-      });
-    return () => {
-      cancelled = true;
-      if (unlisten) safeUnlisten(unlisten);
-    };
-  }, []);
+  // Native menu clicks: Rust sends each to the focused window; see menu-listener.ts.
+  useMenuActionListener();
 
   // SLW-WDE-3: route the worktree watcher's `worktree-file-change` events to the
   // open editor inset. The Rust watcher (attached per-inset at `ws.cwd`) tags
   // each event with its `wsId`, so this listener just bumps the per-workspace
   // signal — no reverse cwd→ws lookup — and `useWorktreeFileEditor` reacts when
   // the changed path is the file it has open (clean → reload, dirty → warn). The
-  // `cancelled` flag mirrors the menu:action idiom (non-idempotent event: a
+  // `cancelled` flag mirrors the menu-listener.ts idiom (non-idempotent event: a
   // leaked StrictMode listener would double-fire reloads).
   // boot: worktree-file-change
   useEffect(() => {
@@ -807,7 +772,7 @@ function App() {
   // Flush any pending debounced persist before the window closes.
   // `saveAppState` is async Tauri IPC — `beforeunload` can't await it,
   // so we use Tauri's `onCloseRequested` which supports async work.
-  // Uses the cancelled-flag pattern (see menu:action listener above) to
+  // Uses the cancelled-flag pattern (see menu-listener.ts) to
   // handle React StrictMode's mount-unmount-remount cycle.
   // boot: close-flush
   useEffect(() => {

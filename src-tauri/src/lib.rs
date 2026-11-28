@@ -439,9 +439,9 @@ pub fn run() {
         }
     });
 
-    // macOS-only menu bar. Item clicks emit `menu:action` events with
-    // the item id as payload — the frontend dispatches via the shared
-    // action registry.
+    // macOS-only menu bar. An item click sends `menu:action`, with the
+    // item id as payload, to the focused window alone (`windows::focus`);
+    // the frontend dispatches via the shared action registry.
     #[cfg(target_os = "macos")]
     let builder = builder.menu(menu::build_menu).on_menu_event(menu::on_event);
 
@@ -454,9 +454,14 @@ pub fn run() {
             // A move whose source or target this was ends as `gone`.
             let registry = tauri::Manager::state::<windows::registry::WindowRegistry>(window);
             windows::moves::window_gone(tauri::Manager::app_handle(window), &registry, label);
+            let focus = tauri::Manager::state::<windows::focus::FocusTracker>(window);
+            windows::focus::FocusTracker::clear_window_focus(&focus, label);
         }
         if let tauri::WindowEvent::Focused(focused) = event {
             on_window_focus_changed(window.app_handle(), *focused);
+            // The window a native menu click goes to (`windows::focus`).
+            let focus = tauri::Manager::state::<windows::focus::FocusTracker>(window);
+            windows::focus::FocusTracker::record_window_focus(&focus, window.label(), *focused);
         }
 
         // SW-AU-34: close-to-background. Closing the window keeps the process — and
@@ -628,13 +633,14 @@ pub fn run() {
         .manage(commands::workspace_chat::WorkspaceChatStore::default())
         .manage(commands::agent_usage::AgentUsageState::default())
         .manage(commands::agent_accounts::AgentAccountRuntimeState::default())
-        // SW-FX-64: renderer-liveness state for the webview watchdog. Written by
-        // the `renderer_heartbeat` command (FE ack), read by the watchdog task.
-        .manage(renderer_watchdog::RendererLiveness::default())
+        // SW-FX-64: renderer-liveness state for the webview watchdog, one entry per window.
+        // Written by the `renderer_heartbeat` command (FE ack), read by the watchdog task.
+        .manage(<renderer_watchdog::WindowLiveness as Default>::default())
         .manage(mcp::state::AskUserRegistry::new())
         .manage(commands::team_resolution_cache::TeamResolutionCache::default())
         // Every window and the items satellites hold; created with `main`'s entry.
         .manage(windows::registry::WindowRegistry::new())
+        .manage(<windows::focus::FocusTracker as Default>::default())
         .setup(move |app| {
             // First, so the secret store probe has the whole of setup to finish: it runs on a
             // background thread, because `.setup()` never blocks on the session bus.
