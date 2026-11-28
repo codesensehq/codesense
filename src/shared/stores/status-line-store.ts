@@ -29,7 +29,7 @@
 
 import { useSyncExternalStore } from "react";
 
-export type StatusLineKind = "undo" | "offer" | "announcement" | "progress" | "info";
+type StatusLineKind = "undo" | "offer" | "announcement" | "progress" | "info";
 
 /** What a line's button does. `keyHint` is display text for a key pill after the label. */
 export interface StatusLineAction {
@@ -55,7 +55,7 @@ export interface StatusLineEntry {
 }
 
 /** One text for the live region. `seq` tells two identical texts apart. */
-export interface StatusLineAnnouncement {
+interface StatusLineAnnouncement {
   text: string;
   seq: number;
 }
