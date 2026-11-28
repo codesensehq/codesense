@@ -1,12 +1,15 @@
 // SPDX-License-Identifier: MIT
-import { useMemo } from "react";
+import { useMemo, useRef, useSyncExternalStore } from "react";
 import { useShallow } from "zustand/react/shallow";
 
 import { agentRowLabel } from "@/features/viewer/lib/agent-row-presentation";
 import { duplicateFaceTags, resolveAgentFace } from "@/features/viewer/lib/agent-list-view";
 import { isAgentSession } from "@/features/viewer/lib/hand-agents";
 import { useAgentListProjectionStore } from "@/features/viewer/lib/agent-list-projection";
-import { useAgentIdentityChoices } from "@/features/viewer/hooks/use-listed-agents";
+import {
+  identityChoicesOf,
+  useAgentIdentityChoices,
+} from "@/features/viewer/hooks/use-listed-agents";
 import { useAvatarPacks } from "@/shared/hooks/use-avatar-packs";
 import {
   findTabLocationBySessionId,
@@ -31,12 +34,51 @@ const NO_TAGS: ReadonlyMap<string, number> = new Map();
 export function useFaceTags(teamKey: string | null): ReadonlyMap<string, number> {
   const sessions = useAgentListProjectionStore((s) => s.sessions);
   const choices = useAgentIdentityChoices(teamKey ?? undefined);
-  const { faces } = useAvatarPacks();
+  const { faces } = useAvatarPacks(teamKey ?? undefined);
   const teamOf = useTabTeamBySession();
   return useMemo(
     () => faceTags(teamKey, { sessions, choices, faces, teamOf }),
     [teamKey, sessions, choices, faces, teamOf],
   );
+}
+
+/**
+ * One agent's number in {@link useFaceTags}, for a surface that draws one agent (a tile's tab): read
+ * from the stores at each change but returned as a number, so the caller redraws only when that
+ * agent's number changes, not for every session, look or layout change. `faces` is the team's.
+ */
+export function useFaceTag(
+  teamKey: string | null,
+  handle: string | undefined,
+  faces: FaceTagInput["faces"],
+): number | undefined {
+  const last = useRef<{ inputs: unknown[]; tags: ReadonlyMap<string, number> } | null>(null);
+  const read = () => {
+    if (handle === undefined) return undefined;
+    const sessions = useAgentListProjectionStore.getState().sessions;
+    const viewer = useViewerStore.getState();
+    const running = selectRunningTerminalTabIndex(viewer);
+    const minimized = selectMinimizedTerminalTabIndex(viewer);
+    const inputs = [teamKey, sessions, viewer.agentIdentity, faces, running, minimized];
+    if (!last.current || inputs.some((input, i) => !Object.is(input, last.current!.inputs[i]))) {
+      const choices = identityChoicesOf(viewer.agentIdentity, teamKey ?? undefined);
+      last.current = {
+        inputs,
+        tags: faceTagsFor(teamKey, { sessions, choices, faces, running, minimized }),
+      };
+    }
+    return last.current.tags.get(handle);
+  };
+  return useSyncExternalStore(subscribeFaceTagStores, read);
+}
+
+function subscribeFaceTagStores(onChange: () => void): () => void {
+  const stopSessions = useAgentListProjectionStore.subscribe(onChange);
+  const stopViewer = useViewerStore.subscribe(onChange);
+  return () => {
+    stopSessions();
+    stopViewer();
+  };
 }
 
 /** The team of each session whose tab is open. A running tab wins over a minimized one. */

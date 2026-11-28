@@ -1,6 +1,14 @@
 // SPDX-License-Identifier: MIT
 import { commitTextEditOnBlur } from "@/shared/lib/text-menu-focus";
-import { useState, useRef, useEffect, useId, useMemo, type KeyboardEvent } from "react";
+import {
+  useState,
+  useRef,
+  useEffect,
+  useId,
+  useMemo,
+  type KeyboardEvent,
+  type ReactNode,
+} from "react";
 import { AlarmClock, MailX, Server, TerminalSquare, X } from "lucide-react";
 import type { TerminalTab } from "@/features/viewer/lib/cli-workspace/store/viewer-access";
 import { InfoTip } from "@/components/ui/tooltip";
@@ -15,8 +23,8 @@ import { resolveAgentFace, type AgentFace } from "@/features/viewer/lib/agent-li
 import { agentRowLabel, agentRowNames } from "@/features/viewer/lib/agent-row-presentation";
 import { isAgentSession } from "@/features/viewer/lib/hand-agents";
 import { isTypedByHand, TYPED_BY_HAND_TAB } from "@/features/viewer/lib/session-states";
-import { useFaceTags, useTabTeamOf } from "@/features/viewer/hooks/use-face-tags";
-import { useAgentIdentityChoices } from "@/features/viewer/hooks/use-listed-agents";
+import { useFaceTag, useTabTeamOf } from "@/features/viewer/hooks/use-face-tags";
+import { useAgentIdentityChoice } from "@/features/viewer/hooks/use-listed-agents";
 import { CHROME_NEW_TAB_W } from "../lib/tile-chrome-fit";
 import { TERMINAL_TAB_ID_ATTR } from "../lib/terminal-tab-keys";
 import { useEffectiveShortcut } from "@/shared/stores/shortcuts-store";
@@ -40,6 +48,7 @@ import {
 import { wakeName } from "@/features/viewer/lib/wake-marker";
 import { countdownWords, timerTargetKey } from "@/features/viewer/lib/session-timers";
 import { useNowClock } from "@/features/viewer/hooks/use-now-clock";
+import type { AgentSessionRow } from "@/tauri/commands";
 
 export interface SelectTabOptions {
   focusTerminal?: boolean;
@@ -171,7 +180,7 @@ export function TerminalTabBar({
   const editSettledRef = useRef(false);
 
   const startEdit = (tab: TerminalTab) => {
-    const names = faces[tabs.findIndex((t) => t.id === tab.id)]?.names;
+    const names = tabAgentNames(tab.sessionId);
     const primary = (names?.source === "progress" ? names.secondary : names?.primary) ?? tab.name;
     originalNameRef.current = primary;
     editingProgressRef.current = names?.source === "progress";
@@ -274,8 +283,6 @@ export function TerminalTabBar({
   };
 
   // SW-EW-34: compact (in-body) size tokens — the only remaining form.
-  const faces = useTabFaces(tabs);
-
   const iconSize = 11;
   const activeH = "h-7";
   const inactiveH = "h-6";
@@ -338,7 +345,6 @@ export function TerminalTabBar({
             : null;
           const isStop = tab.id === stopId;
           const nameId = `${idBase}-${idx}-name`;
-          const names = faces[idx]?.names;
           const statusId = `${idBase}-${idx}-status`;
           const machineWordsId = `${idBase}-${idx}-machine`;
           const timersId = `${idBase}-${idx}-timers`;
@@ -347,220 +353,228 @@ export function TerminalTabBar({
           const showDropIndicator =
             dragOverIdx === idx && dragState.current && dragState.current.idx !== idx;
 
+          // Each tab reads its own face, so a change to one tab's agent redraws that tab alone.
           return (
-            <div
-              key={tab.id}
-              ref={(el) => {
-                tabRefs.current[idx] = el;
-              }}
-              {...{ [TERMINAL_TAB_ID_ATTR]: tab.id }}
-              role="presentation"
-              className={`group relative ${wrapperFlex} ${showDropIndicator ? "border-l-2 border-accent" : ""} ${!isActive && !hideRightDivider ? "border-r border-[#30363d]" : ""}`}
-              style={
-                pillMinWidth != null || faces[idx]
-                  ? { minWidth: Math.max(pillMinWidth ?? 0, faces[idx] ? TAB_PILL_MIN_W : 0) }
-                  : undefined
-              }
-            >
-              <button
-                ref={(el) => {
-                  pillRefs.current[idx] = el;
-                }}
-                type="button"
-                role="tab"
-                data-testid={`terminal-tab-${tab.id}`}
-                data-active={isActive ? "true" : "false"}
-                aria-selected={isActive}
-                tabIndex={isStop ? 0 : -1}
-                // Named by the tab's name, then its status in words and how it ended — without the status's
-                // ticking age, which the dot's tooltip carries.
-                title={names?.full}
-                aria-label={names?.full}
-                aria-labelledby={`${nameId} ${statusId} ${mailId} ${machineWordsId} ${timersId}`}
-                aria-haspopup={onContextMenu ? "menu" : undefined}
-                aria-expanded={onContextMenu ? menuOpenTabId === tab.id : undefined}
-                onKeyDown={(e) => onPillKeyDown(e, tab, idx)}
-                className={`flex grow items-center ${tabGap} ${tabPx} ${CLOSE_BUTTON_ROOM} text-xs transition-colors min-w-0 ${
-                  isActive
-                    ? `text-foreground font-medium ${activeH} rounded-t-md border-t border-x border-[#30363d] -mb-[1px] relative z-10`
-                    : `text-muted-foreground hover:text-foreground hover:bg-foreground/5 hover:rounded-md ${tabTint ? "rounded-md" : ""} ${inactiveH} mb-0.5 mx-0.5`
-                }`}
-                data-machine-tint={tabTint ? "" : undefined}
-                style={{
-                  ...(isActive ? { backgroundColor: activeTabBg } : {}),
-                  // What a face's status dot is cut out of, and the active face's ring.
-                  // (Over a remote tab's wash, the same wash over that ground.)
-                  ["--ag-tab-cut" as string]: tabColor
-                    ? `color-mix(in srgb, ${tabColor} ${Math.round(TAB_TINT * 100)}%, ${isActive ? activeTabBg : chromeBg})`
-                    : isActive
-                      ? activeTabBg
-                      : chromeBg,
-                  ["--ag-tab-ring" as string]: tabRingColor(teamHue),
-                  // A remote tab wears its Machine's color: a faint wash over
-                  // whatever the strip, the active fill or the hover paints.
-                  ...(tabTint
-                    ? { backgroundImage: `linear-gradient(${tabTint}, ${tabTint})` }
-                    : {}),
-                }}
-                onClick={(e) => onSelectTab(tab.id, { focusTerminal: e.detail === 1 })}
-                // Keyboard / screen-reader users reach the tab by focus, not hover —
-                // probe then too, so its `×` names the verb it will take.
-                onFocus={() => {
-                  setFocusedTabId(tab.id);
-                  probeCloseVerb(tab.id, [tab.sessionId]);
-                }}
-                onBlur={() => setFocusedTabId(null)}
-                onPointerDown={(e) => {
-                  // SLW-FX-10: a press on a tab is owned by the tab bar's own
-                  // reorder, so it must never bubble to the tile's dnd-kit drag
-                  // handle (spread onto the enclosing chrome wrapper in split mode).
-                  // Mirrors the rename input / close-X, which already stopPropagation.
-                  // Runs for every button so middle-click close below stays intact;
-                  // pointermove/pointerup are separate events and still reach the
-                  // container's reorder handlers.
-                  e.stopPropagation();
-                  if (e.button === 0) {
-                    dragState.current = { idx, startX: e.clientX };
-                    // Snapshot rects at drag start — avoids forced layout per move.
-                    // Drive length from `tabs` so stale slots in `tabRefs.current`
-                    // (never truncated when a tab closes) can't seed phantom entries.
-                    cachedRects.current = tabs.map(
-                      (_, i) => tabRefs.current[i]?.getBoundingClientRect() ?? null,
-                    );
-                  }
-                  if (e.button === 1) {
-                    e.preventDefault();
-                    onCloseTab(tab.id);
-                  }
-                }}
-                onContextMenu={(e) => {
-                  if (onContextMenu) {
-                    e.preventDefault();
-                    onContextMenu(tab.id, e.clientX, e.clientY);
-                  }
-                }}
-              >
-                {(() => {
-                  const tabFace = faces[idx];
-                  const face = tabFace?.face;
-                  const statusDot = (
-                    <SessionStatusMark
-                      sessionId={tab.sessionId}
-                      exit={tab.exit}
-                      size="sm"
-                      wordsId={statusId}
-                      className={face ? undefined : "absolute -top-0.5 -right-0.5"}
-                      data-testid={`tab-${tab.id}-ai-status`}
-                    />
-                  );
-                  if (face && editingTabId !== tab.id) {
-                    return (
-                      <AgentTabLabel
-                        face={face}
-                        tag={tabFace?.tag}
-                        name={tabFace.names.primary}
-                        nameId={nameId}
-                        fullName={tabFace.names.full}
-                        progressTitle={tabFace.names.source === "progress"}
-                        active={isActive}
-                        status={statusDot}
-                        onDoubleClick={(e) => {
-                          e.stopPropagation();
-                          startEdit(tab);
-                        }}
-                      />
-                    );
-                  }
-                  if (face)
-                    return (
-                      <TabFace
-                        face={face}
-                        tag={tabFace?.tag}
-                        active={isActive}
-                        status={statusDot}
-                      />
-                    );
-                  return (
-                    <span className="relative flex-shrink-0">
-                      <TerminalSquare size={iconSize} className="opacity-70" />
-                      {statusDot}
-                    </span>
-                  );
-                })()}
-                {faces[idx] && editingTabId !== tab.id ? null : editingTabId === tab.id ? (
-                  <input
-                    ref={editInputRef}
-                    id={nameId}
-                    aria-label="Tab name"
-                    type="text"
-                    className="bg-transparent outline-none text-xs w-full min-w-[40px] text-inherit"
-                    value={editValue}
-                    onChange={(e) => setEditValue(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" || e.key === "Escape") {
-                        e.preventDefault();
-                        finishEdit(tab.id, e.key === "Enter");
-                        onRenameDone?.();
-                      }
-                      e.stopPropagation();
+            <TabFaceScope key={tab.id} sessionId={tab.sessionId}>
+              {(tabFace) => {
+                const names = tabFace?.names;
+                return (
+                  <div
+                    ref={(el) => {
+                      tabRefs.current[idx] = el;
                     }}
-                    onBlur={(event) => {
-                      const field = event.currentTarget;
-                      commitTextEditOnBlur(field, () => finishEdit(tab.id, true, field.value));
-                    }}
-                    onPointerDown={(e) => e.stopPropagation()}
-                    onClick={(e) => e.stopPropagation()}
-                  />
-                ) : (
-                  <MiddleTruncate
-                    id={nameId}
-                    text={tab.name}
-                    className="cursor-pointer"
-                    // Tooltip the full name only when it is actually cut off.
-                    onMouseEnter={(e) => {
-                      const el = e.currentTarget;
-                      if (isMiddleTruncated(el)) el.title = tab.name;
-                      else el.removeAttribute("title");
-                    }}
-                    onDoubleClick={(e) => {
-                      e.stopPropagation();
-                      startEdit(tab);
-                    }}
-                  />
-                )}
-                <TabMailGlyph tab={tab} id={mailId} />
-                {tab.origin && (
-                  <RemoteTabBadge
-                    id={machineWordsId}
-                    machineId={tab.origin.machineId}
-                    offline={tab.origin.offlineSince !== undefined}
-                    testId={`tab-${tab.id}-machine`}
-                  />
-                )}
-                <TabTimersGlyph tab={tab} id={timersId} active={isActive} />
-              </button>
-              {/* The `×` is the mouse's close — a sibling of the tab, not nested in
+                    {...{ [TERMINAL_TAB_ID_ATTR]: tab.id }}
+                    role="presentation"
+                    className={`group relative ${wrapperFlex} ${showDropIndicator ? "border-l-2 border-accent" : ""} ${!isActive && !hideRightDivider ? "border-r border-[#30363d]" : ""}`}
+                    style={
+                      pillMinWidth != null || tabFace
+                        ? { minWidth: Math.max(pillMinWidth ?? 0, tabFace ? TAB_PILL_MIN_W : 0) }
+                        : undefined
+                    }
+                  >
+                    <button
+                      ref={(el) => {
+                        pillRefs.current[idx] = el;
+                      }}
+                      type="button"
+                      role="tab"
+                      data-testid={`terminal-tab-${tab.id}`}
+                      data-active={isActive ? "true" : "false"}
+                      aria-selected={isActive}
+                      tabIndex={isStop ? 0 : -1}
+                      // Named by the tab's name, then its status in words and how it ended — without the status's
+                      // ticking age, which the dot's tooltip carries.
+                      title={names?.full}
+                      aria-label={names?.full}
+                      aria-labelledby={`${nameId} ${statusId} ${mailId} ${machineWordsId} ${timersId}`}
+                      aria-haspopup={onContextMenu ? "menu" : undefined}
+                      aria-expanded={onContextMenu ? menuOpenTabId === tab.id : undefined}
+                      onKeyDown={(e) => onPillKeyDown(e, tab, idx)}
+                      className={`flex grow items-center ${tabGap} ${tabPx} ${CLOSE_BUTTON_ROOM} text-xs transition-colors min-w-0 ${
+                        isActive
+                          ? `text-foreground font-medium ${activeH} rounded-t-md border-t border-x border-[#30363d] -mb-[1px] relative z-10`
+                          : `text-muted-foreground hover:text-foreground hover:bg-foreground/5 hover:rounded-md ${tabTint ? "rounded-md" : ""} ${inactiveH} mb-0.5 mx-0.5`
+                      }`}
+                      data-machine-tint={tabTint ? "" : undefined}
+                      style={{
+                        ...(isActive ? { backgroundColor: activeTabBg } : {}),
+                        // What a face's status dot is cut out of, and the active face's ring.
+                        // (Over a remote tab's wash, the same wash over that ground.)
+                        ["--ag-tab-cut" as string]: tabColor
+                          ? `color-mix(in srgb, ${tabColor} ${Math.round(TAB_TINT * 100)}%, ${isActive ? activeTabBg : chromeBg})`
+                          : isActive
+                            ? activeTabBg
+                            : chromeBg,
+                        ["--ag-tab-ring" as string]: tabRingColor(teamHue),
+                        // A remote tab wears its Machine's color: a faint wash over
+                        // whatever the strip, the active fill or the hover paints.
+                        ...(tabTint
+                          ? { backgroundImage: `linear-gradient(${tabTint}, ${tabTint})` }
+                          : {}),
+                      }}
+                      onClick={(e) => onSelectTab(tab.id, { focusTerminal: e.detail === 1 })}
+                      // Keyboard / screen-reader users reach the tab by focus, not hover —
+                      // probe then too, so its `×` names the verb it will take.
+                      onFocus={() => {
+                        setFocusedTabId(tab.id);
+                        probeCloseVerb(tab.id, [tab.sessionId]);
+                      }}
+                      onBlur={() => setFocusedTabId(null)}
+                      onPointerDown={(e) => {
+                        // SLW-FX-10: a press on a tab is owned by the tab bar's own
+                        // reorder, so it must never bubble to the tile's dnd-kit drag
+                        // handle (spread onto the enclosing chrome wrapper in split mode).
+                        // Mirrors the rename input / close-X, which already stopPropagation.
+                        // Runs for every button so middle-click close below stays intact;
+                        // pointermove/pointerup are separate events and still reach the
+                        // container's reorder handlers.
+                        e.stopPropagation();
+                        if (e.button === 0) {
+                          dragState.current = { idx, startX: e.clientX };
+                          // Snapshot rects at drag start — avoids forced layout per move.
+                          // Drive length from `tabs` so stale slots in `tabRefs.current`
+                          // (never truncated when a tab closes) can't seed phantom entries.
+                          cachedRects.current = tabs.map(
+                            (_, i) => tabRefs.current[i]?.getBoundingClientRect() ?? null,
+                          );
+                        }
+                        if (e.button === 1) {
+                          e.preventDefault();
+                          onCloseTab(tab.id);
+                        }
+                      }}
+                      onContextMenu={(e) => {
+                        if (onContextMenu) {
+                          e.preventDefault();
+                          onContextMenu(tab.id, e.clientX, e.clientY);
+                        }
+                      }}
+                    >
+                      {(() => {
+                        const face = tabFace?.face;
+                        const statusDot = (
+                          <SessionStatusMark
+                            sessionId={tab.sessionId}
+                            exit={tab.exit}
+                            size="sm"
+                            wordsId={statusId}
+                            className={face ? undefined : "absolute -top-0.5 -right-0.5"}
+                            data-testid={`tab-${tab.id}-ai-status`}
+                          />
+                        );
+                        if (face && editingTabId !== tab.id) {
+                          return (
+                            <AgentTabLabel
+                              face={face}
+                              tag={tabFace?.tag}
+                              name={tabFace.names.primary}
+                              nameId={nameId}
+                              fullName={tabFace.names.full}
+                              progressTitle={tabFace.names.source === "progress"}
+                              active={isActive}
+                              status={statusDot}
+                              onDoubleClick={(e) => {
+                                e.stopPropagation();
+                                startEdit(tab);
+                              }}
+                            />
+                          );
+                        }
+                        if (face)
+                          return (
+                            <TabFace
+                              face={face}
+                              tag={tabFace?.tag}
+                              active={isActive}
+                              status={statusDot}
+                            />
+                          );
+                        return (
+                          <span className="relative flex-shrink-0">
+                            <TerminalSquare size={iconSize} className="opacity-70" />
+                            {statusDot}
+                          </span>
+                        );
+                      })()}
+                      {tabFace && editingTabId !== tab.id ? null : editingTabId === tab.id ? (
+                        <input
+                          ref={editInputRef}
+                          id={nameId}
+                          aria-label="Tab name"
+                          type="text"
+                          className="bg-transparent outline-none text-xs w-full min-w-[40px] text-inherit"
+                          value={editValue}
+                          onChange={(e) => setEditValue(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" || e.key === "Escape") {
+                              e.preventDefault();
+                              finishEdit(tab.id, e.key === "Enter");
+                              onRenameDone?.();
+                            }
+                            e.stopPropagation();
+                          }}
+                          onBlur={(event) => {
+                            const field = event.currentTarget;
+                            commitTextEditOnBlur(field, () =>
+                              finishEdit(tab.id, true, field.value),
+                            );
+                          }}
+                          onPointerDown={(e) => e.stopPropagation()}
+                          onClick={(e) => e.stopPropagation()}
+                        />
+                      ) : (
+                        <MiddleTruncate
+                          id={nameId}
+                          text={tab.name}
+                          className="cursor-pointer"
+                          // Tooltip the full name only when it is actually cut off.
+                          onMouseEnter={(e) => {
+                            const el = e.currentTarget;
+                            if (isMiddleTruncated(el)) el.title = tab.name;
+                            else el.removeAttribute("title");
+                          }}
+                          onDoubleClick={(e) => {
+                            e.stopPropagation();
+                            startEdit(tab);
+                          }}
+                        />
+                      )}
+                      <TabMailGlyph tab={tab} id={mailId} />
+                      {tab.origin && (
+                        <RemoteTabBadge
+                          id={machineWordsId}
+                          machineId={tab.origin.machineId}
+                          offline={tab.origin.offlineSince !== undefined}
+                          testId={`tab-${tab.id}-machine`}
+                        />
+                      )}
+                      <TabTimersGlyph tab={tab} id={timersId} active={isActive} />
+                    </button>
+                    {/* The `×` is the mouse's close — a sibling of the tab, not nested in
                 it, over the room the tab reserves at its right edge, shown on hover
                 and while the tab has keyboard focus. The keyboard closes a tab with
                 Delete on the tab itself, so the tablist holds only tabs. */}
-              <InfoTip label={tabCloseTooltip(verbFor(tab.id))}>
-                <button
-                  type="button"
-                  aria-hidden
-                  tabIndex={-1}
-                  onPointerEnter={() => probeCloseVerb(tab.id, [tab.sessionId])}
-                  onFocus={() => probeCloseVerb(tab.id, [tab.sessionId])}
-                  onPointerDown={(e) => e.stopPropagation()}
-                  onClick={() => onCloseTab(tab.id)}
-                  data-testid={`tab-${tab.id}-close`}
-                  // A 24px square around the 12px glyph (the pointer-target
-                  // floor), inside the room the tab reserves at its right edge.
-                  className={`absolute right-1 ${isActive ? "bottom-[2px]" : "bottom-0"} z-20 flex h-6 w-6 items-center justify-center rounded cursor-pointer opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 focus-visible:outline focus-visible:outline-1 focus-visible:outline-ring text-muted-foreground hover:text-foreground transition-opacity`}
-                >
-                  <X size={12} />
-                </button>
-              </InfoTip>
-            </div>
+                    <InfoTip label={tabCloseTooltip(verbFor(tab.id))}>
+                      <button
+                        type="button"
+                        aria-hidden
+                        tabIndex={-1}
+                        onPointerEnter={() => probeCloseVerb(tab.id, [tab.sessionId])}
+                        onFocus={() => probeCloseVerb(tab.id, [tab.sessionId])}
+                        onPointerDown={(e) => e.stopPropagation()}
+                        onClick={() => onCloseTab(tab.id)}
+                        data-testid={`tab-${tab.id}-close`}
+                        // A 24px square around the 12px glyph (the pointer-target
+                        // floor), inside the room the tab reserves at its right edge.
+                        className={`absolute right-1 ${isActive ? "bottom-[2px]" : "bottom-0"} z-20 flex h-6 w-6 items-center justify-center rounded cursor-pointer opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 focus-visible:outline focus-visible:outline-1 focus-visible:outline-ring text-muted-foreground hover:text-foreground transition-opacity`}
+                      >
+                        <X size={12} />
+                      </button>
+                    </InfoTip>
+                  </div>
+                );
+              }}
+            </TabFaceScope>
           );
         })}
       </div>
@@ -600,37 +614,83 @@ function tabRingColor(hue: number | null): string {
   return hue === null ? "#6e7681" : `oklch(78% 0.06 ${hue})`;
 }
 
-/** The face of each tab's agent, in tab order, with its number when another running agent of
- *  its team wears the same face; null for a plain shell. */
-function useTabFaces(tabs: readonly TerminalTab[]): ({
+/** A tab's agent face, its number when another running agent of its team wears the same face,
+ *  and its names; null for a plain shell. */
+interface TabFaceView {
   face: AgentFace;
   tag: number | undefined;
   names: ReturnType<typeof agentRowNames>;
-} | null)[] {
-  const sessions = useAgentListProjectionStore((s) => s.sessions);
-  const choices = useAgentIdentityChoices();
-  const { faces } = useAvatarPacks();
-  const teamKey = useTabTeamOf(tabs[0]?.sessionId);
-  const tags = useFaceTags(teamKey);
+}
+
+/** Renders one tab with its own face: a hook cannot run per tab inside the bar's `tabs.map`. */
+function TabFaceScope({
+  sessionId,
+  children,
+}: {
+  sessionId: string;
+  children: (face: TabFaceView | null) => ReactNode;
+}) {
+  return children(useTabFace(sessionId));
+}
+
+/** The fields of a tab's agent row a face and its names read, flat so a shallow compare holds
+ *  while they do (each sessions snapshot is a new row); null for a plain shell. */
+function tabAgentFields(sessions: readonly AgentSessionRow[] | null, sessionId: string) {
+  const row = sessions?.find((r) => isAgentSession(r) && r.sessionId === sessionId);
+  if (!row) return null;
+  const { handle, avatar, agentRevision, displayName, rowNames } = row;
+  return {
+    handle,
+    avatar,
+    agentRevision,
+    displayName,
+    named: rowNames !== undefined,
+    primary: rowNames?.primary,
+    secondary: rowNames?.secondary,
+    full: rowNames?.full,
+    source: rowNames?.source,
+  };
+}
+
+/** The names of a tab's agent as they are now, for a rename that starts from them. */
+function tabAgentNames(sessionId: string): ReturnType<typeof agentRowNames> | undefined {
+  const row = useAgentListProjectionStore
+    .getState()
+    .sessions?.find((r) => isAgentSession(r) && r.sessionId === sessionId);
+  return row ? agentRowNames(row) : undefined;
+}
+
+/** One tab's face, from its own session row and its own team (a tile can hold tabs of two
+ *  teams): that team's packs, the look chosen for its handle and its number among that team's
+ *  agents. It redraws only when one of these changes for this tab. */
+function useTabFace(sessionId: string): TabFaceView | null {
+  const fields = useAgentListProjectionStore(
+    useShallow((s) => tabAgentFields(s.sessions, sessionId)),
+  );
+  const teamKey = useTabTeamOf(sessionId);
+  const { faces } = useAvatarPacks(teamKey ?? undefined);
+  const choice = useAgentIdentityChoice(teamKey ?? undefined, fields?.handle);
+  const tag = useFaceTag(teamKey, fields?.handle, faces);
   return useMemo(() => {
-    const bySession = new Map(
-      (sessions ?? []).flatMap((r) => (isAgentSession(r) && r.sessionId ? [[r.sessionId, r]] : [])),
-    );
-    return tabs.map((t) => {
-      const row = bySession.get(t.sessionId);
-      return row
+    if (!fields) return null;
+    const { named, primary, secondary, full, source, ...rest } = fields;
+    const row = {
+      ...rest,
+      rowNames: named
         ? {
-            face: resolveAgentFace(row, {
-              name: agentRowLabel(row),
-              choice: choices[row.handle],
-              faces,
-            }),
-            tag: tags.get(row.handle),
-            names: agentRowNames(row),
+            primary: primary!,
+            secondary: secondary ?? null,
+            full: full!,
+            ...(source ? { source } : {}),
           }
-        : null;
-    });
-  }, [tabs, sessions, choices, faces, tags]);
+        : undefined,
+    };
+    return {
+      face: resolveAgentFace(row, { name: agentRowLabel(row), choice, faces }),
+      tag,
+      names: agentRowNames(row),
+    };
+  }, [fields, choice, faces, tag]);
 }
 
 /** The machine a remote tab runs on: a small server glyph in the machine's
