@@ -3,6 +3,9 @@ pub mod app_origins;
 pub mod frame_boundary;
 pub mod registry;
 pub mod routes;
+mod tunnel;
+
+pub use tunnel::serve_api;
 
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
@@ -270,11 +273,11 @@ pub fn start_http_server(app_handle: tauri::AppHandle) {
 
         let ipv6_app = app.clone();
         tauri::async_runtime::spawn(async move {
-            if let Err(e) = axum::serve(listener_v6, ipv6_app).await {
+            if let Err(e) = serve_api(listener_v6, ipv6_app).await {
                 log::error!(target: "http", "IPv6 HTTP server error: {}", e);
             }
         });
-        if let Err(e) = axum::serve(listener, app.into_make_service()).await {
+        if let Err(e) = serve_api(listener, app).await {
             log::error!(target: "http", "HTTP server error: {}", e);
         }
     });
@@ -366,10 +369,10 @@ mod tests {
         let app = axum::Router::new().route("/health", axum::routing::get(|| async { "ok" }));
         let app6 = app.clone();
         let t4 = tokio::spawn(async move {
-            axum::serve(v4, app).await.unwrap();
+            serve_api(v4, app).await.unwrap();
         });
         let t6 = tokio::spawn(async move {
-            axum::serve(v6, app6).await.unwrap();
+            serve_api(v6, app6).await.unwrap();
         });
         let client = reqwest::Client::builder().no_proxy().build().unwrap();
         for address in [
@@ -504,9 +507,7 @@ mod tests {
         let app = routes::health::router();
 
         tokio::spawn(async move {
-            axum::serve(listener, app.into_make_service())
-                .await
-                .unwrap();
+            serve_api(listener, app).await.unwrap();
         });
 
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
