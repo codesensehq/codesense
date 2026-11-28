@@ -5476,11 +5476,11 @@ mod tests {
             assert!(codesense_session_server::testing::wait_until(
                 || !path.exists()
             ));
-            assert!(fixture
+            assert!(codesense_session_server::testing::wait_until(|| fixture
                 .app
                 .state::<agent_accounts::AgentAccountRuntimeState>()
                 .owned_provenance(&next)
-                .is_none());
+                .is_none()));
         }
     }
 
