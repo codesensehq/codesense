@@ -25,6 +25,7 @@ import { pushViewerStateHandler } from "./handlers/agent-list-hub";
 import { agentTeamsOrgHandlers, isAgentTeamsWorld } from "./handlers/agents-team";
 import { agentContextHandlers, isAgentContextWorld } from "./handlers/agent-context";
 import { isLeftNavDemo, leftNavDemoHandlers } from "./handlers/left-nav-demo";
+import { isPerfWorld, navPerfHandlers } from "./handlers/perf-worlds";
 import { isChatMediaWorld, workspaceChatMediaHandlers } from "./handlers/workspace-chat-media";
 import { navGitHandlers } from "./handlers/nav-git";
 import { teamEditsHandlers } from "./handlers/team-edits";
@@ -112,6 +113,8 @@ export function createMockBackend(
     Object.assign(handlers, agentContextHandlers(state, events, handlers, search));
   // The left nav's demo world, opt-in (`?nav=demo`).
   if (isLeftNavDemo(search)) Object.assign(handlers, leftNavDemoHandlers(state, events, handlers));
+  // The perf baseline's 5,000-file nav (`?perf=nav5k`).
+  if (isPerfWorld(search, "nav5k")) Object.assign(handlers, navPerfHandlers(handlers));
   if (isChatMediaWorld(search)) Object.assign(handlers, workspaceChatMediaHandlers(events));
   Object.assign(handlers, navGitHandlers(search));
   // SW-XS-27: the unsaved team edits world, opt-in (`?edits=demo`).

@@ -24,74 +24,152 @@
       "runner": "m1",
       "engine": "webkit",
       "runs": 5,
-      "commit": "57580cdbd665",
-      "date": "2026-11-27",
+      "commit": "f2ded415c43a",
+      "date": "2026-11-28",
       "throttle": "none",
       "keys": {
         "cold_start_mock": {
           "unit": "ms",
-          "p50": 1584,
-          "p95": 2029,
+          "p50": 1224,
+          "p95": 1293,
           "samples": [
-            2029,
-            1923,
-            1584,
-            1443,
-            1423
+            1224,
+            1243,
+            1217,
+            1293,
+            1207
           ],
           "endState": "shell"
         },
         "open_other_team_agent_cold": {
           "unit": "ms",
-          "p50": 340,
-          "p95": 361,
+          "p50": 249,
+          "p95": 362,
           "samples": [
-            340,
-            333,
-            337,
-            361,
-            352
+            269,
+            242,
+            362,
+            244,
+            249
           ],
           "endState": "team-switch"
         },
         "open_other_team_agent_warm": {
           "unit": "ms",
-          "p50": 156,
-          "p95": 166,
+          "p50": 113,
+          "p95": 117,
           "samples": [
-            158,
-            150,
-            166,
-            155,
-            156
+            114,
+            113,
+            110,
+            117,
+            110
           ],
           "endState": "team-switch"
         },
         "team_switch": {
           "unit": "ms",
-          "p50": 467,
-          "p95": 481,
+          "p50": 382,
+          "p95": 389,
           "samples": [
-            481,
-            381,
-            471,
-            467,
-            311
+            382,
+            389,
+            367,
+            367,
+            386
           ],
           "endState": "team-view"
         },
         "tab_open": {
           "unit": "ms",
-          "p50": 88,
-          "p95": 90,
+          "p50": 59,
+          "p95": 62,
           "samples": [
-            88,
-            90,
-            83,
-            90,
-            83
+            59,
+            61,
+            55,
+            62,
+            59
           ],
           "endState": "schedule-row"
+        },
+        "fps_12_tiles_resize": {
+          "unit": "fps",
+          "p50": 39.2,
+          "p5": 34.8,
+          "samples": [
+            39.2,
+            34.8,
+            41.3,
+            41.4,
+            35.3
+          ],
+          "endState": "frames:90 worst:123.0ms idle:59.6 (+4 others)"
+        },
+        "fps_12_tiles_scroll": {
+          "unit": "fps",
+          "p50": 60.6,
+          "p5": 59.8,
+          "samples": [
+            59.8,
+            60.9,
+            60.8,
+            60.6,
+            60.4
+          ],
+          "endState": "frames:56 worst:30.0ms idle:59.6 (+4 others)"
+        },
+        "rss_12_tiles_renderer": {
+          "unit": "MiB",
+          "p50": 763.1,
+          "p95": 779,
+          "samples": [
+            759.5,
+            779,
+            757.2,
+            777.4,
+            763.1
+          ],
+          "endState": "playwright-webkit-webcontent mock webcontent:1"
+        },
+        "footprint_12_tiles_webcontent": {
+          "unit": "MiB",
+          "p50": 417,
+          "p95": 425,
+          "samples": [
+            407,
+            415,
+            419,
+            425,
+            417
+          ],
+          "endState": "playwright-webkit-webcontent mock webcontent:1"
+        },
+        "nav_first_paint": {
+          "unit": "ms",
+          "p50": 56,
+          "p95": 69,
+          "samples": [
+            53,
+            54,
+            56,
+            62,
+            69
+          ],
+          "endState": "rows:26"
+        },
+        "nav_scroll": {
+          "unit": "ms",
+          "p50": 33,
+          "p95": 34,
+          "samples": [
+            33,
+            34,
+            34,
+            33,
+            31
+          ],
+          "endState": "steps:122 opened:58"
         }
       }
     }

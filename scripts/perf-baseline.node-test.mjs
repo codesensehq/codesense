@@ -47,6 +47,14 @@ test("summarize gives p50 and p95 for a time key, p50 and p5 for an fps key", ()
   });
 });
 
+test("summarize gives p50 and p95 for a memory key in MiB, where lower is better", () => {
+  assert.deepEqual(summarize({ unit: "MiB", samples: [410, 400, 430, 405, 420] }), {
+    unit: "MiB",
+    p50: 410,
+    p95: 430,
+  });
+});
+
 test("spread is (max - min) / median, with the absolute range beside it", () => {
   assert.deepEqual(spread([100, 95, 105, 98, 102]), { ratio: 0.1, range: 10 });
 });
@@ -390,6 +398,57 @@ test("upsertSet appends a new runner, replaces it on a second record and leaves 
   assert.equal(before.sets.length, 1);
 });
 
+test("upsertSet records a MiB key from its samples' mib field as p50 and p95", () => {
+  const memory = {
+    unit: "MiB",
+    samples: [410, 400, 430, 405, 420].map((value) => ({ mib: value, endState: "webcontent:1" })),
+  };
+  const after = upsertSet(baseline(), current({ rss_tiles: memory }), "m1");
+  assert.deepEqual(after.sets[0].keys.rss_tiles, {
+    unit: "MiB",
+    p50: 410,
+    p95: 430,
+    samples: [410, 400, 430, 405, 420],
+    endState: "webcontent:1",
+  });
+  // A MiB sample read as ms would be a silent misreading: it is refused.
+  const asMs = { unit: "MiB", samples: [1, 2, 3].map((value) => ({ ms: value })) };
+  assert.throws(
+    () => upsertSet(baseline(), current({ rss_tiles: asMs }), "m1"),
+    (err) => err.exitCode === 2 && /rss_tiles: a sample has no mib value/.test(err.message),
+  );
+});
+
+test("runs that end in different states keep the first run's and the count, not a join", () => {
+  const ends = ["frames:61 worst:18ms", "frames:60 worst:21ms", "frames:61 worst:18ms"];
+  const fps = { unit: "fps", samples: ends.map((endState) => ({ fps: 60, endState })) };
+  const after = upsertSet(baseline(), current({ fps_tiles: fps }), "m1");
+  assert.equal(after.sets[0].keys.fps_tiles.endState, "frames:61 worst:18ms (+1 other)");
+  // One shared end state reads as it always did.
+  const same = upsertSet(baseline(), current({ open_cold: ms([1, 2, 3]) }), "m1");
+  assert.equal(same.sets[0].keys.open_cold.endState, "team-switch");
+});
+
+test("an unknown unit is an input error, never read as ms", () => {
+  const kib = { unit: "KiB", samples: [1, 2, 3].map((value) => ({ ms: value })) };
+  assert.throws(
+    () => upsertSet(baseline(), current({ rss_tiles: kib }), "m1"),
+    (err) => err.exitCode === 2 && /rss_tiles: unknown unit KiB/.test(err.message),
+  );
+});
+
+test("record exits 2 on an unknown unit and leaves the baseline alone", (t) => {
+  const { write } = tmp(t);
+  const startText = formatBaseline(baseline());
+  const base = write("base.json", startText);
+  const kib = { unit: "KiB", samples: [1, 2, 3].map((value) => ({ ms: value })) };
+  const cur = write("cur.json", current({ rss_tiles: kib }));
+  const c = capture();
+  assert.equal(run(["record", "--current", cur, "--runner", "m1", "--baseline", base], c.io), 2);
+  assert.match(c.err.join("\n"), /unknown unit KiB/);
+  assert.equal(fs.readFileSync(base, "utf8"), startText);
+});
+
 test("upsertSet keeps the extra fields a hand-measured key carries in that runner's set", () => {
   const before = baseline({ sets: [baseline().sets[0]] });
   const release = setKey(900, 950, { build: "release", sha: "relsha0" });
@@ -516,6 +575,16 @@ const M1_KEYS = [
   "cold_start_mock",
 ];
 
+/** The 12-tile and 5,000-file keys, measured on both runners but required only in the m1 set. */
+const M1_NEW_KEYS = {
+  fps_12_tiles_resize: "fps",
+  fps_12_tiles_scroll: "fps",
+  rss_12_tiles_renderer: "MiB",
+  footprint_12_tiles_webcontent: "MiB",
+  nav_first_paint: "ms",
+  nav_scroll: "ms",
+};
+
 test("the committed baseline has the M1 set, the compare block and no targets", () => {
   const text = fs.readFileSync(FIXTURE, "utf8");
   assert.equal(formatBaseline(JSON.parse(text)), text, "the file is in the script's own format");
@@ -535,13 +604,20 @@ test("the committed baseline has the M1 set, the compare block and no targets", 
     assert.match(set.date, /^\d{4}-\d{2}-\d{2}$/, `${set.runner} date`);
     for (const key of file.compare.keys) assert.ok(set.keys[key], `${set.runner} has ${key}`);
     for (const [key, entry] of Object.entries(set.keys)) {
-      assert.equal(entry.unit, "ms", key);
+      assert.ok(["ms", "fps", "MiB"].includes(entry.unit), `${key} unit ${entry.unit}`);
       assert.equal(typeof entry.p50, "number", key);
-      assert.equal(typeof entry.p95, "number", key);
+      // The tail that matters: p95 for a time or a size, p5 for a frame rate.
+      const tail = entry.unit === "fps" ? "p5" : "p95";
+      assert.equal(typeof entry[tail], "number", `${key} ${tail}`);
       assert.ok(entry.samples.length >= 1, key);
     }
+    for (const key of file.compare.keys) assert.equal(set.keys[key].unit, "ms", key);
   }
   for (const key of M1_KEYS) assert.ok(m1.keys[key], `m1 has ${key}`);
+  for (const [key, unit] of Object.entries(M1_NEW_KEYS)) {
+    assert.equal(m1.keys[key]?.unit, unit, `m1 has ${key} in ${unit}`);
+    assert.ok(m1.keys[key].samples.length >= 3, `${key} samples`);
+  }
   const ci = file.sets.find((set) => set.runner === "macos-15");
   if (ci) assert.ok(!ci.keys.team_switch, "CI never records team_switch");
 });
@@ -568,11 +644,13 @@ test("case 12: the committed M1 numbers pass compare against themselves; the col
     run(["compare", "--current", cur, "--runner", "m1", "--baseline", FIXTURE], c.io),
     1,
   );
-  // Every relative row passes; only the budget fails, on the cold open alone (p95 361 > 200).
+  // Every relative row passes; only the budget fails, on the cold open alone (its p95 > 200).
+  const cold = m1.keys.open_other_team_agent_cold.p95;
+  assert.ok(m1.keys.open_other_team_agent_warm.p95 <= 200 && cold > 200);
   assert.ok(c.out.slice(0, file.compare.keys.length).every((line) => line.startsWith("PASS ")));
   assert.deepEqual(c.out.slice(file.compare.keys.length), [
-    "FAIL open_other_team_agent_cold p95 361ms > budget 200",
-    "perf compare m1: FAIL budget: open_other_team_agent_cold p95 361ms",
+    `FAIL open_other_team_agent_cold p95 ${cold}ms > budget 200`,
+    `perf compare m1: FAIL budget: open_other_team_agent_cold p95 ${cold}ms`,
   ]);
 });
 

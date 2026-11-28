@@ -26,6 +26,7 @@ import {
   leftNavDemoProcesses,
   leftNavDemoTabs,
 } from "./left-nav-demo";
+import { isPerfWorld, PERF_TILES, perfTileOutput } from "./perf-worlds";
 import type {
   TerminalCloseMode,
   TerminalGridState,
@@ -58,7 +59,8 @@ const REPAINT_DELAY_MS = 150;
 const appended = new Map<string, string>();
 
 const output = (session: string): string =>
-  (OUTPUT[session] ?? "\x1b[32m~\x1b[0m $ ") + (appended.get(session) ?? "");
+  (OUTPUT[session] ?? perfTileOutput(session) ?? "\x1b[32m~\x1b[0m $ ") +
+  (appended.get(session) ?? "");
 
 /** A mock session's canned output as the plain lines an emulator would hold. */
 const textLines = (session: string): string[] =>
@@ -75,6 +77,33 @@ const AGENT_TEAM_VIEWER_SHARE = 0.38;
  *  teams' workspaces without scrolling in a review capture. */
 const AGENT_TEAMS_VIEWER_SHARE = 0.12;
 
+/** The viewer's share in the `?perf=tiles12` world: the CLI gets nearly all of the main area, so
+ *  the tiles are what the capture is about. */
+const PERF_TILES_VIEWER_SHARE = 0.12;
+
+/**
+ * A demo world's persisted viewer state: the mock's saved state with `changes(viewer)` laid over
+ * it, no Foreman landing and the CLI shown with its split.
+ */
+function worldAppState(
+  changes: (viewer: Record<string, unknown>) => Record<string, unknown>,
+  splitRatio?: number,
+): string {
+  const state = JSON.parse(mockAppState) as { viewer: Record<string, unknown> };
+  state.viewer = {
+    ...state.viewer,
+    schemaVersion: 10,
+    ...changes(state.viewer),
+    // A demo world is about its own team: the Foreman's start landing opens the Foreman in the
+    // docs team and makes that team active, so these worlds start without it.
+    settings: { ...(state.viewer.settings as object | undefined), openForemanOnStart: false },
+    // The CLI's chrome is saved as one `cliChrome` value; flat chrome keys would be read as
+    // a pre-`cliChrome` state file and dropped, losing the shown CLI and the split.
+    cliChrome: { visible: true, ...(splitRatio !== undefined && { splitRatio }) },
+  };
+  return JSON.stringify(state);
+}
+
 /** The `?terminals=demo` world's persisted viewer state: two workspaces of the
  *  fixture team, one whose terminals the host still runs, one whose ended, with the CLI
  *  shown. The agent team worlds add their story workspaces and a split, and
@@ -84,35 +113,49 @@ function demoAppState(
   splitRatio?: number,
   secondTeam = false,
 ): string {
-  const state = JSON.parse(mockAppState) as { viewer: Record<string, unknown> };
   const secondContent = SECOND_TEAM_WORKSPACES[0].id;
-  state.viewer = {
-    ...state.viewer,
-    schemaVersion: 10,
-    ...(secondTeam && {
-      openedTeams: [...(state.viewer.openedTeams as string[]), SECOND_TEAM_KEY],
-      workspaceOrderByTeam: { [SECOND_TEAM_KEY]: SECOND_TEAM_WORKSPACES.map((ws) => ws.id) },
+  return worldAppState(
+    (viewer) => ({
+      ...(secondTeam && {
+        openedTeams: [...(viewer.openedTeams as string[]), SECOND_TEAM_KEY],
+        workspaceOrderByTeam: { [SECOND_TEAM_KEY]: SECOND_TEAM_WORKSPACES.map((ws) => ws.id) },
+      }),
+      workspaces: {
+        [TEAM_KEY]: [
+          { id: CONTENT_WS, kind: "generic", cwd: TEAM_CONTENT_PATH, status: "ready" },
+          { id: SCRATCH_WS, kind: "generic", cwd: SCRATCH_DIR, status: "ready" },
+          ...storyWorkspaces,
+        ],
+        ...(secondTeam && { [SECOND_TEAM_KEY]: SECOND_TEAM_WORKSPACES }),
+      },
+      activeWorkspace: {
+        [TEAM_KEY]: CONTENT_WS,
+        ...(secondTeam && { [SECOND_TEAM_KEY]: secondContent }),
+      },
     }),
-    workspaces: {
-      [TEAM_KEY]: [
-        { id: CONTENT_WS, kind: "generic", cwd: TEAM_CONTENT_PATH, status: "ready" },
-        { id: SCRATCH_WS, kind: "generic", cwd: SCRATCH_DIR, status: "ready" },
-        ...storyWorkspaces,
-      ],
-      ...(secondTeam && { [SECOND_TEAM_KEY]: SECOND_TEAM_WORKSPACES }),
-    },
-    activeWorkspace: {
-      [TEAM_KEY]: CONTENT_WS,
-      ...(secondTeam && { [SECOND_TEAM_KEY]: secondContent }),
-    },
-    // A demo world is about its own team: the Foreman's start landing opens the Foreman in the
-    // docs team and makes that team active, so these worlds start without it.
-    settings: { ...(state.viewer.settings as object | undefined), openForemanOnStart: false },
-    // The CLI's chrome is saved as one `cliChrome` value; flat chrome keys would be read as
-    // a pre-`cliChrome` state file and dropped, losing the shown CLI and the split.
-    cliChrome: { visible: true, ...(splitRatio !== undefined && { splitRatio }) },
-  };
-  return JSON.stringify(state);
+    splitRatio,
+  );
+}
+
+/** The `?perf=tiles12` world's persisted viewer state: only its 12 workspaces, tiled flat on the
+ *  `grid` preset (4 × 3). */
+function perfTilesAppState(): string {
+  return worldAppState(
+    () => ({
+      workspaces: {
+        [TEAM_KEY]: PERF_TILES.map(({ id, cwd }) => ({
+          id,
+          kind: "generic",
+          cwd,
+          status: "ready",
+        })),
+      },
+      activeWorkspace: { [TEAM_KEY]: PERF_TILES[0].id },
+      trayMode: { [TEAM_KEY]: "flat" },
+      foregroundLayout: { [TEAM_KEY]: { sizes: [], direction: "row", preset: "grid", root: null } },
+    }),
+    PERF_TILES_VIEWER_SHARE,
+  );
 }
 
 function descriptor(
@@ -159,8 +202,24 @@ export function terminalLayoutHandlers(search: string, events: MockEventBus): Ha
     ...(agentTeam ? AGENT_TEAM_PROCESSES : {}),
     ...(navDemo ? leftNavDemoProcesses() : {}),
   };
-  const demo = agentTeam || navDemo || new URLSearchParams(search).get("terminals") === "demo";
+  // The perf baseline's 5,000-file nav boots as `?nav=demo` does, on the demo's app state.
+  const demo =
+    agentTeam ||
+    navDemo ||
+    isPerfWorld(search, "nav5k") ||
+    new URLSearchParams(search).get("terminals") === "demo";
   if (demo) seedDemo(host);
+  // The perf baseline's 12-tile world: its own host, one shell per workspace, and no demo.
+  const perfTiles = isPerfWorld(search, "tiles12");
+  if (perfTiles) {
+    for (const tile of PERF_TILES) {
+      host.seed(
+        workspaceKey(TEAM_KEY, { id: tile.id }),
+        descriptor(tile.name, "generic", tile.cwd),
+        { session: tile.session, name: "zsh" },
+      );
+    }
+  }
   // The `?nav=demo` world's story workspaces, each with its agents.
   if (navDemo) {
     for (const tab of leftNavDemoTabs()) {
@@ -248,6 +307,11 @@ export function terminalLayoutHandlers(search: string, events: MockEventBus): Ha
     return target[field];
   };
   return {
+    ...(perfTiles && {
+      load_app_state: perfTilesAppState,
+      check_path_exists: (args: Record<string, unknown>) =>
+        PERF_TILES.some((tile) => tile.cwd === String(args.path)),
+    }),
     ...(demo && {
       load_app_state: () =>
         demoAppState(

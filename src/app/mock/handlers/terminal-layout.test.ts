@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+import { createHash } from "node:crypto";
 import { describe, it, expect } from "vitest";
 
 import { MockEventBus } from "../mock-events";
@@ -238,4 +239,89 @@ describe("send_prompt_to_agent (mock)", () => {
       "nothing to send",
     );
   });
+});
+
+describe("?perf=tiles12 — the perf baseline's 12-tile world", () => {
+  type Seeded = {
+    viewer: {
+      workspaces: Record<string, { id: string; kind: string; cwd: string }[]>;
+      activeWorkspace: Record<string, string>;
+      trayMode: Record<string, string>;
+      foregroundLayout: Record<string, { preset: string; root: unknown }>;
+      settings: { openForemanOnStart?: boolean };
+      cliChrome: { visible: boolean };
+    };
+  };
+  const seeded = () => {
+    const { h, snapshot } = world("?perf=tiles12");
+    return { h, snapshot, state: JSON.parse(h.load_app_state({}) as string) as Seeded };
+  };
+
+  it("seeds exactly 12 flat workspaces of the team on the grid preset, and nothing else", () => {
+    const { state } = seeded();
+    const workspaces = state.viewer.workspaces[TEAM_KEY];
+    expect(Object.keys(state.viewer.workspaces)).toEqual([TEAM_KEY]);
+    expect(workspaces).toHaveLength(12);
+    expect(new Set(workspaces.map((ws) => ws.id)).size).toBe(12);
+    expect(workspaces.every((ws) => ws.kind === "generic")).toBe(true);
+    // No content or scratch workspace from the demo state: the mosaic holds 12 leaves, not 14.
+    expect(workspaces.map((ws) => ws.cwd)).not.toContain(TEAM_CONTENT_PATH);
+    expect(workspaces.some((ws) => ws.cwd.endsWith("/scratch"))).toBe(false);
+    expect(state.viewer.activeWorkspace).toEqual({ [TEAM_KEY]: workspaces[0].id });
+    expect(state.viewer.trayMode).toEqual({ [TEAM_KEY]: "flat" });
+    // Set in the state, not left to the picker's `columns` default.
+    expect(state.viewer.foregroundLayout[TEAM_KEY]).toMatchObject({ preset: "grid", root: null });
+    expect(state.viewer.settings.openForemanOnStart).toBe(false);
+    expect(state.viewer.cliChrome.visible).toBe(true);
+  });
+
+  it("the host runs one shell per workspace, with no demo sessions", () => {
+    const { state, snapshot } = seeded();
+    const ids = state.viewer.workspaces[TEAM_KEY].map((ws) => `${TEAM_KEY}|${ws.id}`);
+    const { workspaces } = snapshot();
+    expect(Object.keys(workspaces).sort()).toEqual([...ids].sort());
+    for (const id of ids) {
+      expect(workspaces[id].tabs).toHaveLength(1);
+      expect(workspaces[id].tabs[0].state).toMatchObject({ kind: "live" });
+    }
+    const sessions = Object.values(workspaces).map((ws) => ws.tabs[0].session);
+    expect(sessions).not.toContain("demo-shell");
+  });
+
+  it("each shell holds at least 2,000 lines of scrollback, and its path exists", () => {
+    const { h, state, snapshot } = seeded();
+    for (const ws of Object.values(snapshot().workspaces)) {
+      const { snapshot: shot } = h.subscribe_terminal({
+        ptyId: ws.tabs[0].session,
+      }) as TerminalSubscription;
+      expect(shot.vt.split("\n").length).toBeGreaterThanOrEqual(2_000);
+      expect(shot.seq).toBe(shot.vt.length);
+    }
+    for (const ws of state.viewer.workspaces[TEAM_KEY]) {
+      expect(h.check_path_exists({ path: ws.cwd })).toBe(true);
+    }
+  });
+});
+
+/** One world's whole boot as the app reads it: its app state, host layout and every scrollback. */
+function bootBytes(search: string): string {
+  const { h, snapshot } = world(search);
+  const layout = snapshot();
+  const sessions = Object.values(layout.workspaces).flatMap((ws) => ws.tabs.map((t) => t.session));
+  const vt = sessions.map(
+    (session) => (h.subscribe_terminal({ ptyId: session }) as TerminalSubscription).snapshot.vt,
+  );
+  return JSON.stringify({ appState: h.load_app_state?.({}) ?? null, layout, vt });
+}
+
+// The digests were taken from these worlds as they stood before the perf worlds; a deliberate
+// change to one of them updates its digest in the same change.
+it.each([
+  ["", "43cdfe39"],
+  ["?terminals=demo", "00175396"],
+  ["?agents=team", "afc30ec3"],
+  ["?agents=teams", "c06e5e85"],
+  ["?nav=demo", "44c9ef6d"],
+])("the %s world boots byte-identical to before the perf worlds", (search, digest) => {
+  expect(createHash("sha256").update(bootBytes(search)).digest("hex").slice(0, 8)).toBe(digest);
 });
