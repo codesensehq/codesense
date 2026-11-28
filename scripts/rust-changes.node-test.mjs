@@ -240,9 +240,38 @@ test("every script rust.yml runs is Rust-relevant, so changing one runs the Rust
     assert.equal(touchesRust(["src/app.tsx", script], RUST_PATHS), true, script);
 });
 
-test("the real tree's includes keep src/tauri/commands.ts Rust-relevant", () => {
+// The app crate's tests that read one front-end file each start the Rust jobs through
+// includedPaths; the whole-tree walkers run in the always-run guards crate instead.
+const READ_FRONT_END = [
+  "src/tauri/commands.ts",
+  "src/shared/stores/viewer-store.ts",
+  "src/shared/lib/pipeline-graph/types.ts",
+  "src/shared/lib/pipeline-graph/doc-type-icon.ts",
+  "src/shared/lib/agent-state.ts",
+];
+
+test("the real tree's includes keep each front-end file the app crate reads Rust-relevant", () => {
   const root = fileURLToPath(new URL("..", import.meta.url));
-  assert.ok(includedPaths(root).includes("src/tauri/commands.ts"));
+  const prefixes = [...RUST_PATHS, ...includedPaths(root)];
+  for (const file of READ_FRONT_END) {
+    assert.ok(includedPaths(root).includes(file), file);
+    assert.equal(touchesRust([file], prefixes), true, file);
+  }
+});
+
+test("a TS-only change outside RUST_PATHS and the includes skips the Rust jobs", () => {
+  const root = fileURLToPath(new URL("..", import.meta.url));
+  const prefixes = [...RUST_PATHS, ...includedPaths(root)];
+  // Files the walkers in Rust guards scan, and that no app crate test reads.
+  const files = [
+    "src/shared/lib/agent-cli-names.ts",
+    "src/features/agent-context/components/agent-context-pivot.tsx",
+  ];
+  for (const file of files) {
+    assert.ok(fs.existsSync(path.join(root, file)), file);
+    assert.equal(touchesRust([file], prefixes), false, file);
+  }
+  assert.equal(touchesRust(files, prefixes), false);
 });
 
 test("the CLI diffs a range and prints rust= and macos=", () => {
