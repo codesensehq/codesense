@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: MIT
 // Judges a `cargo clippy --features e2e-webdriver --message-format=json` run for the webdriver-only
-// module (`src-tauri/src/windows/e2e`, the module webdriver_cfg_guard.rs keeps behind the feature):
-// any warning or lint in it fails, as does a compile error in the app crate, any error in a crate
-// the app crate needs, or a build that did not finish. It fails closed: unless the JSON shows the
-// app crate itself was checked, the module was never linted; a failed build in which the app crate
-// reported any error passes only when rustc's summary for that crate shows its check ran to its
-// end, and any error level other than plain `error` (a compiler crash or a level this script does
-// not know) fails. Lints elsewhere in the app crate are left to their own owners: no job lints the
+// module (`src-tauri/src/windows/e2e`, the module webdriver_cfg_guard.rs keeps behind the feature
+// and checks MODULE names): any warning or lint in it fails, as does any other app crate error,
+// with a span or without, bar a lint outside the module, any error in a crate the app crate needs,
+// or a build that did not finish. It fails closed: unless the JSON shows the app crate itself was
+// checked, the module was never linted; a failed build in which the app crate reported any error
+// passes only when rustc's summary for that crate shows its check ran to its end, and any error
+// level other than plain `error` (a compiler crash or a level this script does not know) fails. Lints elsewhere in the app crate are left to their own owners: no job lints the
 // whole tree with `-D warnings`.
 // Usage: node scripts/clippy-webdriver-module.mjs <clippy json file>
 import fs from "node:fs";
@@ -58,12 +58,17 @@ export function clippyProblems(text) {
     const where = span ? `${span.file_name}:${span.line_start}` : null;
     const lint = String(code?.code ?? "").startsWith("clippy::");
     if (span && MODULE.test(span.file_name)) problems.push(`${where}: ${level}: ${message}`);
-    else if (level !== "error" || !where) continue;
+    else if (level !== "error") continue;
     else if (!inApp) {
+      if (!where) continue;
       const crate = record.target?.name ?? "a dependency";
       problems.push(`${where}: error in ${crate}, which the app crate needs: ${message}`);
-    } else if (lint) lintedElsewhere = true;
-    else problems.push(`${where}: ${level}: ${message}`);
+    } else if (lint && where) lintedElsewhere = true;
+    // Any other app error fails, a spanless one too: only a lint elsewhere is someone else's.
+    else
+      problems.push(
+        where ? `${where}: ${level}: ${message}` : `error in the app crate: ${message}`,
+      );
   }
   if (finished === null) problems.push("clippy did not finish: no build-finished line");
   else if (!finished && appErrored && !appSummarized)

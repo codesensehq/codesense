@@ -146,6 +146,18 @@ test("fails a compile error in the app crate", () => {
   ]);
 });
 
+test("fails a spanless app crate error, even beside a lint elsewhere and the app's summary", () => {
+  const lines = [
+    message("error", "src-tauri/src/commands/fs.rs", { code: "clippy::never_loop" }),
+    message("error", null, { code: null, text: "could not write output" }),
+    aborting(APP),
+    finished(false),
+  ];
+  assert.deepEqual(clippyProblems(lines.join("\n")), [
+    "error in the app crate: could not write output",
+  ]);
+});
+
 test("fails closed when a dependency's error stops the app crate being linted", () => {
   // A deny-by-default lint in a dependency ends the build before the app crate is checked.
   const lines = [
