@@ -11,6 +11,7 @@ import { useIsConsole } from "@/shared/hooks/use-is-console";
 import { useTeamPipelineRepoPath } from "@/shared/hooks/use-team-pipeline-repo-path";
 import { IdentityMenu } from "@/features/shell/components/identity-menu";
 import { TerminalServersTitleBarNotice } from "@/features/machines/components/terminal-servers-notice";
+import { StatusLine } from "@/features/shell/components/status-line";
 
 /** Width (CSS px) of the macOS traffic-light zone (close/minimize/zoom). */
 export const TRAFFIC_LIGHT_WIDTH = 78;
@@ -157,6 +158,7 @@ export function TitleBar() {
         {/* Right gutter (`pr-3`) gives the last control the same breathing room the
             traffic lights get on the left, instead of hugging the window edge. */}
         <div className="flex flex-shrink-0 h-10 items-center self-start gap-1.5 pl-1.5 pr-3">
+          <StatusLine />
           {/* SW-EW-34 v2: in console the CLI controls (layout · EXIT ·
               epic-repos) ride the right cluster behind a divider, so the
               full-screen EXIT toggle is always visible top-right. The divider rides

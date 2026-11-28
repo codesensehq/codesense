@@ -1,0 +1,101 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`the title bar with nothing posted, in the console layout > renders as at the base, with no status line and no live-region text 1`] = `
+<div
+  class="titlebar-drag flex-shrink-0 flex flex-col border-b border-border bg-background"
+  data-testid="title-bar"
+>
+  <div
+    class="@container/titlebar min-h-10 flex items-start"
+  >
+    <div
+      aria-hidden="true"
+      class="flex-shrink-0 h-10"
+      data-testid="title-bar-traffic-lights"
+      style="width: 78px;"
+    />
+    <div
+      class="flex min-w-0 max-w-64 flex-shrink-0 h-10 items-center self-start"
+    >
+      <div
+        data-testid="stub-identity-menu"
+      />
+    </div>
+    <div
+      aria-hidden="true"
+      class="mx-1.5 flex-shrink-0 h-10 self-start flex items-center"
+    >
+      <div
+        class="h-4 w-px bg-border/70"
+      />
+    </div>
+    <div
+      class="flex-1 min-w-0 min-h-10 flex items-start"
+      data-testid="title-bar-middle"
+    >
+      <div
+        class="flex-1 min-w-0 flex items-start"
+        data-testid="console-switcher-slot"
+      />
+    </div>
+    <div
+      class="flex flex-shrink-0 h-10 items-center self-start gap-1.5 pl-1.5 pr-3"
+    >
+      <div
+        data-testid="stub-cli-chrome"
+      />
+      <div
+        data-testid="stub-servers-notice"
+      />
+    </div>
+  </div>
+</div>
+`;
+
+exports[`the title bar with nothing posted, in the doc tabs layout > renders as at the base, with no status line and no live-region text 1`] = `
+<div
+  class="titlebar-drag flex-shrink-0 flex flex-col border-b border-border bg-background"
+  data-testid="title-bar"
+>
+  <div
+    class="@container/titlebar min-h-10 flex items-start"
+  >
+    <div
+      aria-hidden="true"
+      class="flex-shrink-0 h-10"
+      data-testid="title-bar-traffic-lights"
+      style="width: 78px;"
+    />
+    <div
+      class="flex min-w-0 max-w-64 flex-shrink-0 h-10 items-center self-start"
+    >
+      <div
+        data-testid="stub-identity-menu"
+      />
+    </div>
+    <div
+      aria-hidden="true"
+      class="mx-1.5 flex-shrink-0 h-10 self-start flex items-center"
+    >
+      <div
+        class="h-4 w-px bg-border/70"
+      />
+    </div>
+    <div
+      class="flex-1 min-w-0 min-h-10 flex items-end"
+      data-testid="title-bar-middle"
+    >
+      <div
+        data-testid="stub-viewer-tabs"
+      />
+    </div>
+    <div
+      class="flex flex-shrink-0 h-10 items-center self-start gap-1.5 pl-1.5 pr-3"
+    >
+      <div
+        data-testid="stub-servers-notice"
+      />
+    </div>
+  </div>
+</div>
+`;

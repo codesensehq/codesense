@@ -3,6 +3,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { useAgentInboxRailStore } from "@/features/viewer/stores/agent-inbox-rail-store";
 import { installMockBackend } from "./install";
 import { MOCK_ORG_SLUG } from "./fixtures";
+import { getStatusLineState, resetStatusLineForTests } from "@/shared/stores/status-line-store";
 
 // The seam test: exercise the whole mock backend through the SAME door the app
 // uses — `window.__TAURI_INTERNALS__.invoke` — after a real install(), not the
@@ -81,5 +82,17 @@ describe("installMockBackend and the chat cover", () => {
   it("marks nothing in a world with no agents", () => {
     installMockBackend();
     expect(pending()).toEqual([]);
+  });
+});
+
+describe("installMockBackend: the status line hook", () => {
+  afterEach(() => resetStatusLineForTests());
+
+  it("posts through window.__codesenseMock.postStatusLine", () => {
+    installMockBackend();
+    const mock = (window as { __codesenseMock?: { postStatusLine?: (p: unknown) => void } })
+      .__codesenseMock;
+    mock?.postStatusLine?.({ text: "design opened critique-log.html", kind: "offer" });
+    expect(getStatusLineState().line?.text).toBe("design opened critique-log.html");
   });
 });

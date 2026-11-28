@@ -82,6 +82,11 @@ const SITES: Record<string, { count: number; reason: string }> = {
     reason:
       "release listeners (pointerup, pointercancel, blur) live only for the user's own held-pointer drag in this pane; they end the drag and its resize shield and take no other input, and the gesture can outlast a team switch until the pointer is released.",
   },
+  "src/features/shell/components/status-line.tsx": {
+    count: 1,
+    reason:
+      "focusin only records the last element focused outside the line, to return focus to (no action, no id lookup); mounted once in the title bar, outside every team.",
+  },
   "src/features/shell/slots/file-nav-slot-host.tsx": {
     count: 1,
     reason: "window resize measurement; no input, no id lookup.",

@@ -93,6 +93,7 @@ jobs:
           tests/e2e-mock/foreman-page-runtimes.spec.ts
           tests/e2e-mock/chat-media-chip-target.spec.ts
           tests/e2e-mock/satellite-boot.spec.ts
+          tests/e2e-mock/status-line.axe.spec.ts
       - name: Upload failure traces
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
