@@ -2862,9 +2862,8 @@ test("exports guard: no other job may report a check named Exports guard or Expo
 // macOS WebKit, so a red media step leaves the job green and doesn't page the nightly issue. No
 // other step or the job may continue on error, so setup failures still page.
 test("nightly.yml's frame-media job continues only past its media step", () => {
-  const job = parse(fs.readFileSync(path.join(directory, "nightly.yml"), "utf8")).jobs[
-    "frame-media"
-  ];
+  const text = fs.readFileSync(path.join(directory, "nightly.yml"), "utf8");
+  const job = parse(text).jobs["frame-media"];
   assert.ok(!("continue-on-error" in job), "job");
   const media = job.steps.filter((step) => step.id === "media");
   assert.equal(media.length, 1);
@@ -2874,4 +2873,22 @@ test("nightly.yml's frame-media job continues only past its media step", () => {
     if (step !== media[0]) assert.ok(!("continue-on-error" in step), step.name);
   const upload = job.steps.find((step) => step.name === "Upload failure traces");
   assert.equal(upload.if, "${{ !cancelled() && (failure() || steps.media.outcome == 'failure') }}");
+  // The marker carries its tracking issue and an expiry that has not passed (UTC, as the
+  // quarantine ledger dates its entries).
+  const lines = text.split("\n");
+  const at = lines.findIndex((line) => /^\s*continue-on-error: true\s*$/.test(line));
+  assert.ok(at > 0 && lines.slice(0, at).some((line) => /^\s*id: media\s*$/.test(line)), "marker");
+  const comment = [];
+  for (let i = at - 1; i >= 0 && /^\s*#/.test(lines[i]); i--) comment.unshift(lines[i]);
+  const block = comment.join(" ");
+  assert.match(block, /https:\/\/github\.com\/codesensehq\/codesense\/issues\/(\d+)/, "issue");
+  const removeBy = /Remove by (\d{4}-\d{2}-\d{2})/.exec(block)?.[1];
+  assert.ok(removeBy, "Remove by date");
+  const expires = Date.parse(`${removeBy}T00:00:00Z`);
+  assert.ok(
+    Number.isFinite(expires) && new Date(expires).toISOString().slice(0, 10) === removeBy,
+    `${removeBy} is not a date`,
+  );
+  const today = Date.parse(`${new Date().toISOString().slice(0, 10)}T00:00:00Z`);
+  assert.ok(expires >= today, `the continue-on-error marker expired on ${removeBy}`);
 });
