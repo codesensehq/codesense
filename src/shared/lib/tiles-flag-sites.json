@@ -13,5 +13,10 @@
     "file": "src-tauri/src/context_repo/scratch_space.rs",
     "fn": "open_group_space",
     "what": "creates the group folder and its .gitignore"
+  },
+  {
+    "file": "src-tauri/src/live_hub/groups.rs",
+    "fn": "project",
+    "what": "publishes group changes on the group and groups topics"
   }
 ]
