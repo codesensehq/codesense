@@ -546,7 +546,7 @@ test("the committed baseline has the M1 set, the compare block and no targets", 
   if (ci) assert.ok(!ci.keys.team_switch, "CI never records team_switch");
 });
 
-test("case 12: the committed M1 numbers pass compare against themselves", (t) => {
+test("case 12: the committed M1 numbers pass compare against themselves; the cold open is over budget", (t) => {
   const file = JSON.parse(fs.readFileSync(FIXTURE, "utf8"));
   const m1 = file.sets.find((set) => set.runner === "m1");
   const keys = Object.fromEntries(
@@ -566,6 +566,189 @@ test("case 12: the committed M1 numbers pass compare against themselves", (t) =>
   const c = capture();
   assert.equal(
     run(["compare", "--current", cur, "--runner", "m1", "--baseline", FIXTURE], c.io),
+    1,
+  );
+  // Every relative row passes; only the budget fails, on the cold open alone (p95 361 > 200).
+  assert.ok(c.out.slice(0, file.compare.keys.length).every((line) => line.startsWith("PASS ")));
+  assert.deepEqual(c.out.slice(file.compare.keys.length), [
+    "FAIL open_other_team_agent_cold p95 361ms > budget 200",
+    "perf compare m1: FAIL budget: open_other_team_agent_cold p95 361ms",
+  ]);
+});
+
+// --- the open-time budget --------------------------------------------------------------------
+
+const BUDGET = { runner: "m1", p95Ms: 200, keys: ["open_warm"] };
+
+/** An m1 set whose warm open has p50 156; `budget: undefined` leaves the budget block out. */
+function budgeted(options = {}) {
+  const { budget, keys = ["open_warm"] } = { budget: BUDGET, ...options };
+  const file = baseline({
+    keys,
+    sets: [
+      { ...baseline().sets[0], keys: { open_warm: setKey(156), open_cold: setKey(340) } },
+      { ...baseline().sets[1], keys: { open_warm: setKey(156) } },
+    ],
+  });
+  return budget === undefined ? file : { ...file, budget };
+}
+
+test("budget: the committed file holds the open-time budget for both open keys of the m1 set", () => {
+  const file = JSON.parse(fs.readFileSync(FIXTURE, "utf8"));
+  const keys = ["open_other_team_agent_cold", "open_other_team_agent_warm"];
+  assert.deepEqual(file.budget, { runner: "m1", p95Ms: 200, keys });
+  assert.deepEqual(Object.keys(file), ["compare", "budget", "sets"]);
+  const m1 = file.sets.find((set) => set.runner === file.budget.runner);
+  // Each key is checked against the m1 set itself, not against `compare.keys`.
+  for (const key of file.budget.keys) assert.ok(m1.keys[key], `m1 has ${key}`);
+  assert.doesNotMatch(JSON.stringify(file.budget), /[A-Z]{2,}-[A-Z]*-?\d+/);
+});
+
+test("budget: a p95 over the budget fails even when the median stays inside tolerance", () => {
+  const out = compare(budgeted(), current({ open_warm: ms([156, 156, 156, 156, 230]) }), {
+    runner: "m1",
+  });
+  assert.equal(out.exitCode, 1);
+  assert.equal(out.rows.length, 1);
+  assert.equal(out.rows[0].fail, false);
+  assert.deepEqual(out.lines, [
+    "PASS open_warm 156ms (p50 156, limit 187.2, +0%, team-switch)",
+    "FAIL open_warm p95 230ms > budget 200",
+    "perf compare m1: FAIL budget: open_warm p95 230ms",
+  ]);
+  assert.equal(out.verdict, "perf compare m1: FAIL budget: open_warm p95 230ms");
+});
+
+test("budget: a budget key missing from the current file is an input error", () => {
+  const file = budgeted({ budget: { ...BUDGET, keys: ["open_warm", "open_cold"] } });
+  assert.throws(
+    () => compare(file, current({ open_warm: ms([156, 156, 156]) }), { runner: "m1" }),
+    (err) => err.exitCode === 2 && /open_cold: not in the current file/.test(err.message),
+  );
+});
+
+test("budget: another runner, or a file with no block, compares exactly as before", () => {
+  const measured = current({ open_warm: ms([156, 156, 156, 156, 990]) });
+  const before = compare(budgeted({ budget: undefined }), measured, { runner: "macos-15" });
+  assert.deepEqual(compare(budgeted(), measured, { runner: "macos-15" }), before);
+  assert.equal(before.exitCode, 0);
+  // m1 with no block: no budget pass at all.
+  const m1 = compare(budgeted({ budget: undefined }), measured, { runner: "m1" });
+  assert.equal(m1.exitCode, 0);
+  assert.equal(m1.verdict, "perf compare m1: PASS 1/1 (tol 20%, 5 runs)");
+});
+
+test("budget: a malformed block is an input error", () => {
+  const measured = current({ open_warm: ms([156, 156, 156]) });
+  for (const budget of [
+    null,
+    "m1",
+    { ...BUDGET, runner: 1 },
+    { ...BUDGET, p95Ms: "200" },
+    { ...BUDGET, p95Ms: 0 },
+    { ...BUDGET, p95Ms: -5 },
+    { ...BUDGET, p95Ms: Infinity },
+    { ...BUDGET, keys: [] },
+    { ...BUDGET, keys: "open_warm" },
+    { ...BUDGET, keys: ["open_warm", 3] },
+  ]) {
+    assert.throws(
+      () => compare(budgeted({ budget }), measured, { runner: "macos-15" }),
+      (err) => err.exitCode === 2 && /budget/.test(err.message),
+      JSON.stringify(budget),
+    );
+  }
+});
+
+test("budget: a budget key that isn't timed in ms is an input error", () => {
+  const file = budgeted({ budget: { ...BUDGET, keys: ["open_warm", "fps_tiles"] } });
+  const fps = { unit: "fps", samples: [60, 60, 60].map((value) => ({ fps: value })) };
+  assert.throws(
+    () =>
+      compare(file, current({ open_warm: ms([156, 156, 156]), fps_tiles: fps }), { runner: "m1" }),
+    (err) => err.exitCode === 2 && /fps_tiles/.test(err.message) && /ms/.test(err.message),
+  );
+});
+
+test("budget: record on m1 prints the budget lines and still exits 0", (t) => {
+  const { write } = tmp(t);
+  const base = write("base.json", formatBaseline(budgeted()));
+  const cur = write("cur.json", current({ open_warm: ms([156, 156, 156, 156, 230]) }));
+  const c = capture();
+  assert.equal(run(["record", "--current", cur, "--runner", "m1", "--baseline", base], c.io), 0);
+  assert.ok(c.out.includes("FAIL open_warm p95 230ms > budget 200"), c.out.join("\n"));
+  assert.deepEqual(JSON.parse(fs.readFileSync(base, "utf8")).budget, BUDGET);
+  // Another runner's record prints no budget line.
+  const ci = capture();
+  assert.equal(
+    run(["record", "--current", cur, "--runner", "macos-15", "--baseline", base], ci.io),
     0,
   );
+  assert.ok(!ci.out.some((line) => line.includes("budget")), ci.out.join("\n"));
+});
+
+test("budget: record on m1 names a budget key the run didn't measure and still exits 0", (t) => {
+  const { write } = tmp(t);
+  const base = write(
+    "base.json",
+    formatBaseline(budgeted({ budget: { ...BUDGET, keys: ["open_warm", "open_cold"] } })),
+  );
+  const cur = write("cur.json", current({ open_warm: ms([156, 156, 156, 156, 160]) }));
+  const c = capture();
+  assert.equal(run(["record", "--current", cur, "--runner", "m1", "--baseline", base], c.io), 0);
+  assert.ok(c.out.includes("budget open_cold: not measured"), c.out.join("\n"));
+  assert.ok(!c.out.some((line) => line.startsWith("FAIL")), c.out.join("\n"));
+});
+
+test("budget: record on m1 exits 2 on a budget key that isn't timed in ms and leaves the file alone", (t) => {
+  const { write } = tmp(t);
+  const text = formatBaseline(
+    budgeted({ budget: { ...BUDGET, keys: ["open_warm", "fps_tiles"] } }),
+  );
+  const base = write("base.json", text);
+  const fps = { unit: "fps", samples: [60, 60, 60].map((value) => ({ fps: value })) };
+  const cur = write("cur.json", current({ open_warm: ms([156, 156, 156]), fps_tiles: fps }));
+  const c = capture();
+  assert.equal(run(["record", "--current", cur, "--runner", "m1", "--baseline", base], c.io), 2);
+  assert.equal(fs.readFileSync(base, "utf8"), text);
+});
+
+test("budget: exactly the budget passes (the test is strict), and under it the verdict is unchanged", () => {
+  for (const top of [200, 170]) {
+    const measured = current({ open_warm: ms([156, 156, 156, 156, top]) });
+    const out = compare(budgeted(), measured, { runner: "m1" });
+    assert.equal(out.exitCode, 0, `p95 ${top}`);
+    assert.deepEqual(out, compare(budgeted({ budget: undefined }), measured, { runner: "m1" }));
+  }
+});
+
+test("budget: a budget key outside compare.keys and outside the set is still checked", () => {
+  const file = budgeted({ budget: { ...BUDGET, keys: ["open_warm", "open_new"] } });
+  const out = compare(
+    file,
+    current({ open_warm: ms([156, 156, 156]), open_new: ms([150, 160, 250]) }),
+    { runner: "m1" },
+  );
+  assert.equal(out.exitCode, 1);
+  assert.equal(out.rows.length, 1);
+  assert.ok(out.lines.includes("FAIL open_new p95 250ms > budget 200"), out.lines.join("\n"));
+});
+
+test("budget: a relative regression and a budget failure both reach the verdict", () => {
+  const out = compare(budgeted(), current({ open_warm: ms([230, 230, 230, 230, 230]) }), {
+    runner: "m1",
+  });
+  assert.equal(out.exitCode, 1);
+  assert.equal(out.rows.length, 1);
+  assert.equal(
+    out.verdict,
+    "perf compare m1: FAIL 1/1: open_warm +47%; over budget: open_warm p95 230ms",
+  );
+  assert.deepEqual(out.lines.slice(1), ["FAIL open_warm p95 230ms > budget 200", out.verdict]);
+});
+
+test("budget: upsertSet keeps the block", () => {
+  const after = upsertSet(budgeted(), current({ open_warm: ms([150, 156, 160]) }), "m1");
+  assert.deepEqual(after.budget, BUDGET);
+  assert.deepEqual(Object.keys(after), Object.keys(budgeted()));
 });

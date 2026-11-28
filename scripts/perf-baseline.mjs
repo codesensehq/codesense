@@ -9,25 +9,31 @@
  *
  * The measured file is what `tests/e2e-mock/perf-baseline.spec.ts` writes (`PERF_BASELINE_OUT`):
  * `{engine, runs, commit, date, throttle, keys: {<key>: {unit, samples: [{ms|fps, endState}]}}}`.
- * The baseline (default `tests/fixtures/perf-baseline.json`) holds one set per runner and a
- * `compare` block: `{compare: {keys, tolerancePercent, floor: {ms, fps}}, sets: [{runner, engine,
- * runs, commit, date, throttle, keys: {<key>: {unit, p50, p95|p5, samples, endState}}}]}`.
+ * The baseline (default `tests/fixtures/perf-baseline.json`) holds one set per runner, a `compare`
+ * block and an optional open-time `budget`: `{compare: {keys, tolerancePercent, floor: {ms, fps}},
+ * budget: {runner, p95Ms, keys}, sets: [{runner, engine, runs, commit, date, throttle, keys: {<key>:
+ * {unit, p50, p95|p5, samples, endState}}}]}`.
  *
  * compare: for each `compare.keys` key, the current median against the runner set's p50. A time key
  * regresses when median > p50 × (1 + tol) and median − p50 > floor.ms; an fps key when median < p50
  * × (1 − tol) and p50 − median > floor.fps. Tolerance and floor come only from the file. Prints one
  * `PASS|FAIL` line per key, with `<set's end state> -> <current>` when the two differ, and a
- * verdict; with `$GITHUB_STEP_SUMMARY` set it appends the verdict and a table there. Exit 0 when
- * every key passes or the runner has no set, 1 on any regression, 2 on an input error (a bad file
- * or shape, a missing key, fewer than 3 samples, an engine mismatch, a bad argument) or any
- * unexpected error.
+ * verdict; with `$GITHUB_STEP_SUMMARY` set it appends the verdict and a table there. For
+ * `budget.runner` alone it then checks each `budget.keys` key's current p95 against `p95Ms`, from
+ * the current samples only (the key needs no set entry and no `compare.keys` entry): a p95 over it
+ * prints `FAIL <key> p95 <n>ms > budget <p95Ms>` and the verdict names the key. Exit 0 when every
+ * key passes or the runner has no set, 1 on any regression or a key over budget, 2 on an input
+ * error (a bad file or shape, a malformed budget block, a missing key, a budget key not in ms,
+ * fewer than 3 samples, an engine mismatch, a bad argument) or any unexpected error.
  *
  * record: replaces (or adds) only that runner's set; every other set keeps its bytes. A runner
  * other than m1 never records the `M1_ONLY_KEYS` (`team_switch`): they are dropped. A key of the
  * previous set that this run didn't measure is kept; outside m1 (whose hand-measured keys are
  * meant to stay) record names each one, since the set now carries the new commit. Prints each
  * key's spread over its samples: a key can join `compare.keys` when the spread is ≤ 10% of the
- * median or the range is within floor.ms. `compare.keys` itself is edited by hand.
+ * median or the range is within floor.ms. `compare.keys` itself is edited by hand. On
+ * `budget.runner` it also prints each budget key's FAIL line, or `budget <key>: not measured` for a
+ * key the run left out, and still exits 0; the `budget` block is kept as it is.
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -109,6 +115,19 @@ function checkBaseline(file) {
   if (file.sets.some((set) => !set || typeof set !== "object" || typeof set.runner !== "string")) {
     throw new InputError("every baseline set needs a runner");
   }
+  if (file.budget !== undefined) {
+    const { runner, p95Ms, keys } = file.budget ?? {};
+    if (
+      typeof runner !== "string" ||
+      !Number.isFinite(p95Ms) ||
+      p95Ms <= 0 ||
+      !Array.isArray(keys) ||
+      !keys.length ||
+      keys.some((key) => typeof key !== "string")
+    ) {
+      throw new InputError("the baseline's budget needs {runner, p95Ms above 0, keys: [name, …]}");
+    }
+  }
 }
 
 /** Whether `runner`'s set may hold `key`: every key for m1, all but the M1-only keys elsewhere. */
@@ -157,6 +176,33 @@ export function upsertSet(baseline, measured, runner) {
   return { ...baseline, sets };
 }
 
+/** A budget key's current p95 when it is over the budget, else null. */
+function overBudget(budget, measured, key) {
+  const { unit, values } = measuredKey(measured, key);
+  if (unit !== "ms") throw new InputError(`budget ${key}: unit ${unit}, the budget is in ms`);
+  const p95 = percentile(values, 0.95);
+  return p95 > budget.p95Ms ? { key, p95 } : null;
+}
+
+/**
+ * The budget keys whose current p95 is over `budget.p95Ms`: none with no budget block or for a
+ * runner other than `budget.runner`. Reads the current samples only, so a key needs no set entry.
+ * With `partial`, a key the measured file leaves out comes back as `{key, missing: true}`.
+ */
+export function budgetFailures(baseline, measured, runner, { partial = false } = {}) {
+  const { budget } = baseline;
+  if (!budget || budget.runner !== runner) return [];
+  return budget.keys
+    .map((key) =>
+      partial && !measured.keys[key] ? { key, missing: true } : overBudget(budget, measured, key),
+    )
+    .filter(Boolean);
+}
+
+const p95Text = ({ key, p95 }) => `${key} p95 ${round1(p95)}ms`;
+
+const budgetLine = (over, budget) => `FAIL ${p95Text(over)} > budget ${budget.p95Ms}`;
+
 const signed = (ratio) => `${ratio >= 0 ? "+" : ""}${Math.round(ratio * 100)}%`;
 
 /**
@@ -203,12 +249,25 @@ export function compare(baseline, measured, { runner }) {
         row.p50,
       )}, limit ${round1(row.limit)}, ${signed(row.change)}, ${row.endState})`,
   );
-  const verdict = failed.length
+  const over = budgetFailures(baseline, measured, runner);
+  const overText = over.map(p95Text).join(", ");
+  let verdict = failed.length
     ? `perf compare ${runner}: FAIL ${failed.length}/${rows.length}: ${failed
         .map((row) => `${row.key} ${signed(row.change)}`)
         .join(", ")}`
     : `perf compare ${runner}: PASS ${rows.length}/${rows.length} (tol ${baseline.compare.tolerancePercent}%, ${measured.runs} runs)`;
-  return { exitCode: failed.length ? 1 : 0, lines: [...lines, verdict], verdict, rows };
+  if (over.length) {
+    verdict = failed.length
+      ? `${verdict}; over budget: ${overText}`
+      : `perf compare ${runner}: FAIL budget: ${overText}`;
+  }
+  const budgetLines = over.map((each) => budgetLine(each, baseline.budget));
+  return {
+    exitCode: failed.length || over.length ? 1 : 0,
+    lines: [...lines, ...budgetLines, verdict],
+    verdict,
+    rows,
+  };
 }
 
 function summaryTable(result) {
@@ -279,6 +338,11 @@ export function run(argv, io = { log: console.log, error: console.error, env: pr
       return result.exitCode;
     }
     const next = upsertSet(baseline, measured, opts.runner);
+    // record prints the budget but never gates on it; a partial run may leave a budget key out.
+    const budgetLines = budgetFailures(baseline, measured, opts.runner, { partial: true }).map(
+      (each) =>
+        each.missing ? `budget ${each.key}: not measured` : budgetLine(each, baseline.budget),
+    );
     fs.writeFileSync(opts.baseline, formatBaseline(next));
     const floorMs = baseline.compare.floor.ms;
     const { previous, kept, dropped, carried } = recordedKeys(baseline, measured, opts.runner);
@@ -300,6 +364,7 @@ export function run(argv, io = { log: console.log, error: console.error, env: pr
         `spread ${key} ${Math.round(ratio * 100)}% (${round1(range)} ${unit}): ${ok ? "can be compared" : "too noisy to compare"}`,
       );
     }
+    for (const line of budgetLines) io.log(line);
     return 0;
   } catch (err) {
     // Anything unexpected is an input or setup problem too, never a regression (exit 1).

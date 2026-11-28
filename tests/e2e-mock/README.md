@@ -166,6 +166,11 @@ prints `perf lane skipped: no <runner> rows`), 1 on a regression, 2 on bad input
 (a bad file, a missing key, fewer than 3 samples, an engine mismatch, a bad
 argument) or any unexpected error.
 
+The open-time budget, opening another team's agent within a p95 of the click,
+is the `budget` block of `tests/fixtures/perf-baseline.json` (its `p95Ms`): on its
+runner (`m1`), `compare` fails a budget key whose current p95 is over it with
+exit 1, and `record` prints the same `FAIL` lines without failing.
+
 `record` replaces only that runner's set. Keys listed in `M1_ONLY_KEYS`
 (`scripts/perf-baseline.mjs`) belong to the `m1` set alone: CI never writes
 them, and `record` drops them for any other runner.
