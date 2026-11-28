@@ -559,3 +559,98 @@ fn a_foreman_page_launches_only_the_foreman_and_its_guide() {
         assert_eq!(open(&record, args), denied);
     }
 }
+
+/// The `group` and `groups` topics are the host's: `subscribe`, `page`, `unsubscribe` and
+/// `setUiState` on them need a capability no grant can hold, so a frame is denied whatever it
+/// holds, while every other topic keeps its result.
+#[test]
+fn a_frame_never_reaches_a_host_only_topic_and_other_topics_keep_their_result() {
+    const VERBS: [&str; 4] = ["subscribe", "page", "unsubscribe", "setUiState"];
+    let store = FrameStore::default();
+    let mut frame = store.mint(
+        9321,
+        FrameGrant {
+            frame_id: String::new(),
+            principal: "human".into(),
+            dashboard: "board".into(),
+            slot: "right-pane".into(),
+            team: None,
+            scope: "private".into(),
+        },
+        "/ctx".into(),
+        "/ctx/board.html".into(),
+        "/ctx".into(),
+        FramePolicy::default(),
+        None,
+    );
+    // The four verbs' own grant, and every grantable capability on top.
+    for grant in [vec!["sessions:read".to_owned()], capabilities::full()] {
+        frame.effective_grant = grant;
+        for topic in crate::live_hub::projection::HOST_ONLY_TOPICS {
+            for verb in VERBS {
+                let args = json!({"topic": topic});
+                assert_eq!(
+                    check_frame_capability(&frame, verb, &args),
+                    Err("denied: grant"),
+                    "{verb} on {topic}"
+                );
+                assert!(matches!(
+                    Dispatcher::default().dispatch_frame(&frame, verb, args, &Policy::default(), 0),
+                    Decision::Deny { .. }
+                ));
+            }
+        }
+    }
+    // What each other topic needed before: the topic verbs on `sessions` and on the topics
+    // `required_capability` special-cases (setUiState asks only for its own grant on them).
+    let special = ["files", "records", "pins", "inbox", "messageDelivery"];
+    frame.effective_grant = vec!["sessions:read".to_owned()];
+    for verb in VERBS {
+        let args = json!({"topic": "sessions"});
+        assert_eq!(
+            check_frame_capability(&frame, verb, &args),
+            Ok(()),
+            "{verb}"
+        );
+        for topic in special {
+            let args = json!({"topic": topic});
+            let expected = if verb == "setUiState" {
+                Ok(())
+            } else {
+                Err("denied: grant")
+            };
+            assert_eq!(
+                check_frame_capability(&frame, verb, &args),
+                expected,
+                "{verb} on {topic}"
+            );
+        }
+    }
+    frame.effective_grant = capabilities::full();
+    for verb in VERBS {
+        for topic in std::iter::once("sessions").chain(special) {
+            let args = json!({"topic": topic});
+            assert_eq!(
+                check_frame_capability(&frame, verb, &args),
+                Ok(()),
+                "{verb} on {topic}"
+            );
+        }
+    }
+}
+
+/// No preset, declaration or override hands out the host-only capability, so only the host,
+/// which never passes through frame admission, reads the two topics.
+#[test]
+fn the_host_only_capability_is_never_granted() {
+    assert!(!capabilities::known(registry::HOST_ONLY));
+    let declared = vec![registry::HOST_ONLY.to_owned()];
+    for preset in [Preset::Open, Preset::TeamSafe] {
+        let policy = Policy {
+            preset,
+            ..Policy::default()
+        };
+        let grant = policy.effective_grant("board", "right-pane", "private", &declared, &declared);
+        assert!(!grant.iter().any(|g| g == registry::HOST_ONLY), "{grant:?}");
+    }
+}

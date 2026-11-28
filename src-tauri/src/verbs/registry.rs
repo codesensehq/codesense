@@ -231,8 +231,23 @@ fn capability_for_verb(name: &str) -> &'static str {
     }
 }
 
+/// The capability a frame needs to reach a host-only topic. It is not in
+/// [`super::capabilities::ALL`], so no preset, declaration or per-dashboard override grants it and
+/// no frame ever holds it.
+pub const HOST_ONLY: &str = "host-only";
+
 impl VerbSpec {
     pub fn required_capability(&self, caller: &super::Caller, args: &Value) -> &str {
+        // A group's tree names every tile a person has arranged: those topics are the host's.
+        if matches!(
+            self.name.as_str(),
+            "subscribe" | "unsubscribe" | "page" | "setUiState"
+        ) && args["topic"]
+            .as_str()
+            .is_some_and(crate::live_hub::projection::host_only)
+        {
+            return HOST_ONLY;
+        }
         if matches!(self.name.as_str(), "subscribe" | "unsubscribe" | "page")
             && args["topic"] == "files"
         {

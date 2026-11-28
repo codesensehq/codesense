@@ -31,6 +31,14 @@ fn swept(topic: &str) -> bool {
         )
 }
 pub const PAGE_SIZE: usize = 200;
+/// The topics only the host may read: no frame subscribes, pages, unsubscribes or writes UI
+/// state on them, and no first paint carries them. The native gate (`required_capability`),
+/// first paint and `live_hub_subscribe` each read this list.
+pub const HOST_ONLY_TOPICS: [&str; 2] = [super::groups::GROUP, super::groups::GROUPS];
+/// Whether `topic` is in [`HOST_ONLY_TOPICS`].
+pub fn host_only(topic: &str) -> bool {
+    HOST_ONLY_TOPICS.contains(&topic)
+}
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -600,6 +608,8 @@ impl Default for TopicRegistry {
                 "pins",
                 "messageDelivery",
                 "needsYou",
+                super::groups::GROUP,
+                super::groups::GROUPS,
             ]
             .into_iter()
             .map(|t| (t.into(), CachedProjection::new(t)))

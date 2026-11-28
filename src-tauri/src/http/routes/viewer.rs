@@ -587,7 +587,13 @@ fn frame_first_paint<R: tauri::Runtime>(
     let Some(key) = crate::live_hub::view_key::resolve(&frame.grant) else {
         return String::new();
     };
-    match crate::live_hub::LiveHub::snapshot(&hub, &key, &first_paint_topic(frame, html)) {
+    // A host-only topic paints nothing, before any snapshot is taken; `first_paint_script`'s
+    // capability check is the second check.
+    let topic = first_paint_topic(frame, html);
+    if crate::live_hub::projection::host_only(&topic) {
+        return String::new();
+    }
+    match crate::live_hub::LiveHub::snapshot(&hub, &key, &topic) {
         Ok(snapshot) => first_paint_script(frame, &snapshot),
         Err(_) => String::new(),
     }
@@ -1297,6 +1303,49 @@ mod tests {
         assert!(first_paint_script(&frame, &snapshot).is_empty());
         frame.effective_grant = crate::verbs::capabilities::full();
         assert!(first_paint_script(&frame, &snapshot).contains("secret-session"));
+    }
+
+    /// A page whose first-paint meta names a host-only topic is served with no first paint, and
+    /// no snapshot of the topic is taken, whatever the frame holds; `sessions` still paints.
+    #[test]
+    fn a_host_only_first_paint_topic_paints_nothing_and_takes_no_snapshot() {
+        use tauri::Manager;
+        let app = tauri::test::mock_builder()
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .unwrap();
+        app.manage(crate::live_hub::LiveHub::default());
+        let frames = crate::dashboard_stream::frame::FrameStore::default();
+        let mut frame = frames.mint(
+            9321,
+            FrameGrant {
+                frame_id: String::new(),
+                principal: "human".into(),
+                dashboard: "board".into(),
+                slot: "right-pane".into(),
+                team: None,
+                scope: "private".into(),
+            },
+            "/ctx".into(),
+            "/ctx/board.html".into(),
+            "/ctx".into(),
+            crate::dashboard_stream::frame::FramePolicy::default(),
+            None,
+        );
+        frame.effective_grant = crate::verbs::capabilities::full();
+        let page =
+            |topic: &str| format!(r#"<meta name="codesense:first-paint" content="{topic}">"#);
+        let hub = app.state::<crate::live_hub::LiveHub>();
+        for topic in crate::live_hub::projection::HOST_ONLY_TOPICS {
+            let html = page(topic);
+            assert_eq!(first_paint_topic(&frame, html.as_bytes()), topic);
+            assert_eq!(frame_first_paint(app.handle(), &frame, html.as_bytes()), "");
+            assert!(!hub.has_view("all", topic), "{topic}: no snapshot is taken");
+        }
+        let sessions = frame_first_paint(app.handle(), &frame, page("sessions").as_bytes());
+        assert!(
+            sessions.starts_with("window.__codesenseFirstPaint="),
+            "{sessions}"
+        );
     }
 
     #[test]
