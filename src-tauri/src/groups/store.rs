@@ -261,6 +261,11 @@ impl GroupStore {
         self
     }
 
+    /// The context repo this store holds the groups of, so a view of them is keyed by it.
+    pub fn org(&self) -> &str {
+        &self.org
+    }
+
     /// Whether this store runs with tiles on.
     pub fn tiles(&self) -> bool {
         self.tiles

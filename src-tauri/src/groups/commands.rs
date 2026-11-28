@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 //! The window's two group commands: `group_read` hydrates a layout from its group file and
 //! `group_commit` sends the kit ops of a gesture, written by the store as the person at that
-//! window. Both refuse with the tiles flag off.
+//! window, which then publishes the change on the host-only `group` and `groups` topics. Both
+//! refuse with the tiles flag off.
 
 use serde::{Deserialize, Serialize};
 
@@ -133,7 +134,15 @@ pub fn group_commit(
     ops: Vec<serde_json::Value>,
 ) -> Result<CommitReply, String> {
     let store = store_for(&app, flag.is_on(), &org)?;
-    commit(&store, tauri::Window::label(&window), &file, base_rev, &ops)
+    let reply = commit(&store, tauri::Window::label(&window), &file, base_rev, &ops)?;
+    if let CommitReply::Placed { .. } = reply {
+        // The write is placed whatever the publish does; a window that misses the delta reads
+        // the head on its next conflict.
+        if let Err(e) = crate::live_hub::groups::publish_change(&app, &store, &file.id) {
+            log::warn!(target: "groups", "could not publish a group change: {e}");
+        }
+    }
+    Ok(reply)
 }
 
 #[cfg(test)]
