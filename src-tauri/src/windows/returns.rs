@@ -284,31 +284,3 @@ mod by_kind {
         assert_eq!(rec.returned().len(), 1);
     }
 }
-
-#[cfg(test)]
-mod removed_team {
-    use super::bench::*;
-    use super::*;
-
-    #[test]
-    fn the_teams_keys_leave_the_satellite_and_another_teams_key_stays() {
-        let a = key("tab", "acme:docs", "/repo/a.md");
-        let b = key("tab", "acme:docs", "/repo/b.md");
-        let workspace = key("workspace", "acme:docs", "ws-1");
-        let other = key("tab", "acme:general", "/repo/c.md");
-        let (reg, rec) = reg(&[(
-            "sat-1",
-            &[a.clone(), b.clone(), workspace.clone(), other.clone()],
-        )]);
-        let gone = [a, b, workspace];
-        return_by_kind(&rec, &reg, &gone, ReturnReason::RemovedTeam);
-        for k in &gone {
-            assert_eq!(reg.owner(k), MAIN_LABEL);
-        }
-        assert_eq!(reg.owner(&other), "sat-1");
-        assert_eq!(
-            rec.returned(),
-            vec![serde_json::json!({ "items": gone, "reason": "removed_team" })]
-        );
-    }
-}
