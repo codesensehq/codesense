@@ -114,5 +114,6 @@ src/shared/lib/terminal-ai-status.ts 2
 src/shared/lib/terminal-dot-words.ts 1
 src/shared/stores/agent-state-store.ts 2
 src/shared/stores/viewer-store.ts 2
+src/shared/windows/boot-inventory.ts 1
 src/tauri/commands.ts 7
 src/themes/kit.ts 1
