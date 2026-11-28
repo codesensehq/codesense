@@ -129,6 +129,8 @@ vi.mock("@/tauri/commands", () => ({
     owners: {},
   }),
   windowReady: vi.fn(() => Promise.resolve()),
+  // A move hands main's tab off and main acks it.
+  windowHandOffAck: vi.fn().mockResolvedValue("ignored"),
   // Each team draws its agents with its own faces.
   avatarPacksListForTeam: vi.fn().mockResolvedValue({ packs: [], warnings: [] }),
   // Custom right panes: the app-wide pane registration lists them.
