@@ -6,10 +6,11 @@
 //!   `crates/*/src/` fails, unless [`ALLOWED`] names it with its reason. The frontend under
 //!   `../src` defines no function or binding in either spelling (`routePathEvent`, ...), past
 //!   [`TS_ALLOWED`].
-//! - **One sender.** No code outside `src/windows/router.rs` calls `emit`, `emit_to` or
-//!   `emit_filter` (method or path call) with the literal `"context-file-change"`: it sends
-//!   through `windows::router::emit_path_event`, which picks the windows. The call is parsed
-//!   with `syn`, so spacing and line breaks do not hide it.
+//! - **One sender.** No code outside `src/windows/router.rs` calls an `Emitter` send
+//!   ([`EMITS`], method or path call) with the literal `"context-file-change"` or the router's
+//!   `CONTEXT_FILE_CHANGE_EVENT`: it sends through `windows::router::emit_path_event`, which
+//!   picks the windows. The call is parsed with `syn`, so spacing and line breaks do not hide
+//!   it.
 //! - **Skipped:** test files (`*tests.rs`, anything under a `tests/` directory, and frontend
 //!   `*.test.*` / `*.spec.*` files and `src/test/`), and items under `#[test]` or `#[cfg(test)]`.
 //!
@@ -37,8 +38,18 @@ const ROUTER: &str = "src/windows/router.rs";
 
 const EVENT: &str = "context-file-change";
 
+/// The router's constant for [`EVENT`].
+const EVENT_CONST: &str = "CONTEXT_FILE_CHANGE_EVENT";
+
 /// The `Emitter` calls that send an event.
-const EMITS: [&str; 3] = ["emit", "emit_to", "emit_filter"];
+const EMITS: [&str; 6] = [
+    "emit",
+    "emit_to",
+    "emit_filter",
+    "emit_str",
+    "emit_str_to",
+    "emit_str_filter",
+];
 
 /// Same-named Rust functions that pick no window: `(file, name, why)`.
 const ALLOWED: [(&str, &str, &str); 2] = [
@@ -113,15 +124,21 @@ fn item_attrs(item: &syn::Item) -> &[syn::Attribute] {
     }
 }
 
-/// Whether `expr`, under references and parentheses, is the event's literal.
-fn is_event_literal(expr: &syn::Expr) -> bool {
+/// Whether `expr`, under references and parentheses, is the event's literal or a path to its
+/// constant.
+fn is_event(expr: &syn::Expr) -> bool {
     match expr {
-        syn::Expr::Paren(e) => is_event_literal(&e.expr),
-        syn::Expr::Reference(e) => is_event_literal(&e.expr),
+        syn::Expr::Paren(e) => is_event(&e.expr),
+        syn::Expr::Reference(e) => is_event(&e.expr),
         syn::Expr::Lit(syn::ExprLit {
             lit: syn::Lit::Str(s),
             ..
         }) => s.value() == EVENT,
+        syn::Expr::Path(p) => p
+            .path
+            .segments
+            .last()
+            .is_some_and(|segment| segment.ident == EVENT_CONST),
         _ => false,
     }
 }
@@ -149,7 +166,7 @@ impl RustScan {
         mut args: impl Iterator<Item = &'a syn::Expr>,
         line: usize,
     ) {
-        if EMITS.contains(&name.to_string().as_str()) && args.any(is_event_literal) {
+        if EMITS.contains(&name.to_string().as_str()) && args.any(is_event) {
             self.emits.push(line);
         }
     }
@@ -444,6 +461,27 @@ fn a_multi_line_emit_of_the_event_fails_outside_the_router() {
     assert!(found
         .iter()
         .all(|v| v.starts_with("src/commands/sender.rs:")));
+}
+
+#[test]
+fn an_emit_of_the_constant_or_a_str_emit_fails_outside_the_router() {
+    let found = seeded(&[("src/commands/sender.rs", "emit_const_and_str.rs")]);
+    let lines: Vec<&str> = found
+        .iter()
+        .map(|v| v.split(": ").next().unwrap())
+        .collect();
+    assert_eq!(
+        lines,
+        [
+            "src/commands/sender.rs:5",
+            "src/commands/sender.rs:6",
+            "src/commands/sender.rs:7",
+            "src/commands/sender.rs:8",
+            "src/commands/sender.rs:9",
+            "src/commands/sender.rs:10",
+        ],
+        "{found:?}"
+    );
 }
 
 #[test]
