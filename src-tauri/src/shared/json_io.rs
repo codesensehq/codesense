@@ -258,7 +258,7 @@ fn write_atomic_inner(path: &Path, json: &str, private: bool) -> Result<(), Json
 fn sync_parent(path: &Path) {
     #[cfg(unix)]
     {
-        let parent = path.parent().filter(|p| !p.as_os_str().is_empty());
+        let parent = path.parent().filter(|p| !std::ffi::OsStr::is_empty(p.as_os_str()));
         if let Some(parent) = parent {
             let _ = std::fs::File::open(parent).and_then(|dir| dir.sync_all());
             record("sync-dir");
