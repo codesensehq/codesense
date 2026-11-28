@@ -6,7 +6,8 @@
  * no splash, no boot-gate watchdog, and no `show()` (Rust shows the window once it
  * is placed).
  *
- * Its content comes only from its registry slice, never from the app state. It
+ * Its content comes only from its registry slice, never from the app state, and it
+ * refreshes its item when Rust routes it a change to that item's file. It
  * takes its dependencies as props: the slice source, the content renderer and the
  * items it has let go of in a move. The renderer gets the slice's item when
  * `layoutRef` is null, the `layoutRef` otherwise, and a move state while a move to or
@@ -27,6 +28,7 @@ import { renderViewer } from "@/shared/lib/render-viewer";
 import { BOOT_EXPORTS, BootRows, SATELLITE_ROWS } from "./boot-inventory";
 import type { ReleasedItems } from "./hand-off";
 import { canonicalItemKey, itemName, TAB_ITEM_KIND, type ItemKey } from "./item-key";
+import { useSatellitePathRefresh } from "./path-listeners";
 import { EMPTY_SLICE_SOURCE, installSliceSource, type SliceSource, type SliceView } from "./slice";
 
 // The module rows (the virtual-tab registrations) run before the first render, so a
@@ -161,6 +163,7 @@ export function SatelliteRoot({
   // Installed before the rows first render, so they read this window's slice.
   useState(() => installSliceSource(source));
   useEffect(() => installSliceSource(source), [source]);
+  useSatellitePathRefresh();
   const slice = useSyncExternalStore(source.subscribe, source.current);
   const releases = released ?? NOTHING_RELEASED;
   useSyncExternalStore(releases.subscribe, releases.snapshot);

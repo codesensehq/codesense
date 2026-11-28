@@ -11,10 +11,13 @@
  *   window: persistence, MCP actions, pane-open, render replies, prompts and
  *   one-off toasts, app lifecycle, and path events (Rust broadcasts them;
  *   they become `owning-window` once they are routed to one window).
+ *   `main`'s `context-file-change` rows stay here: Rust sends every change
+ *   to `main`, and those handlers bump refresh keys for the whole app.
  * - `every-window`: the handler re-reads or caches something its own window
  *   shows; doing it in each window is correct and idempotent.
  * - `owning-window`: the event is about one terminal session or stream, which a
- *   satellite shows only once a later story gives it workspaces and an `owns`.
+ *   satellite shows only once a later story gives it workspaces and an `owns`,
+ *   or about a file a satellite holds (`shared/windows/path-listeners.ts`).
  * - `this-window`: as `owning-window`, for an event Rust emits to one window's
  *   label (a terminal stream's output), so no other window hears it.
  *
@@ -151,4 +154,5 @@ export const LISTENER_INVENTORY: readonly ListenerRow[] = [
   { file: "shared/terminal/terminal-manager.ts", event: "pty-exit", scope: "owning-window", why: "a terminal session exited" },
   { file: "shared/terminal/terminal-manager.ts", event: "TERMINAL_STREAMS_LOST_EVENT", scope: "every-window", why: "session-server reconnect: each window reconnects its own streams" },
   { file: "shared/terminal/terminal-manager.ts", event: "{channel}", scope: "this-window", why: "pty-output-stream: one terminal stream's output, emitted to the window that subscribed it" },
+  { file: "shared/windows/path-listeners.ts", event: "CONTEXT_FILE_CHANGE_EVENT", scope: "owning-window", why: "Rust routes it here; refreshes this satellite's held tab" },
 ];
