@@ -13,7 +13,10 @@
 //! | `ForItem(key)` | the owner of `key`, else `main`, whatever its kind |
 //! | `PaneOpen { workspace }` | the owner of `workspace`, else `main`; `main` too when that owner holds no Layout (it has no room for a panel) |
 //! | `ShowLayout { layout, caller }` | the window holding `layout`, else `caller` |
-//! | `Focused` | the focused window, then the last-focused one, then `main`; a pending window is skipped |
+//! | `Focused` | the focused window, then the last-focused one, then `main` |
+//!
+//! A default never lands in a pending window: one that is the answer falls through to the
+//! next choice in its row.
 // The viewer, pane-open, layout and focus commands call this; until they move onto it only the
 // tests do.
 #![cfg_attr(not(test), allow(dead_code))]
@@ -78,28 +81,30 @@ pub fn resolve_target(
         }
         return Ok(label.to_owned());
     }
+    let ready =
+        |label: &String| Locked::has_window(&locked, label) && !Locked::is_pending(&locked, label);
+    let main = || MAIN_LABEL.to_owned();
     Ok(match action {
-        TargetAction::Viewer => MAIN_LABEL.to_owned(),
-        TargetAction::ForItem(key) => Locked::item_owner(&locked, &key),
+        TargetAction::Viewer => main(),
+        TargetAction::ForItem(key) => {
+            Option::filter(Some(Locked::item_owner(&locked, &key)), ready).unwrap_or_else(main)
+        }
         TargetAction::PaneOpen { workspace } => {
             let owner = Locked::item_owner(&locked, &workspace);
-            if owner != MAIN_LABEL && Option::is_none(&Locked::layout_ref_of(&locked, &owner)) {
-                MAIN_LABEL.to_owned()
-            } else {
+            let room = owner == MAIN_LABEL
+                || (ready(&owner) && Option::is_some(&Locked::layout_ref_of(&locked, &owner)));
+            if room {
                 owner
+            } else {
+                main()
             }
         }
         TargetAction::ShowLayout { layout, caller } => {
-            Locked::layout_holder(&locked, &layout).unwrap_or(caller)
+            Option::filter(Locked::layout_holder(&locked, &layout), ready).unwrap_or(caller)
         }
-        TargetAction::Focused => {
-            let ready = |label: &String| {
-                Locked::has_window(&locked, label) && !Locked::is_pending(&locked, label)
-            };
-            Option::filter(FocusSource::focused_window(focus), ready)
-                .or_else(|| Option::filter(FocusSource::last_focused_window(focus), ready))
-                .unwrap_or_else(|| MAIN_LABEL.to_owned())
-        }
+        TargetAction::Focused => Option::filter(FocusSource::focused_window(focus), ready)
+            .or_else(|| Option::filter(FocusSource::last_focused_window(focus), ready))
+            .unwrap_or_else(main),
     })
 }
 
@@ -194,6 +199,41 @@ mod defaults {
         assert_eq!(resolve(&reg, show("grp_a")), "sat-1");
         assert_eq!(resolve(&reg, show("grp_b")), "main");
         assert!(host.focused().is_empty());
+    }
+
+    #[test]
+    fn an_item_held_by_a_pending_window_goes_to_main() {
+        let host = Recorder::default();
+        let reg = reg(&host);
+        reg.set_pending(&host, "sat-1", true).unwrap();
+        assert_eq!(resolve(&reg, TargetAction::ForItem(workspace())), "main");
+    }
+
+    #[test]
+    fn a_pane_whose_workspace_owner_is_pending_goes_to_main() {
+        let host = Recorder::default();
+        let reg = reg(&host);
+        reg.set_layout(&host, "sat-1", "sat-1", Some("grp_a".into()))
+            .unwrap();
+        reg.set_pending(&host, "sat-1", true).unwrap();
+        let pane = TargetAction::PaneOpen {
+            workspace: workspace(),
+        };
+        assert_eq!(resolve(&reg, pane), "main");
+    }
+
+    #[test]
+    fn a_layout_held_by_a_pending_window_shows_in_the_caller() {
+        let host = Recorder::default();
+        let reg = reg(&host);
+        reg.set_layout(&host, "sat-1", "sat-1", Some("grp_a".into()))
+            .unwrap();
+        reg.set_pending(&host, "sat-1", true).unwrap();
+        let show = TargetAction::ShowLayout {
+            layout: "grp_a".into(),
+            caller: "main".into(),
+        };
+        assert_eq!(resolve(&reg, show), "main");
     }
 
     #[test]
