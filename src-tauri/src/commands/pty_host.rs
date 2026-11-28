@@ -1222,8 +1222,10 @@ impl StreamTable {
 /// A stream a window subscribed has that window's label as its target, and its
 /// output is emitted to that window alone. A stream with no target (one the
 /// app itself watches) is emitted to every listener. The target belongs to the frontend
-/// stream id, so a re-point to a new host stream keeps it and a detach forgets
-/// it. Lock order: the table, then the targets.
+/// stream id, so a re-point to a new host stream keeps it, and it is forgotten
+/// with the stream (a detach, a re-point left behind, or its host's end). The
+/// frontend listens on its own window's webview (`listenScoped`'s `this-window`),
+/// so no other window hears the stream. Lock order: the table, then the targets.
 #[derive(Default)]
 pub struct StreamIds(Mutex<StreamTable>, Mutex<HashMap<u64, String>>);
 
@@ -1517,6 +1519,7 @@ impl StreamIds {
         if attached.snapshot.seq > entry.seq || attached.snapshot.resize_gen > entry.resize_gen {
             table.attached.remove(&local);
             table.retire(old);
+            Self::forget_stream_target(self, local);
             return Repoint::Behind;
         }
         let (seq, resize_gen) = (entry.seq, entry.resize_gen);
@@ -1527,6 +1530,7 @@ impl StreamIds {
         if StreamTable::gap_past(early.dropped, seq, resize_gen) {
             table.attached.remove(&local);
             table.retire((replacement, attached.stream_id));
+            Self::forget_stream_target(self, local);
             return Repoint::Behind;
         }
         let _ = table.send_all(local, &early.items, emit);
@@ -1541,7 +1545,14 @@ impl StreamIds {
         table.early.retain(|e| e.host != host);
         table.early_bytes = table.early.iter().map(|e| e.item.bytes()).sum();
         table.overflowed.retain(|(on, _), _| *on != host);
-        table.attached.retain(|_, a| a.host != host);
+        let mut targets = self.1.lock().unwrap_or_else(|e| e.into_inner());
+        table.attached.retain(|local, a| {
+            let kept = a.host != host;
+            if !kept {
+                targets.remove(local);
+            }
+            kept
+        });
     }
 
     /// Atomically retire one verified host lifetime. Active stream keys become
@@ -1566,6 +1577,7 @@ impl StreamIds {
         for (local, session, remote) in retired {
             table.attached.remove(&local);
             table.retire((host.clone(), remote));
+            Self::forget_stream_target(self, local);
             sessions.insert(session);
         }
         table.early.retain(|early| early.host != host);
@@ -7628,6 +7640,64 @@ mod tests {
             assert!(StreamIds::detach(&streams, local).is_some());
 
             assert_eq!(StreamIds::stream_target(&streams, reserved), None);
+            assert_eq!(StreamIds::stream_target(&streams, local), None);
+        }
+
+        fn targeted(streams: &StreamIds, host: &StreamHost) -> u64 {
+            let local = StreamIds::attach(
+                streams,
+                host.clone(),
+                &PtySessionId::new("s"),
+                &ViewportId::new("webview"),
+                &subscribed(1, "ab", 2),
+            );
+            StreamIds::set_stream_target(streams, local, PANE);
+            local
+        }
+
+        #[test]
+        fn a_forgotten_host_forgets_its_streams_windows() {
+            let streams = <StreamIds as Default>::default();
+            let local = targeted(&streams, &StreamHost::Sidecar);
+            let other = targeted(&streams, &StreamHost::InProcess);
+
+            StreamIds::forget_host(&streams, StreamHost::Sidecar);
+
+            assert_eq!(StreamIds::stream_target(&streams, local), None);
+            assert_eq!(
+                StreamIds::stream_target(&streams, other).as_deref(),
+                Some(PANE)
+            );
+        }
+
+        #[test]
+        fn a_retired_lifetime_forgets_its_streams_windows() {
+            let streams = <StreamIds as Default>::default();
+            let host = StreamHost::remote("verified", "epoch");
+            let local = targeted(&streams, &host);
+
+            assert!(StreamIds::retire_lifetime(&streams, host).is_some());
+
+            assert_eq!(StreamIds::stream_target(&streams, local), None);
+        }
+
+        #[test]
+        fn a_stream_left_behind_forgets_its_window() {
+            let streams = <StreamIds as Default>::default();
+            let host = StreamHost::remote("verified", "epoch");
+            let local = targeted(&streams, &host);
+            let mut emit = |_: u64, _: StreamItem<'_>| true;
+
+            let lost = StreamIds::resume_on(
+                &streams,
+                host,
+                || true,
+                |_, _| Ok::<_, ()>(subscribed(9, "abcd", 4)),
+                |_| {},
+                &mut emit,
+            );
+
+            assert_eq!(lost, [local]);
             assert_eq!(StreamIds::stream_target(&streams, local), None);
         }
     }

@@ -262,7 +262,24 @@ describe("every global listener registers through listenScoped with an inventory
     expect(
       scopeOf("features/org/hooks/use-org-registry-sync.ts", "ORG_REGISTRY_CHANGED_EVENT"),
     ).toBe("every-window");
-    expect(scopeOf("shared/terminal/terminal-manager.ts", "{channel}")).toBe("owning-window");
+    expect(scopeOf("shared/terminal/terminal-manager.ts", "{channel}")).toBe("this-window");
+  });
+
+  it("opens a terminal stream's channel only in terminal-manager, on this window's webview", () => {
+    const opens = sourceFiles(SRC, [])
+      .map((path) => relative(SRC, path).split(sep).join("/"))
+      .filter(
+        (file) => !file.split("/").includes("__test-utils__") && !file.startsWith("app/mock/"),
+      )
+      .filter((file) =>
+        /pty-output-stream-\$|\bliveStreamChannel\(|\bopenLiveStream\(/.test(
+          readFileSync(join(SRC, file), "utf8"),
+        ),
+      );
+    expect(opens.sort()).toEqual([
+      "shared/terminal/live-stream.ts",
+      "shared/terminal/terminal-manager.ts",
+    ]);
   });
 
   describe("seeded fixtures", () => {
