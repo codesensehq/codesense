@@ -575,6 +575,16 @@ const M1_KEYS = [
   "cold_start_mock",
 ];
 
+/** The 12-tile and 5,000-file keys, measured on both runners but required only in the m1 set. */
+const M1_NEW_KEYS = {
+  fps_12_tiles_resize: "fps",
+  fps_12_tiles_scroll: "fps",
+  rss_12_tiles_renderer: "MiB",
+  footprint_12_tiles_webcontent: "MiB",
+  nav_first_paint: "ms",
+  nav_scroll: "ms",
+};
+
 test("the committed baseline has the M1 set, the compare block and no targets", () => {
   const text = fs.readFileSync(FIXTURE, "utf8");
   assert.equal(formatBaseline(JSON.parse(text)), text, "the file is in the script's own format");
@@ -594,13 +604,20 @@ test("the committed baseline has the M1 set, the compare block and no targets", 
     assert.match(set.date, /^\d{4}-\d{2}-\d{2}$/, `${set.runner} date`);
     for (const key of file.compare.keys) assert.ok(set.keys[key], `${set.runner} has ${key}`);
     for (const [key, entry] of Object.entries(set.keys)) {
-      assert.equal(entry.unit, "ms", key);
+      assert.ok(["ms", "fps", "MiB"].includes(entry.unit), `${key} unit ${entry.unit}`);
       assert.equal(typeof entry.p50, "number", key);
-      assert.equal(typeof entry.p95, "number", key);
+      // The tail that matters: p95 for a time or a size, p5 for a frame rate.
+      const tail = entry.unit === "fps" ? "p5" : "p95";
+      assert.equal(typeof entry[tail], "number", `${key} ${tail}`);
       assert.ok(entry.samples.length >= 1, key);
     }
+    for (const key of file.compare.keys) assert.equal(set.keys[key].unit, "ms", key);
   }
   for (const key of M1_KEYS) assert.ok(m1.keys[key], `m1 has ${key}`);
+  for (const [key, unit] of Object.entries(M1_NEW_KEYS)) {
+    assert.equal(m1.keys[key]?.unit, unit, `m1 has ${key} in ${unit}`);
+    assert.ok(m1.keys[key].samples.length >= 3, `${key} samples`);
+  }
   const ci = file.sets.find((set) => set.runner === "macos-15");
   if (ci) assert.ok(!ci.keys.team_switch, "CI never records team_switch");
 });
@@ -627,11 +644,13 @@ test("case 12: the committed M1 numbers pass compare against themselves; the col
     run(["compare", "--current", cur, "--runner", "m1", "--baseline", FIXTURE], c.io),
     1,
   );
-  // Every relative row passes; only the budget fails, on the cold open alone (p95 361 > 200).
+  // Every relative row passes; only the budget fails, on the cold open alone (its p95 > 200).
+  const cold = m1.keys.open_other_team_agent_cold.p95;
+  assert.ok(m1.keys.open_other_team_agent_warm.p95 <= 200 && cold > 200);
   assert.ok(c.out.slice(0, file.compare.keys.length).every((line) => line.startsWith("PASS ")));
   assert.deepEqual(c.out.slice(file.compare.keys.length), [
-    "FAIL open_other_team_agent_cold p95 361ms > budget 200",
-    "perf compare m1: FAIL budget: open_other_team_agent_cold p95 361ms",
+    `FAIL open_other_team_agent_cold p95 ${cold}ms > budget 200`,
+    `perf compare m1: FAIL budget: open_other_team_agent_cold p95 ${cold}ms`,
   ]);
 });
 
