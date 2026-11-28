@@ -163,6 +163,11 @@ export function hasCommandModifier(e: ModifierState): boolean {
   return !!(e.metaKey || e.ctrlKey || e.altKey);
 }
 
+/** The key that closes a focused tab or item: Delete, or Backspace on macOS. */
+export function isCloseKey(e: Pick<KeyboardEvent, "key">): boolean {
+  return e.key === "Delete" || (e.key === "Backspace" && isMac());
+}
+
 /**
  * The four modifier flags out of a posted message (a frame's key data), or `null` when
  * any of them is not a boolean.
