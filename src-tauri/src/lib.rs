@@ -451,6 +451,9 @@ pub fn run() {
             let label = window.label();
             live_hub::drop_window(window.app_handle(), label);
             commands::pty_viewer::window_destroyed(window.app_handle(), label);
+            // A move whose source or target this was ends as `gone`.
+            let registry = tauri::Manager::state::<windows::registry::WindowRegistry>(window);
+            windows::moves::window_gone(tauri::Manager::app_handle(window), &registry, label);
         }
         if let tauri::WindowEvent::Focused(focused) = event {
             on_window_focus_changed(window.app_handle(), *focused);
@@ -1552,6 +1555,7 @@ pub fn run() {
             commands::git::reveal_path,
             // SW-GS-2: git-sync publish-set picker transport (F4).
             commands::git_sync::get_publish_set,
+            commands::git_sync::context_worktree::lead_diff,
             // Cheap name-only changed-path count for the closed-pane sync badge.
             commands::git_sync::changed_path_count,
             // SW-GS-6: read-only out-of-sync probe for the "N incoming" badge.
@@ -1891,6 +1895,13 @@ pub fn run() {
             windows::commands::window_ready,
             windows::commands::window_set_layout,
             windows::commands::window_focus_owner,
+            windows::moves::window_move_item,
+            windows::moves::window_hand_off_ack,
+            // The two-window e2e driver's commands, in webdriver builds only.
+            #[cfg(feature = "e2e-webdriver")]
+            windows::e2e::e2e_open_window,
+            #[cfg(feature = "e2e-webdriver")]
+            windows::e2e::e2e_seed,
         ]))
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

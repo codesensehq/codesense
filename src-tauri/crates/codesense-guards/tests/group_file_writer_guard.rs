@@ -23,9 +23,11 @@
 //! that only tests include (`*_tests.rs`, `tests.rs`, `tests/`). Point `CODESENSE_GUARD_ROOT` at
 //! another checkout's `src-tauri` to run it there; the planted self-tests show each form failing.
 
+mod common;
+
 use codesense_guards::guard_support;
+use common::{is_test_file, names_test, rust_files};
 use proc_macro2::{TokenStream, TokenTree};
-use std::path::Path;
 use syn::visit::{self, Visit};
 
 /// The store: the one file that may name a group folder.
@@ -38,43 +40,19 @@ const ALLOWED: &[(&str, &str)] = &[(
      never a group file",
 )];
 
+/// Files that hold the word `groups` as a live topic's name, not the folder's, each with its
+/// reason. The name may sit in a constant there; joining or pushing it onto a path is still
+/// caught, as is any path into the folder.
+const TOPIC_NAMES: &[(&str, &str)] = &[(
+    "live_hub/groups.rs",
+    "names the host-only `groups` topic; it reads the store and builds no path",
+)];
+
+/// What a held folder name is flagged as.
+const HELD: &str = "the folder name \"groups\" held in a value";
+
 /// The names that resolve to a group folder.
 const FOLDER_NAMES: &[&str] = &["groups_dir", "GROUPS_DIR"];
-
-fn is_test_file(label: &str) -> bool {
-    let name = label.rsplit('/').next().unwrap_or(label);
-    name.ends_with("_tests.rs")
-        || name == "tests.rs"
-        || label.contains("/tests/")
-        || label.starts_with("tests/")
-}
-
-/// Whether `meta` (a `cfg` predicate) holds only in a test build: `test`, or an `all(..)` with
-/// one. `not(test)` and `any(test, ..)` build in production, so they are scanned.
-fn test_only(meta: &syn::Meta) -> bool {
-    match meta {
-        syn::Meta::Path(path) => path.is_ident("test"),
-        syn::Meta::List(list) if list.path.is_ident("all") => list
-            .parse_args_with(
-                syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated,
-            )
-            .is_ok_and(|args| args.iter().any(test_only)),
-        _ => false,
-    }
-}
-
-fn names_test(attrs: &[syn::Attribute]) -> bool {
-    attrs.iter().any(|attr| {
-        let path = attr.path();
-        if path.is_ident("test") {
-            return true;
-        }
-        path.is_ident("cfg")
-            && attr
-                .parse_args::<syn::Meta>()
-                .is_ok_and(|meta| test_only(&meta))
-    })
-}
 
 /// The string `groups` as an expression, bare or wrapped as `String::from("groups")`,
 /// `Path::new("groups")`, `"groups".to_string()` or `&"groups"`.
@@ -90,6 +68,16 @@ fn bare_groups(expr: &syn::Expr) -> Option<&syn::LitStr> {
         syn::Expr::Paren(inner) => bare_groups(&inner.expr),
         _ => None,
     }
+}
+
+/// Whether `path` names the live hub's `groups::GROUPS` topic constant, which holds the string
+/// `groups`: `crate::live_hub::groups::GROUPS`, `super::groups::GROUPS` or `groups::GROUPS`.
+fn topic_const(path: &syn::Path) -> bool {
+    let mut last_two = path.segments.iter().rev().take(2);
+    matches!(
+        (last_two.next(), last_two.next()),
+        (Some(name), Some(module)) if name.ident == "GROUPS" && module.ident == "groups"
+    )
 }
 
 /// Whether `text` names a path into a group folder. A Rust source path such as
@@ -108,6 +96,8 @@ fn group_literal(text: &str) -> bool {
 struct Scan<'a> {
     label: &'a str,
     found: Vec<String>,
+    /// Constants, statics and locals that hold the string `groups`.
+    held: Vec<String>,
 }
 
 impl Scan<'_> {
@@ -119,10 +109,14 @@ impl Scan<'_> {
     /// `expr` is the string `groups`: the folder's name held in a constant or a list of segments.
     fn named_folder(&mut self, expr: &syn::Expr) {
         if let Some(lit) = bare_groups(expr) {
-            self.flag(
-                lit.span(),
-                "the folder name \"groups\" held in a value".into(),
-            );
+            self.flag(lit.span(), HELD.into());
+        }
+    }
+
+    /// `name` holds the string `groups` when `expr` is it.
+    fn hold(&mut self, name: &syn::Ident, expr: &syn::Expr) {
+        if bare_groups(expr).is_some() {
+            self.held.push(name.to_string());
         }
     }
 
@@ -212,17 +206,22 @@ impl<'ast> Visit<'ast> for Scan<'_> {
     }
 
     fn visit_item_const(&mut self, item: &'ast syn::ItemConst) {
+        self.hold(&item.ident, &item.expr);
         self.named_folder(&item.expr);
         visit::visit_item_const(self, item);
     }
 
     fn visit_item_static(&mut self, item: &'ast syn::ItemStatic) {
+        self.hold(&item.ident, &item.expr);
         self.named_folder(&item.expr);
         visit::visit_item_static(self, item);
     }
 
     fn visit_local(&mut self, local: &'ast syn::Local) {
         if let Some(init) = &local.init {
+            if let syn::Pat::Ident(name) = &local.pat {
+                self.hold(&name.ident, &init.expr);
+            }
             self.named_folder(&init.expr);
         }
         visit::visit_local(self, local);
@@ -241,6 +240,19 @@ impl<'ast> Visit<'ast> for Scan<'_> {
         if let (true, Some(lit)) = (joins, name) {
             let method = &call.method;
             self.flag(lit.span(), format!("`{method}(\"groups\")`"));
+        }
+        let held = call.args.first().and_then(|arg| match arg {
+            syn::Expr::Path(path) => path.path.segments.last().filter(|last| {
+                self.held.iter().any(|name| last.ident == name) || topic_const(&path.path)
+            }),
+            _ => None,
+        });
+        if let (true, Some(last)) = (joins, held) {
+            let (method, ident) = (&call.method, &last.ident);
+            self.flag(
+                ident.span(),
+                format!("`{method}({ident})`, which holds \"groups\""),
+            );
         }
         visit::visit_expr_method_call(self, call);
     }
@@ -286,8 +298,12 @@ fn violations(label: &str, src: &str) -> Vec<String> {
     let mut scan = Scan {
         label,
         found: vec![],
+        held: vec![],
     };
     scan.visit_file(&file);
+    if TOPIC_NAMES.iter().any(|(file, _)| *file == label) {
+        scan.found.retain(|f| !f.ends_with(HELD));
+    }
     if ALLOWED.iter().any(|(allowed, _)| *allowed == label) {
         // An allowed file may name the folder, never a file in it.
         scan.found.retain(|f| {
@@ -297,20 +313,6 @@ fn violations(label: &str, src: &str) -> Vec<String> {
         });
     }
     scan.found
-}
-
-fn rust_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            rust_files(&path, out);
-        } else if path.extension().is_some_and(|e| e == "rs") {
-            out.push(path);
-        }
-    }
 }
 
 #[test]
@@ -329,7 +331,7 @@ fn group_files_are_written_only_by_the_store() {
         found.extend(violations(&label, &src));
     }
     assert!(saw_store, "{STORE} is where the guard expects the store");
-    for (allowed, _) in ALLOWED {
+    for (allowed, _) in ALLOWED.iter().chain(TOPIC_NAMES) {
         assert!(
             files
                 .iter()
@@ -371,6 +373,8 @@ fn planted_writers_are_caught() {
         r#"fn f(d: &std::path::Path) { let _ = d.join(std::path::Path::new("groups")); }"#,
         r#"fn f(d: &std::path::Path) { let _ = d.join("groups".to_string()); }"#,
         r#"fn f() { let g = String::from("groups"); }"#,
+        r#"fn f(d: &std::path::Path) { let _ = d.join(crate::live_hub::groups::GROUPS); }"#,
+        r#"fn f(d: &mut std::path::PathBuf) { d.push(groups::GROUPS); }"#,
     ];
     for src in planted {
         assert!(!violations("elsewhere.rs", src).is_empty(), "missed: {src}");
@@ -409,6 +413,23 @@ fn the_store_tests_and_allowed_uses_pass() {
         assert!(
             !violations("elsewhere.rs", still).is_empty(),
             "missed: {still}"
+        );
+    }
+    let topic = r#"pub const GROUPS: &str = "groups";"#;
+    assert!(
+        violations("live_hub/groups.rs", topic).is_empty(),
+        "a topic named groups is no folder"
+    );
+    assert!(!violations("elsewhere.rs", topic).is_empty());
+    for still in [
+        r#"pub const GROUPS: &str = "groups"; fn f(d: &std::path::Path) { let _ = d.join(GROUPS); }"#,
+        r#"fn f(d: &mut std::path::PathBuf) { let g = "groups"; d.push(g); }"#,
+        r#"fn f(d: &std::path::Path) { let _ = d.join("groups"); }"#,
+        r#"const P: &str = "config/groups/x.json";"#,
+    ] {
+        assert!(
+            !violations("live_hub/groups.rs", still).is_empty(),
+            "a topic file still may not build a group path: {still}"
         );
     }
     let benign_concat = r#"fn f() -> &'static str { concat!("work", "spaces") }"#;

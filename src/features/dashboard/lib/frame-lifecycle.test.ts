@@ -5,6 +5,7 @@ import {
   registerFrame,
   flushFrame,
   flushFrameWrites,
+  flushFramesWhere,
   setFrameFrozen,
   flushAll,
   acknowledgeFlush,
@@ -295,4 +296,14 @@ it("keeps only the latest focus request, and drops it when its panel's last fram
   expect(newer.focus).toHaveBeenCalledTimes(2);
   older.off();
   newer.off();
+});
+it("flushFramesWhere flushes only the frames it selects and retires none", async () => {
+  const a = frame("a");
+  const b = frame("b");
+  const done = flushFramesWhere((f) => f.frameId === "a", 50);
+  expect(a.post.mock.calls.map(([m]) => m.type)).toEqual(["codesense:flush"]);
+  expect(b.post).not.toHaveBeenCalled();
+  acknowledgeFlush("a", a.post.mock.calls[0][0].id);
+  await done;
+  expect(a.post.mock.calls.map(([m]) => m.type)).toEqual(["codesense:flush"]);
 });

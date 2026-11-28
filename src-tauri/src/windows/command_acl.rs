@@ -191,6 +191,7 @@ mod capabilities {
             "core:window:allow-set-title",
             "core:window:allow-set-focus",
             "core:window:allow-unminimize",
+            "core:window:allow-close",
             "log:default",
             "opener:allow-open-url",
             "dialog:allow-open",

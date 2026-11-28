@@ -1218,8 +1218,16 @@ impl StreamTable {
 /// watermark, so a stream re-pointed to a new host stream after a reconnect
 /// continues without a gap or a duplicate. Emits run under the table's lock,
 /// which keeps each stream's batches in order.
+///
+/// A stream a window subscribed has that window's label as its target, and its
+/// output is emitted to that window alone. A stream with no target (one the
+/// app itself watches) is emitted to every listener. The target belongs to the frontend
+/// stream id, so a re-point to a new host stream keeps it, and it is forgotten
+/// with the stream (a detach, a re-point left behind, or its host's end). The
+/// frontend listens on its own window's webview (`listenScoped`'s `this-window`),
+/// so no other window hears the stream. Lock order: the table, then the targets.
 #[derive(Default)]
-pub struct StreamIds(Mutex<StreamTable>);
+pub struct StreamIds(Mutex<StreamTable>, Mutex<HashMap<u64, String>>);
 
 impl StreamIds {
     pub(crate) fn record_origin(
@@ -1251,6 +1259,30 @@ impl StreamIds {
     }
     fn table(&self) -> std::sync::MutexGuard<'_, StreamTable> {
         self.0.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Send stream `local`'s output to the window labelled `label` alone.
+    pub(crate) fn set_stream_target(&self, local: u64, label: &str) {
+        self.1
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(local, label.to_owned());
+    }
+
+    /// The window stream `local`'s output goes to; `None` for every listener.
+    pub(crate) fn stream_target(&self, local: u64) -> Option<String> {
+        self.1
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&local)
+            .cloned()
+    }
+
+    fn forget_stream_target(&self, local: u64) {
+        self.1
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&local);
     }
 
     /// A client-unique id for `attached`, a viewport of `session` just
@@ -1346,6 +1378,7 @@ impl StreamIds {
     /// reservation never bound is released.
     pub fn detach(&self, local: u64) -> Option<(StreamHost, StreamId)> {
         let mut table = self.table();
+        Self::forget_stream_target(self, local);
         if table.reserved.remove(&local) {
             return None;
         }
@@ -1459,6 +1492,7 @@ impl StreamIds {
         }
         let attached = table.attached.remove(&local).expect("checked above");
         table.retire((attached.host, attached.remote));
+        Self::forget_stream_target(self, local);
         true
     }
 
@@ -1485,6 +1519,7 @@ impl StreamIds {
         if attached.snapshot.seq > entry.seq || attached.snapshot.resize_gen > entry.resize_gen {
             table.attached.remove(&local);
             table.retire(old);
+            Self::forget_stream_target(self, local);
             return Repoint::Behind;
         }
         let (seq, resize_gen) = (entry.seq, entry.resize_gen);
@@ -1495,6 +1530,7 @@ impl StreamIds {
         if StreamTable::gap_past(early.dropped, seq, resize_gen) {
             table.attached.remove(&local);
             table.retire((replacement, attached.stream_id));
+            Self::forget_stream_target(self, local);
             return Repoint::Behind;
         }
         let _ = table.send_all(local, &early.items, emit);
@@ -1509,7 +1545,14 @@ impl StreamIds {
         table.early.retain(|e| e.host != host);
         table.early_bytes = table.early.iter().map(|e| e.item.bytes()).sum();
         table.overflowed.retain(|(on, _), _| *on != host);
-        table.attached.retain(|_, a| a.host != host);
+        let mut targets = self.1.lock().unwrap_or_else(|e| e.into_inner());
+        table.attached.retain(|local, a| {
+            let kept = a.host != host;
+            if !kept {
+                targets.remove(local);
+            }
+            kept
+        });
     }
 
     /// Atomically retire one verified host lifetime. Active stream keys become
@@ -1534,6 +1577,7 @@ impl StreamIds {
         for (local, session, remote) in retired {
             table.attached.remove(&local);
             table.retire((host.clone(), remote));
+            Self::forget_stream_target(self, local);
             sessions.insert(session);
         }
         table.early.retain(|early| early.host != host);
@@ -1912,7 +1956,14 @@ fn emit_stream_with_epoch<R: tauri::Runtime>(
     if let Some(epoch) = private_epoch {
         payload["privateAuthorityEpoch"] = epoch.into();
     }
-    match app.emit(&event_name, payload) {
+    let target = app
+        .try_state::<StreamIds>()
+        .and_then(|streams| StreamIds::stream_target(&streams, local));
+    let sent = match target {
+        Some(label) => app.emit_to(tauri::EventTarget::labeled(label), &event_name, payload),
+        None => app.emit(&event_name, payload),
+    };
+    match sent {
         Ok(()) => true,
         Err(e) => {
             trace!(target: "pty", "fan-out emit failed for {}: {}", event_name, e);
@@ -3282,6 +3333,24 @@ mod tests {
         }
 
         fn reserve_pool(&self, sidecar: bool, pool: bool) -> LocalEffectClaim {
+            self.admission
+                .effects
+                .reserve_spawn(self.live_target(sidecar), &self.session, pool)
+                .unwrap_or_else(|e| panic!("reserve sidecar={sidecar}: {e}"))
+        }
+
+        /// Reserves as the product spawn does: waits up to `WAIT` for the
+        /// previous lifetime's exit, removal and settlements.
+        fn reserve_until(&self, sidecar: bool) -> Result<LocalEffectClaim, String> {
+            self.admission.effects.reserve_spawn_until(
+                self.live_target(sidecar),
+                &self.session,
+                false,
+                std::time::Instant::now() + codesense_session_server::testing::WAIT,
+            )
+        }
+
+        fn live_target(&self, sidecar: bool) -> super::super::machines::RuntimeMemberTarget {
             use super::super::machines::{
                 RuntimeAdmissionState, RuntimeMemberSlot, RuntimeMemberTarget,
             };
@@ -3296,22 +3365,15 @@ mod tests {
                 .rows
                 .into_iter()
                 .find(|row| row.member.slot == slot)
-                .unwrap();
+                .unwrap_or_else(|| panic!("no admission row for {slot:?}"));
             let RuntimeAdmissionState::Live { namespace } = row.state else {
-                panic!("live")
+                panic!("{slot:?} is not live")
             };
-            self.admission
-                .effects
-                .reserve_spawn(
-                    RuntimeMemberTarget {
-                        member: row.member,
-                        namespace,
-                        admission_revision: row.revision,
-                    },
-                    &self.session,
-                    pool,
-                )
-                .unwrap()
+            RuntimeMemberTarget {
+                member: row.member,
+                namespace,
+                admission_revision: row.revision,
+            }
         }
 
         fn register(
@@ -5389,7 +5451,7 @@ mod tests {
                     .app
                     .state::<crate::terminal::session_server::SessionServerState>()
                     .connected()
-                    .unwrap()
+                    .unwrap_or_else(|| panic!("sidecar={sidecar}: session server connected"))
             } else {
                 fixture.local.clone()
             };
@@ -5420,23 +5482,26 @@ mod tests {
                         Ok(())
                     }),
                 )
-                .unwrap();
-            assert!(codesense_session_server::testing::wait_until(|| fixture
-                .admission
-                .effects
-                .0
-                .lock()
-                .unwrap()
-                .claims
-                .get(&(old.target.member.slot, old.session.clone()))
-                .is_some_and(|record| record.exit_complete)));
+                .unwrap_or_else(|e| panic!("sidecar={sidecar}: open tab: {e:?}"));
+            assert!(
+                codesense_session_server::testing::wait_until(|| fixture
+                    .admission
+                    .effects
+                    .0
+                    .lock()
+                    .unwrap_or_else(|e| panic!("sidecar={sidecar}: effects lock: {e:?}"))
+                    .claims
+                    .get(&(old.target.member.slot, old.session.clone()))
+                    .is_some_and(|record| record.exit_complete)),
+                "sidecar={sidecar}: old lifetime records its natural Exit"
+            );
             assert!(
                 fixture
                     .admission
                     .effects
                     .reserve_spawn(old.target.clone(), &old.session, false)
                     .is_err(),
-                "natural Exit alone does not reap the retained tab"
+                "sidecar={sidecar}: natural Exit alone does not reap the retained tab"
             );
             let backend = pty_backend::resolve_session_reference(
                 fixture.app.handle(),
@@ -5448,39 +5513,60 @@ mod tests {
                 )),
                 false,
             )
-            .unwrap();
+            .unwrap_or_else(|e| panic!("sidecar={sidecar}: resolve backend: {e:?}"));
             let path = mcp_scope::mcp_scope_session_dir(&fixture.session);
             let replacement = Mutex::new(None);
             let after =
                 pty_backend::respawn_tab_admitted(fixture.app.handle(), backend, &session, |_| {
                     assert!(
                         !path.exists(),
-                        "exact old resource is removed before new projection"
+                        "sidecar={sidecar}: exact old resource is removed before new projection"
                     );
-                    let next = fixture.reserve(sidecar);
+                    let next = fixture
+                        .reserve_until(sidecar)
+                        .unwrap_or_else(|e| panic!("sidecar={sidecar}: reserve replacement: {e}"));
                     create_owned_resources(&fixture, &next);
                     fixture.spawn(sidecar);
-                    *replacement.lock().unwrap() = Some(next);
+                    *replacement
+                        .lock()
+                        .unwrap_or_else(|e| panic!("sidecar={sidecar}: replacement lock: {e:?}")) =
+                        Some(next);
                     Ok(())
                 })
-                .unwrap();
-            assert_eq!(before.session, after.session);
-            assert_eq!(before.name, after.name);
-            let next = replacement.into_inner().unwrap().unwrap();
-            assert!(!mcp_scope::remove_owned_scope(&old));
-            assert!(path.join(".mcp.json").exists());
-            assert!(domain
-                .layout_snapshot(&viewer, &ClientBootId::new("test"))
-                .is_ok());
+                .unwrap_or_else(|e| panic!("sidecar={sidecar}: respawn: {e:?}"));
+            assert_eq!(before.session, after.session, "sidecar={sidecar}");
+            assert_eq!(before.name, after.name, "sidecar={sidecar}");
+            let next = replacement
+                .into_inner()
+                .unwrap_or_else(|e| panic!("sidecar={sidecar}: replacement lock: {e:?}"))
+                .unwrap_or_else(|| panic!("sidecar={sidecar}: respawn reserved a replacement"));
+            assert!(
+                !mcp_scope::remove_owned_scope(&old),
+                "sidecar={sidecar}: old scope was already removed"
+            );
+            assert!(
+                path.join(".mcp.json").exists(),
+                "sidecar={sidecar}: replacement scope exists"
+            );
+            assert!(
+                domain
+                    .layout_snapshot(&viewer, &ClientBootId::new("test"))
+                    .is_ok(),
+                "sidecar={sidecar}: layout snapshot"
+            );
             fixture.kill(sidecar);
-            assert!(codesense_session_server::testing::wait_until(
-                || !path.exists()
-            ));
-            assert!(fixture
-                .app
-                .state::<agent_accounts::AgentAccountRuntimeState>()
-                .owned_provenance(&next)
-                .is_none());
+            assert!(
+                codesense_session_server::testing::wait_until(|| !path.exists()),
+                "sidecar={sidecar}: replacement scope removed after kill"
+            );
+            assert!(
+                codesense_session_server::testing::wait_until(|| fixture
+                    .app
+                    .state::<agent_accounts::AgentAccountRuntimeState>()
+                    .owned_provenance(&next)
+                    .is_none()),
+                "sidecar={sidecar}: replacement provenance cleared after kill"
+            );
         }
     }
 
@@ -7432,4 +7518,222 @@ mod tests {
         }
     }
 
+    /// Render output goes to the window attached to its stream, and keeps going
+    /// there when the stream is re-pointed to a new host stream.
+    mod stream_targets {
+        use super::*;
+        use std::sync::{Arc, Mutex};
+        use tauri::Listener;
+
+        type Heard = Arc<Mutex<Vec<String>>>;
+
+        const PANE: &str = "pane-2";
+
+        fn app() -> tauri::App<tauri::test::MockRuntime> {
+            let app = tauri::test::mock_builder()
+                .build(tauri::test::mock_context(tauri::test::noop_assets()))
+                .unwrap();
+            app.manage(<StreamIds as Default>::default());
+            app
+        }
+
+        fn window(
+            app: &tauri::App<tauri::test::MockRuntime>,
+            label: &str,
+        ) -> tauri::WebviewWindow<tauri::test::MockRuntime> {
+            tauri::WebviewWindowBuilder::new(app, label, tauri::WebviewUrl::default())
+                .build()
+                .unwrap()
+        }
+
+        /// Records `who` and the payload's data for each event on `local`'s stream.
+        fn hear<L: Listener<tauri::test::MockRuntime>>(
+            listener: &L,
+            who: &'static str,
+            local: u64,
+            heard: &Heard,
+        ) {
+            let heard = heard.clone();
+            listener.listen(stream_event_name(local), move |event| {
+                let payload: serde_json::Value = serde_json::from_str(event.payload()).unwrap();
+                heard
+                    .lock()
+                    .unwrap()
+                    .push(format!("{who} {}", payload["data"].as_str().unwrap_or("")));
+            });
+        }
+
+        fn heard_by(app: &tauri::App<tauri::test::MockRuntime>, local: u64) -> Heard {
+            let heard = Heard::default();
+            let main = window(app, crate::windows::MAIN_LABEL);
+            let pane = window(app, PANE);
+            hear(&main, "main", local, &heard);
+            hear(&pane, "pane", local, &heard);
+            hear(app, "app", local, &heard);
+            heard
+        }
+
+        #[test]
+        fn a_stream_a_window_subscribed_is_emitted_to_that_window_alone() {
+            let app = app();
+            let streams = app.state::<StreamIds>();
+            let local = StreamIds::reserve(&streams);
+            StreamIds::set_stream_target(&streams, local, PANE);
+            let heard = heard_by(&app, local);
+
+            assert!(emit_stream(app.handle(), local, output("ab", 2)));
+
+            assert_eq!(*heard.lock().unwrap(), ["pane ab".to_owned()]);
+        }
+
+        #[test]
+        fn a_stream_with_no_window_is_emitted_to_every_listener() {
+            let app = app();
+            let local = StreamIds::reserve(&app.state::<StreamIds>());
+            let heard = heard_by(&app, local);
+
+            assert!(emit_stream(app.handle(), local, output("ab", 2)));
+
+            let mut heard = heard.lock().unwrap().clone();
+            heard.sort();
+            assert_eq!(heard, ["app ab", "main ab", "pane ab"]);
+        }
+
+        #[test]
+        fn a_reserved_stream_sends_its_early_output_to_its_window() {
+            let app = app();
+            let streams = app.state::<StreamIds>();
+            let mut emit =
+                |local: u64, item: StreamItem<'_>| emit_stream(app.handle(), local, item);
+            StreamIds::deliver(
+                &streams,
+                StreamHost::Sidecar,
+                StreamId(3),
+                output("cd", 4),
+                &mut emit,
+            );
+            let local = StreamIds::reserve(&streams);
+            StreamIds::set_stream_target(&streams, local, PANE);
+            let heard = heard_by(&app, local);
+
+            attach_reserved_on(&streams, local, &subscribed(3, "ab", 2), &mut emit).unwrap();
+
+            assert_eq!(*heard.lock().unwrap(), ["pane cd".to_owned()]);
+        }
+
+        #[test]
+        fn a_re_pointed_stream_keeps_its_window() {
+            let app = app();
+            let streams = app.state::<StreamIds>();
+            let host = StreamHost::remote("verified", "epoch");
+            let local = StreamIds::attach(
+                &streams,
+                host.clone(),
+                &PtySessionId::new("s"),
+                &ViewportId::new("webview"),
+                &subscribed(1, "ab", 2),
+            );
+            StreamIds::set_stream_target(&streams, local, PANE);
+            let heard = heard_by(&app, local);
+            let mut emit =
+                |local: u64, item: StreamItem<'_>| emit_stream(app.handle(), local, item);
+
+            let lost = StreamIds::resume_on(
+                &streams,
+                host.clone(),
+                || true,
+                |_, _| Ok::<_, ()>(subscribed(9, "ab", 2)),
+                |_| {},
+                &mut emit,
+            );
+            assert!(lost.is_empty());
+            StreamIds::deliver(&streams, host, StreamId(9), output("cd", 4), &mut emit);
+
+            assert_eq!(
+                StreamIds::stream_target(&streams, local).as_deref(),
+                Some(PANE)
+            );
+            assert_eq!(*heard.lock().unwrap(), ["pane cd".to_owned()]);
+        }
+
+        #[test]
+        fn a_detach_forgets_the_window() {
+            let app = app();
+            let streams = app.state::<StreamIds>();
+            let reserved = StreamIds::reserve(&streams);
+            StreamIds::set_stream_target(&streams, reserved, PANE);
+            let local = StreamIds::attach(
+                &streams,
+                StreamHost::InProcess,
+                &PtySessionId::new("s"),
+                &ViewportId::new("webview"),
+                &subscribed(1, "", 0),
+            );
+            StreamIds::set_stream_target(&streams, local, PANE);
+
+            assert_eq!(StreamIds::detach(&streams, reserved), None);
+            assert!(StreamIds::detach(&streams, local).is_some());
+
+            assert_eq!(StreamIds::stream_target(&streams, reserved), None);
+            assert_eq!(StreamIds::stream_target(&streams, local), None);
+        }
+
+        fn targeted(streams: &StreamIds, host: &StreamHost) -> u64 {
+            let local = StreamIds::attach(
+                streams,
+                host.clone(),
+                &PtySessionId::new("s"),
+                &ViewportId::new("webview"),
+                &subscribed(1, "ab", 2),
+            );
+            StreamIds::set_stream_target(streams, local, PANE);
+            local
+        }
+
+        #[test]
+        fn a_forgotten_host_forgets_its_streams_windows() {
+            let streams = <StreamIds as Default>::default();
+            let local = targeted(&streams, &StreamHost::Sidecar);
+            let other = targeted(&streams, &StreamHost::InProcess);
+
+            StreamIds::forget_host(&streams, StreamHost::Sidecar);
+
+            assert_eq!(StreamIds::stream_target(&streams, local), None);
+            assert_eq!(
+                StreamIds::stream_target(&streams, other).as_deref(),
+                Some(PANE)
+            );
+        }
+
+        #[test]
+        fn a_retired_lifetime_forgets_its_streams_windows() {
+            let streams = <StreamIds as Default>::default();
+            let host = StreamHost::remote("verified", "epoch");
+            let local = targeted(&streams, &host);
+
+            assert!(StreamIds::retire_lifetime(&streams, host).is_some());
+
+            assert_eq!(StreamIds::stream_target(&streams, local), None);
+        }
+
+        #[test]
+        fn a_stream_left_behind_forgets_its_window() {
+            let streams = <StreamIds as Default>::default();
+            let host = StreamHost::remote("verified", "epoch");
+            let local = targeted(&streams, &host);
+            let mut emit = |_: u64, _: StreamItem<'_>| true;
+
+            let lost = StreamIds::resume_on(
+                &streams,
+                host,
+                || true,
+                |_, _| Ok::<_, ()>(subscribed(9, "abcd", 4)),
+                |_| {},
+                &mut emit,
+            );
+
+            assert_eq!(lost, [local]);
+            assert_eq!(StreamIds::stream_target(&streams, local), None);
+        }
+    }
 }

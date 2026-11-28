@@ -26,10 +26,14 @@ const HELPER = "shared/windows/listen-scoped.ts";
 const RAW_LISTENERS = new Set(["listen", "once"]);
 /** The `current-window.ts` handle getters whose `.listen`/`.once` register on that webview alone. */
 const HANDLE_GETTERS = new Set(["currentWindow", "currentWebview", "currentWebviewWindow"]);
-/** The files that may register on a handle: webview-scoped, and gated to `main` by hand. */
+/** The files that may register on a handle: webview-scoped, and either gated to `main` by hand,
+ *  a satellite's own registry client, or the move commands' abort toast (sent to the source). */
 const HANDLE_LISTENERS = new Set([
   "shared/hooks/use-rendered-document-bridge.ts",
   "shared/windows/use-main-window-registry.ts",
+  "shared/windows/use-main-window-moves.ts",
+  "shared/windows/satellite-registry.ts",
+  "shared/windows/move-commands.ts",
 ]);
 
 interface Site {
@@ -258,7 +262,24 @@ describe("every global listener registers through listenScoped with an inventory
     expect(
       scopeOf("features/org/hooks/use-org-registry-sync.ts", "ORG_REGISTRY_CHANGED_EVENT"),
     ).toBe("every-window");
-    expect(scopeOf("shared/terminal/terminal-manager.ts", "{channel}")).toBe("owning-window");
+    expect(scopeOf("shared/terminal/terminal-manager.ts", "{channel}")).toBe("this-window");
+  });
+
+  it("opens a terminal stream's channel only in terminal-manager, on this window's webview", () => {
+    const opens = sourceFiles(SRC, [])
+      .map((path) => relative(SRC, path).split(sep).join("/"))
+      .filter(
+        (file) => !file.split("/").includes("__test-utils__") && !file.startsWith("app/mock/"),
+      )
+      .filter((file) =>
+        /pty-output-stream-\$|\bliveStreamChannel\(|\bopenLiveStream\(/.test(
+          readFileSync(join(SRC, file), "utf8"),
+        ),
+      );
+    expect(opens.sort()).toEqual([
+      "shared/terminal/live-stream.ts",
+      "shared/terminal/terminal-manager.ts",
+    ]);
   });
 
   describe("seeded fixtures", () => {

@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { readPrivateSourceListing } from "./publish-set-source";
 import { parseTeamKey } from "@/shared/lib/team-key";
 import { getPublishSet } from "./publish-set-source";
+import { publishSetCount } from "./types";
 import { useOrgRoot } from "./use-org-root";
 import { useTeamContentPrefix } from "./scope-publish-set";
 
@@ -22,7 +23,7 @@ export function useNavSourceCounts(open: boolean, repoPath: string, teamKey: str
           setCounts((c) => ({
             ...(c?.key === teamKey ? c : {}),
             key: teamKey,
-            clone: set.general.count + set.buckets.reduce((n, b) => n + b.count, 0),
+            clone: publishSetCount(set),
           }));
       })
       .catch(() => {});

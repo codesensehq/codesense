@@ -42,6 +42,7 @@ import { useDashboardCommandsSync } from "@/features/dashboard/lib/dashboard-com
 import { useAgentMessageListener } from "@/shared/hooks/use-agent-message-listener";
 import { useRenderedDocumentBridge } from "@/shared/hooks/use-rendered-document-bridge";
 import { useMainWindowRegistry } from "@/shared/windows/use-main-window-registry";
+import { useMainWindowMoves } from "@/shared/windows/use-main-window-moves";
 import { useCanvasRenderBridge } from "@/shared/hooks/use-canvas-render-bridge";
 import { useManagedSessionBridge } from "@/shared/hooks/use-managed-session-bridge";
 import { useTerminalStatusEvents } from "@/shared/hooks/use-terminal-status-events";
@@ -142,6 +143,9 @@ if (import.meta.env.MODE === "webdriver") {
   void import("./e2e-terminal-layout-control").then(({ registerTerminalLayoutE2eControl }) =>
     registerTerminalLayoutE2eControl(),
   );
+  void import("./e2e-windows-control").then(({ registerWindowsE2eControl }) =>
+    registerWindowsE2eControl(),
+  );
 }
 
 // SW-FX-75: the loading splash is gated on several async boot flags
@@ -227,8 +231,10 @@ function App() {
   useCanvasRenderBridge();
   useRenderedDocumentBridge();
 
-  // The window registry: `main`'s slice keeps its map of satellite-owned items.
+  // The window registry: `main`'s slice keeps its map of satellite-owned items, and
+  // `main`'s side of a move hands its tabs off and opens the items that come back.
   useMainWindowRegistry();
+  useMainWindowMoves();
 
   // SW-AW-4 (B/D): the managed task-session bridge — `ask_user` (blocking
   // question) + `signal_done` (completion) drive the sessionId-keyed managed

@@ -293,6 +293,11 @@ export function flushFrameWrites(element: HTMLIFrameElement | string, ms = 300):
     ),
   ).then(() => {});
 }
+/** `flushFrameWrites` on every live frame `select` picks, within one `ms` budget. */
+export function flushFramesWhere(select: (frame: LiveFrame) => boolean, ms = 300): Promise<void> {
+  const selected = [...frames.values()].filter((e) => !e.tornDown && select(e.frame));
+  return Promise.all(selected.map((e) => flushFrameWrites(e.frame.frameId, ms))).then(() => {});
+}
 export function flushFrame(frame: string | { frameId: string }, ms = 300): Promise<void> {
   return flush(typeof frame === "string" ? frame : frame.frameId, ms, true);
 }

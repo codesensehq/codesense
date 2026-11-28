@@ -9,12 +9,17 @@
  * How a row is classed:
  * - `main-only`: the handler acts for the app rather than reading for its
  *   window: persistence, MCP actions, pane-open, render replies, prompts and
- *   one-off toasts, app lifecycle, and path events (Rust broadcasts them;
- *   they become `owning-window` once they are routed to one window).
+ *   one-off toasts, app lifecycle, and the path events Rust still
+ *   broadcasts (`worktree-file-change`). `main`'s `context-file-change` rows
+ *   stay here too: Rust routes every change to `main` and to the satellites
+ *   holding the file, and `main`'s handlers refresh what the whole app shows.
  * - `every-window`: the handler re-reads or caches something its own window
  *   shows; doing it in each window is correct and idempotent.
  * - `owning-window`: the event is about one terminal session or stream, which a
- *   satellite shows only once a later story gives it workspaces and an `owns`.
+ *   satellite shows only once a later story gives it workspaces and an `owns`,
+ *   or about a file a satellite holds (`shared/windows/path-listeners.ts`).
+ * - `this-window`: as `owning-window`, for an event Rust emits to one window's
+ *   label (a terminal stream's output), so no other window hears it.
  *
  * `listener-inventory.test.ts` keeps this list and the code in step: a call
  * with no row, a scope that differs from its row, or a row whose site is gone
@@ -39,9 +44,9 @@ export const LISTENER_INVENTORY: readonly ListenerRow[] = [
   { file: "app/App.tsx", event: "worktree-file-change", scope: "main-only", why: "path event, broadcast by Rust until it is routed to one window" },
   { file: "app/App.tsx", event: "local-profiles-changed", scope: "every-window", why: "profile event: each window re-reads auth" },
   { file: "app/App.tsx", event: "app:quit-flush", scope: "main-only", why: "Rust waits for one ack, so only main may send it" },
-  { file: "app/App.tsx", event: "CONTEXT_FILE_CHANGE_EVENT", scope: "main-only", why: "path event, broadcast by Rust until it is routed to one window" },
+  { file: "app/App.tsx", event: "CONTEXT_FILE_CHANGE_EVENT", scope: "main-only", why: "Rust routes every change to main, which refreshes for the app" },
   { file: "app/hooks/use-composite-overlay-refresh.ts", event: "SYNC_WAVE_COMPLETED_EVENT", scope: "every-window", why: "refreshes this window's overlay" },
-  { file: "app/hooks/use-composite-overlay-refresh.ts", event: "CONTEXT_FILE_CHANGE_EVENT", scope: "main-only", why: "path event, broadcast by Rust until it is routed to one window" },
+  { file: "app/hooks/use-composite-overlay-refresh.ts", event: "CONTEXT_FILE_CHANGE_EVENT", scope: "main-only", why: "Rust routes every change to main, which refreshes for the app" },
   { file: "app/hooks/use-dashboard-stream.ts", event: "AGENT_DONE_EVENT", scope: "every-window", why: "feeds this window's dashboard streams" },
   { file: "app/hooks/use-dashboard-stream.ts", event: "AGENT_MESSAGE_EVENT", scope: "every-window", why: "feeds this window's dashboard streams" },
   { file: "app/hooks/use-dashboard-stream.ts", event: "AGENT_PROGRESS_EVENT", scope: "every-window", why: "feeds this window's dashboard streams" },
@@ -49,7 +54,7 @@ export const LISTENER_INVENTORY: readonly ListenerRow[] = [
   { file: "app/hooks/use-sync-wave-rescan.ts", event: "SYNC_WAVE_COMPLETED_EVENT", scope: "every-window", why: "refreshes this window's file views" },
   { file: "app/update-toast.tsx", event: "update-download-progress", scope: "main-only", why: "the app update runs from main" },
   { file: "features/agent-context/hooks/use-agent-context.ts", event: "AGENTS_CHANGED_EVENT", scope: "every-window", why: "re-reads an agent's context" },
-  { file: "features/agent-context/hooks/use-agent-context.ts", event: "CONTEXT_FILE_CHANGE_EVENT", scope: "main-only", why: "path event, broadcast by Rust until it is routed to one window" },
+  { file: "features/agent-context/hooks/use-agent-context.ts", event: "CONTEXT_FILE_CHANGE_EVENT", scope: "main-only", why: "Rust routes every change to main, which refreshes for the app" },
   { file: "features/agents/lib/agent-names.ts", event: "AGENTS_CHANGED_EVENT", scope: "every-window", why: "re-reads agent names" },
   { file: "features/agents/lib/agent-names.ts", event: "CONTEXT_INDEX_CHANGED_EVENT", scope: "every-window", why: "re-reads agent names" },
   { file: "features/agents/lib/agent-names.ts", event: "SESSION_STATE_CHANGED_EVENT", scope: "every-window", why: "re-reads agent names" },
@@ -61,6 +66,7 @@ export const LISTENER_INVENTORY: readonly ListenerRow[] = [
   { file: "features/dashboard/components/nav-selection.ts", event: "CONTEXT_INDEX_CHANGED_EVENT", scope: "every-window", why: "re-reads the nav when the index changes" },
   { file: "features/dashboard/lib/dashboard-commands.ts", event: "COMMAND_RUN_EVENT", scope: "main-only", why: "runs a command: one window acts" },
   { file: "features/dashboard/lib/live-hub.ts", event: "{event}", scope: "every-window", why: "the live hub's injected listen; the host releases a window's subscriptions on Destroyed" },
+  { file: "features/git-sync/lib/shown-read.ts", event: "CONTEXT_GIT_MOVED_EVENT", scope: "every-window", why: "re-reads a shown worktree list or lead diff when a branch head moves" },
   { file: "features/git-sync/lib/use-context-git-source.ts", event: "CONTEXT_GIT_MOVED_EVENT", scope: "every-window", why: "re-reads a repo's git state" },
   { file: "features/git-sync/lib/use-context-git-source.ts", event: "CONTEXT_REPO_STATUS_CHANGED_EVENT", scope: "every-window", why: "re-reads a repo's git state" },
   { file: "features/git-sync/lib/use-file-redline.ts", event: "CONTEXT_GIT_MOVED_EVENT", scope: "every-window", why: "re-reads a repo's baseline" },
@@ -94,7 +100,7 @@ export const LISTENER_INVENTORY: readonly ListenerRow[] = [
   { file: "features/viewer/hooks/use-role-holdings.ts", event: "AGENT_STATE_CHANGED_EVENT", scope: "every-window", why: "re-reads role holdings" },
   { file: "features/viewer/hooks/use-session-cwd-revision.ts", event: "pty-osc7", scope: "owning-window", why: "a terminal session's cwd" },
   { file: "features/viewer/hooks/use-session-prompt.ts", event: "pty-osc133", scope: "owning-window", why: "a terminal session's prompt marks" },
-  { file: "features/viewer/hooks/use-team-landing-page.ts", event: "CONTEXT_FILE_CHANGE_EVENT", scope: "main-only", why: "path event, broadcast by Rust until it is routed to one window" },
+  { file: "features/viewer/hooks/use-team-landing-page.ts", event: "CONTEXT_FILE_CHANGE_EVENT", scope: "main-only", why: "Rust routes every change to main, which refreshes for the app" },
   { file: "features/viewer/hooks/use-team-landing-page.ts", event: "ORG_REGISTRY_CHANGED_EVENT", scope: "every-window", why: "keeps this window's landing pages current" },
   { file: "features/viewer/hooks/use-worktree-roster-listener.ts", event: "WORKTREE_CHANGED_EVENT", scope: "every-window", why: "re-reads the worktree roster" },
   { file: "features/viewer/lib/agent-list-inputs.ts", event: "agent-list-identity-changed", scope: "every-window", why: "keeps this window's agent identities current" },
@@ -148,5 +154,6 @@ export const LISTENER_INVENTORY: readonly ListenerRow[] = [
   { file: "shared/stores/workspace-archive-store.ts", event: "codesense:workspace-archive-changed", scope: "every-window", why: "keeps the archive state current" },
   { file: "shared/terminal/terminal-manager.ts", event: "pty-exit", scope: "owning-window", why: "a terminal session exited" },
   { file: "shared/terminal/terminal-manager.ts", event: "TERMINAL_STREAMS_LOST_EVENT", scope: "every-window", why: "session-server reconnect: each window reconnects its own streams" },
-  { file: "shared/terminal/terminal-manager.ts", event: "{channel}", scope: "owning-window", why: "pty-output-stream: one terminal stream's output" },
+  { file: "shared/terminal/terminal-manager.ts", event: "{channel}", scope: "this-window", why: "pty-output-stream: one terminal stream's output, emitted to the window that subscribed it" },
+  { file: "shared/windows/path-listeners.ts", event: "CONTEXT_FILE_CHANGE_EVENT", scope: "owning-window", why: "Rust routes it here; refreshes this satellite's held tab" },
 ];

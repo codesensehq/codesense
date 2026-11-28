@@ -26,6 +26,11 @@ export function itemKeyForTab(team: string, tab: { path: string }): ItemKey {
   return { kind: TAB_ITEM_KIND, team, id: tab.path };
 }
 
+/** The item's name, as its tab shows it: the last segment of its path. */
+export function itemName(key: ItemKey): string {
+  return key.id.slice(key.id.lastIndexOf("/") + 1) || key.id;
+}
+
 /** The canonical string, `["<kind>","<team>","<id>"]`; Rust writes the same bytes. */
 export function canonicalItemKey(key: ItemKey): string {
   return JSON.stringify([key.kind, key.team, key.id]);

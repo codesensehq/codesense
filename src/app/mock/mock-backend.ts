@@ -34,6 +34,7 @@ import { contextQueryHandlers } from "./handlers/context-query";
 import { sessionTimerHandlers } from "./handlers/session-timers";
 import { recordsHandlers } from "./handlers/records";
 import { needsYouHandlers } from "./handlers/needs-you";
+import { fileSurfaceHandlers } from "./handlers/file-surface";
 import { notesHandlers } from "./handlers/notes";
 import { sourceDiffHandlers } from "./handlers/source-diff";
 import { MockEventBus } from "./mock-events";
@@ -176,5 +177,9 @@ export function createMockBackend(
     Object.assign(handlers, liveHubFixture(events));
   Object.assign(handlers, recordsHandlers(events, { ...handlers }));
   Object.assign(handlers, needsYouHandlers({ ...handlers }));
+  // The satellite probe route's world (`?probe=<path>`, `e2e-satellite-probe.tsx`): a
+  // dashboard's `files` surface. No other world wraps its frames and writes with it.
+  if (new URLSearchParams(search).has("probe"))
+    Object.assign(handlers, fileSurfaceHandlers(state, events, { ...handlers }));
   return createInvokeRouter(handlers);
 }

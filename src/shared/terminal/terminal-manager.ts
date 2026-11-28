@@ -1321,7 +1321,7 @@ export function createTerminalManager(deps: TerminalManagerDeps = {}): TerminalM
             listen: (channel, onEvent) =>
               listenScoped<TerminalStreamEvent>(
                 channel,
-                "owning-window",
+                "this-window",
                 (event) => {
                   if (!currentTerminalDisplay(entry.reference)) return;
                   const epoch = remoteEpoch();

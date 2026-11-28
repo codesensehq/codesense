@@ -7,6 +7,7 @@ function slice(version: number, extra: Partial<WindowSlice> = {}): WindowSlice {
   return {
     label: "sat-1",
     kind: "satellite",
+    number: 2,
     version,
     layoutRef: null,
     items: [],

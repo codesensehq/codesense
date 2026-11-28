@@ -67,6 +67,22 @@ test("touchesRust matches any changed path under a prefix, and an empty diff cou
   assert.equal(touchesRust([], RUST_PATHS), true);
 });
 
+test("a change to what the two-window e2e job drives runs the Rust jobs", () => {
+  for (const file of [
+    "src/shared/windows/satellite-root.tsx",
+    "src/app/e2e-windows-control.ts",
+    "src/app/e2e-satellite-probe.tsx",
+    // It mounts the probe route and registers the webdriver controls.
+    "src/main.tsx",
+    "tests/windows/two-window-smoke.e2e.ts",
+    "tests/windows/fixtures/probe.html",
+    "wdio.windows.conf.ts",
+  ])
+    assert.equal(touchesRust([file], RUST_PATHS), true, file);
+  for (const file of ["src/shared/window-title.ts", "tests/e2e-mock/satellite-boot.spec.ts"])
+    assert.equal(touchesRust([file], RUST_PATHS), false, file);
+});
+
 // The macOS jobs skip only when every Rust-relevant change is a listed file only Windows or Linux
 // compiles; any other Rust-relevant path, an empty diff, or an error runs them.
 test("touchesMacos skips only changes confined to the OS-only files", () => {

@@ -2,6 +2,7 @@
 import type { HandlerRegistry } from "../mock-router";
 import type { ScratchSpaceListing } from "@/tauri/commands";
 import { PUBLISH_SETS, EMPTY_SYNC_SET } from "../git-sync-fixtures";
+import { publishSetCount } from "@/features/git-sync/lib/types";
 
 /**
  * Sync-viewer mock commands. `get_publish_set` mirrors the real org-agnostic
@@ -31,7 +32,7 @@ export function gitSyncHandlers(search = ""): HandlerRegistry {
     changed_path_count: (args) => {
       if (Number.isFinite(pinnedChanges) && pinnedChanges >= 0) return pinnedChanges;
       const set = PUBLISH_SETS[args.repoPath as string];
-      return set ? set.buckets.reduce((n, b) => n + b.count, 0) + set.general.count : 0;
+      return set ? publishSetCount(set) : 0;
     },
     list_scratch_space: (args) => mockScratchSpace((args.orgSlug as string | null) ?? null),
     create_scratch_file: (args) =>

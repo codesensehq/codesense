@@ -70,6 +70,7 @@ import { connectPrefs } from "@/features/dashboard/lib/prefs-client";
 import { bindPrefsConsumers } from "@/features/dashboard/lib/prefs-live";
 import { LiveHub, type HubSnapshot } from "@/features/dashboard/lib/live-hub";
 import { subscribeContext } from "@/shared/lib/context-query/subscribe-context";
+import { useFileRefreshStore } from "@/shared/stores/file-refresh-store";
 import { useViewerStore } from "@/shared/stores/viewer-store";
 import { pushViewerState, saveAppState } from "@/tauri/commands";
 import {
@@ -80,6 +81,8 @@ import {
 import { AppThemeProvider } from "@/themes/theme-provider";
 
 import { listenScoped } from "./listen-scoped";
+import { useSatellitePathRefresh } from "./path-listeners";
+import { installSliceSource } from "./slice";
 import { useMainWindowRegistry } from "./use-main-window-registry";
 import { LISTENER_INVENTORY } from "./listener-inventory";
 
@@ -199,6 +202,33 @@ describe("a satellite registers listeners by their inventory class", () => {
     await vi.waitFor(() => expect(updates).toHaveBeenCalledTimes(2));
     expect(fileChanges).not.toHaveBeenCalled();
     stop();
+  });
+
+  it("refreshes the tab it holds on a routed context-file-change, and not another file's", async () => {
+    expect(rowScope("shared/windows/path-listeners.ts", "CONTEXT_FILE_CHANGE_EVENT")).toBe(
+      "owning-window",
+    );
+    const uninstall = installSliceSource({
+      current: () => ({
+        label: "sat-1",
+        kind: "satellite",
+        version: 1,
+        layoutRef: null,
+        items: [{ kind: "tab", team: "acme:docs", id: `${REPO}/a.md` }],
+      }),
+      subscribe: () => () => {},
+    });
+    useFileRefreshStore.setState({ contentRefreshKeys: {} });
+    const { unmount } = renderHook(() => useSatellitePathRefresh());
+    await vi.waitFor(() => expect(bus.get(CONTEXT_FILE_CHANGE_EVENT)?.size).toBe(1));
+
+    const held = () => useFileRefreshStore.getState().contentRefreshKeys["team:acme:docs"];
+    deliver(CONTEXT_FILE_CHANGE_EVENT, { repo_path: REPO, file_path: `${REPO}/b.md` });
+    expect(held()).toBeUndefined();
+    deliver(CONTEXT_FILE_CHANGE_EVENT, { repo_path: REPO, file_path: `${REPO}/a.md` });
+    expect(held()).toBe(1);
+    unmount();
+    uninstall();
   });
 
   it("does not call an owning-window handler for a session it does not own", async () => {

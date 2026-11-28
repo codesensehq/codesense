@@ -7,6 +7,7 @@ pub mod configuration;
 pub(crate) mod effective_status;
 pub use agent_marks::*;
 pub mod files;
+pub mod groups;
 pub mod inbox;
 pub mod inbox_events;
 #[cfg(test)]
@@ -441,6 +442,11 @@ impl LiveHub {
     }
     pub fn changes(&self) -> tokio::sync::watch::Receiver<u64> {
         self.changes.subscribe()
+    }
+    /// Whether the hub holds a view of (topic, key), so a test can tell a read took no snapshot.
+    #[cfg(test)]
+    pub(crate) fn has_view(&self, key: &str, topic: &str) -> bool {
+        self.model.lock().unwrap().projections.has_view(topic, key)
     }
     /// One topic's current view, as a page's first paint or a host read sees it.
     pub fn snapshot(&self, key: &str, topic: &str) -> Result<Snapshot, String> {
@@ -1914,6 +1920,17 @@ async fn rebuild(app: &tauri::AppHandle, cause: u8) -> Result<(), String> {
     Ok(())
 }
 
+/// A host-only topic never reaches a frame, whatever its grant: the native gate refuses the
+/// verb first, and this is the second check. A host call carries no frame.
+fn refuse_host_only(topic: &str, frame: Option<&str>) -> Result<(), String> {
+    if frame.is_some() && projection::host_only(topic) {
+        return Err(format!(
+            "denied: {topic} is a host-only topic and can't be subscribed to from a page"
+        ));
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn live_hub_subscribe(
     app: tauri::AppHandle,
@@ -1925,6 +1942,7 @@ pub async fn live_hub_subscribe(
     window: Option<[usize; 2]>,
     frame_id: Option<String>,
 ) -> Result<Held<SubscriptionReply>, String> {
+    refuse_host_only(&topic, frame_id.as_deref())?;
     if run_review::TOPICS.contains(&topic.as_str()) {
         run_review::prepare(
             &app,
@@ -1984,6 +2002,7 @@ pub(crate) fn subscribe_held<R: tauri::Runtime>(
     holder: Option<&str>,
     frame: Option<&str>,
 ) -> Result<Held<SubscriptionReply>, String> {
+    refuse_host_only(topic, frame)?;
     let hub = app.state::<LiveHub>();
     let mut fetched = None;
     let (mut model, configuration_deltas) = loop {

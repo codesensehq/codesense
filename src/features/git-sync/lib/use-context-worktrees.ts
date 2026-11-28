@@ -3,6 +3,7 @@ import { useCallback, useMemo, useState } from "react";
 import { useWorktreeRosterStore } from "@/features/viewer/stores/worktree-roster-store";
 import type { ContextWorktreeInfo } from "@/tauri/commands";
 import { getPublishSet } from "./publish-set-source";
+import { publishSetCount } from "./types";
 
 export function useContextWorktrees(teamKey: string) {
   const rows = useWorktreeRosterStore((s) => s.rows);
@@ -28,7 +29,7 @@ export function useContextSourceOptions(
     void Promise.all(
       worktrees.map(async (row) => {
         const set = await getPublishSet(orgRoot, undefined, undefined, prefix, row.id);
-        return [row.id, set.general.count + set.buckets.reduce((n, b) => n + b.count, 0)] as const;
+        return [row.id, publishSetCount(set)] as const;
       }),
     )
       .then((entries) => setCounts(Object.fromEntries(entries)))

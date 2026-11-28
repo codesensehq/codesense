@@ -62,3 +62,8 @@ export function currentWebview(): Webview {
 export function currentWebviewWindow(): WebviewWindow {
   return getCurrentWebviewWindow();
 }
+
+/** Closes this window. */
+export function closeCurrentWindow(): Promise<void> {
+  return getCurrentWindow().close();
+}

@@ -14,9 +14,13 @@
  * resolve the right root.
  */
 
-import { getPublishSet as invokeGetPublishSet, listScratchSpace } from "@/tauri/commands";
+import {
+  getPublishSet as invokeGetPublishSet,
+  leadDiff as invokeLeadDiff,
+  listScratchSpace,
+} from "@/tauri/commands";
 
-import { EMPTY_PUBLISH_SET, type PublishSet } from "./types";
+import { EMPTY_PUBLISH_SET, type LeadDiff, type PublishSet } from "./types";
 
 /**
  * Resolve the current grouped publish set for the given context-repo root.
@@ -52,4 +56,9 @@ export function getPublishSet(
 
 export function readPrivateSourceListing(org: string | null) {
   return listScratchSpace(org);
+}
+
+/** A lead's combined, read-only diff over every context worktree carrying its work item. */
+export function getLeadDiff(workItem: string): Promise<LeadDiff> {
+  return invokeLeadDiff(workItem);
 }

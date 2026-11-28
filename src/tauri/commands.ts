@@ -4656,6 +4656,7 @@ import type {
   ApproveMergeOutcome,
   FileRedline,
   IncomingStatus,
+  LeadDiff,
   PrReviewSummary,
   PublishFile,
   PublishOutcome,
@@ -4690,6 +4691,10 @@ export const getPublishSet = (
     pathPrefix,
     worktree,
   });
+
+// A lead's combined, read-only diff: every context worktree carrying `workItem`, each
+// against its own merge base with main (`lead_diff`).
+export const leadDiff = (workItem: string) => invoke<LeadDiff>("lead_diff", { workItem });
 
 // Cheap name-only "how many files changed" count for the CLOSED-pane sync badge
 // — no rename detection, no binary blobs, no EOL inflation (unlike getPublishSet).
@@ -10853,3 +10858,11 @@ export const windowSetLayout = (label: string, layoutRef: string | null) =>
  *  owns it. */
 export const windowFocusOwner = (key: import("@/shared/windows/item-key").ItemKey) =>
   invoke<string | null>("window_focus_owner", { key });
+
+/** Moves `key` from this window to `to`: `"new"`, `"main"` or a window's label. */
+export const windowMoveItem = (key: import("@/shared/windows/item-key").ItemKey, to: string) =>
+  invoke<import("@/shared/windows/window-slice").MoveStart>("window_move_item", { key, to });
+
+/** This window's answer to `window:hand-off`. */
+export const windowHandOffAck = (ack: import("@/shared/windows/window-slice").HandOffAck) =>
+  invoke<import("@/shared/windows/window-slice").AckOutcome>("window_hand_off_ack", { ack });

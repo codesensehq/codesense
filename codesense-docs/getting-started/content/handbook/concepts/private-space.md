@@ -53,6 +53,10 @@ split, and a restart opens them exactly as you left them.
 - With the tiles preview off, CodeSense saves no arrangement and changes none,
   and the files you saved stay as they are. Turn the preview back on and they
   open unchanged.
+- Only CodeSense itself reads your saved arrangements. A dashboard or any
+  other page can't subscribe to them or get them in its first paint, even with
+  every permission granted, because an arrangement names every tile you've set
+  out.
 
 ## Share it when it's ready
 

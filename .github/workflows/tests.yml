@@ -279,3 +279,6 @@ jobs:
         run: pnpm test:sidecar
       - name: Check sidecar naming scripts
         run: shellcheck -x scripts/lib/sidecar.sh scripts/lib/sidecar.test.sh
+      # Builds the release front-end bundle and fails if any webdriver-only code reached it.
+      - name: Check webdriver code is absent from the release bundle
+        run: pnpm verify:webdriver-absence

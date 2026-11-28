@@ -25,6 +25,12 @@ export interface SliceView {
   /** An opaque layout id, or `null`: the window then shows its one item. */
   layoutRef: string | null;
   items: readonly ItemKey[];
+  /** The window is a move's target that has not committed yet. */
+  pending?: boolean;
+  /** The window's number: 1 for `main`. */
+  number?: number;
+  /** A pending move's target only: the item it waits for and where it comes from. */
+  incoming?: { key: ItemKey; fromNumber: number };
 }
 
 export interface SliceSource {

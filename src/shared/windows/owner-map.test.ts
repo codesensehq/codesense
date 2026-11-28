@@ -19,6 +19,7 @@ function mainSlice(version: number, owners: Record<string, string>): WindowSlice
   return {
     label: "main",
     kind: "main",
+    number: 1,
     version,
     layoutRef: null,
     items: [],
