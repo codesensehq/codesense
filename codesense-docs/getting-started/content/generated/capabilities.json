@@ -813,7 +813,7 @@
   "sources": {
     "src-tauri/src/verbs/capabilities.rs": "ca4e62d053beef566662fe42095839cd4768b44b716aef8d6e4e9a1a5b054c04",
     "src-tauri/src/verbs/registry.generated.json": "65fea72cbaea6c0bbeb94b03039a69c009fd2a8a032d559b16f4165d302aa15d",
-    "src-tauri/src/verbs/registry.rs": "4b01c52ffd138e8f4a1926c1ae794066ca8ad6afe0c099b48647189a16366999",
+    "src-tauri/src/verbs/registry.rs": "ced05d80c2f82e3cbfab8967f1bb26960fa46655b6afcf11de3ce4284e25933a",
     "src-tauri/src/records/binding.rs": "f6bb288c03608c270bce422c59582ec59b4eb6132d759b6f2760db242217ddd5",
     "src-tauri/src/records/schema.rs": "36ed3b3ae3547e1e622f007c2480d3fad19c463e3b3636242fb94edcb4286a29"
   }
