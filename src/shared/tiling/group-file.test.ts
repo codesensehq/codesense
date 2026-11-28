@@ -43,10 +43,10 @@ describe("the leaf-id fixture", () => {
 
   it("holds the ids the viewer mints for a generic workspace and a story workspace", () => {
     const minted = [
-      genericWorkspaceId("/Users/me/code/app"),
-      storyIdFromPath("/repo/stories/SV-WF-63-cli-overlay.story.md"),
+      genericWorkspaceId("/home/me/code/app"),
+      storyIdFromPath("/repo/docs/DEMO-63-cli-overlay.story.md"),
     ];
-    expect(minted).toEqual(["generic:/Users/me/code/app", "SV-WF-63-cli-overlay.story"]);
+    expect(minted).toEqual(["generic:/home/me/code/app", "DEMO-63-cli-overlay.story"]);
     for (const id of minted) {
       expect(valid(id, "private"), `${id} is valid in the private layer`).toBe(true);
       expect(valid(id, "shared"), `${id} is refused in a shared layer`).toBe(false);

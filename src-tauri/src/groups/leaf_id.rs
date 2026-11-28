@@ -210,8 +210,8 @@ mod tests {
         for leaf in [
             "ws-1a2b",
             "tab_9",
-            "SV-WF-63-cli-overlay.story",
-            "generic:/Users/me/code",
+            "DEMO-63-cli-overlay.story",
+            "generic:/home/me/code",
         ] {
             assert_eq!(leaf_ref_problem(leaf, Layer::Private), None);
             assert!(leaf_ref_problem(leaf, Layer::Shared).is_some());
