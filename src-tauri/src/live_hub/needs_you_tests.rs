@@ -85,6 +85,22 @@ fn inbox_with(
     inbox
 }
 
+fn acme(team: &str) -> crate::commands::dashboard_launch::LaunchTeam {
+    crate::commands::dashboard_launch::LaunchTeam {
+        org: "acme".into(),
+        team: team.into(),
+    }
+}
+
+/// An Inbox that has loaded `teams` and holds no mail.
+fn loaded(teams: &[&str]) -> std::sync::Arc<crate::live_hub::inbox::InboxProjection> {
+    let mut inbox = crate::live_hub::inbox::InboxProjection::default();
+    for team in teams {
+        inbox.set_announced(&acme(team), BTreeMap::new());
+    }
+    std::sync::Arc::new(inbox)
+}
+
 /// A reached spend row for `agent`, as `agent_list::spend::rows` writes it.
 fn reached(agent: &str) -> Value {
     serde_json::json!({"id": format!("spend:agent:{agent}"), "scopeKind": "agent", "key": agent, "spend": {"state": "reached"}})
@@ -592,8 +608,9 @@ fn recompute(
 
 /// With the lead capped, so the set holds an item: opening another team's workspace patches
 /// only the agent list's state row, a doc tab opened there patches nothing, and launching one
-/// agent there (minting its work item) patches only that agent's `sessions` and `agentList`
-/// rows: `needsYou` emits nothing, in `all` or in the lead's team's view.
+/// agent there, in that other team (minting its work item), patches only that agent's
+/// `sessions` and `agentList` rows: `needsYou` emits nothing, in `all`, in the lead's team's
+/// view or in the other team's own.
 #[test]
 fn another_teams_workspace_doc_and_quiet_launch_patch_only_their_own_rows() {
     use crate::live_hub::inbox_gate_tests::row;
@@ -607,6 +624,7 @@ fn another_teams_workspace_doc_and_quiet_launch_patch_only_their_own_rows() {
         lead.agent = Some("lead-agent".into());
         model.rows = vec![lead];
         model.spend_rows = vec![reached("lead-agent")];
+        model.inbox = loaded(&["default", "quick-fix"]);
     }
     let mut viewer = serde_json::json!({
         "openedTeams": ["acme:delivery"],
@@ -662,17 +680,31 @@ fn another_teams_workspace_doc_and_quiet_launch_patch_only_their_own_rows() {
     }));
     {
         let mut model = hub.model.lock().unwrap();
-        model
-            .rows
-            .push(row("fixer", "Fixer", SessionState::Running));
+        let mut fixer = row("fixer", "Fixer", SessionState::Running);
+        fixer.team = Some(acme("quick-fix"));
+        model.rows.push(fixer);
         model
             .work_items
             .insert("fixer".into(), "wi_00000000000000e6".into());
     }
+    assert!(hub
+        .needs_you_rows("team:acme/quick-fix")
+        .unwrap()
+        .is_empty());
     let launched = recompute(&hub, &viewer, &roster);
     assert!(
         !launched.iter().any(|(topic, ..)| topic == TOPIC),
         "needsYou emits nothing: {launched:?}"
+    );
+    assert!(hub
+        .needs_you_rows("team:acme/quick-fix")
+        .unwrap()
+        .is_empty());
+    let own = hub.needs_you_rows("team:acme/default").unwrap();
+    assert_eq!(
+        own.len(),
+        1,
+        "the lead's view still holds only its cap: {own:?}"
     );
     let sessions: Vec<_> = launched
         .iter()
@@ -736,6 +768,14 @@ fn spend_and_inbox_events_upsert_the_set_through_the_hub() {
         "handle": "lead", "sessionId": "tab-lead", "kind": "dashboard-launched", "alive": true
     })];
     recompute(&hub, &viewer, &roster);
+    for view in ["all", "team:acme/default"] {
+        assert_eq!(
+            hub.needs_you_rows(view),
+            Err("inbox projection is loading".into()),
+            "a loading Inbox is not nobody waiting: {view}"
+        );
+    }
+    hub.model.lock().unwrap().inbox = loaded(&["default"]);
     assert_eq!(hub.needs_you_rows("all").unwrap(), Vec::<Value>::new());
     hub.needs_you_rows("team:acme/default").unwrap();
 
@@ -808,4 +848,260 @@ fn spend_and_inbox_events_upsert_the_set_through_the_hub() {
         "another team's question stays out: {own:?}"
     );
     assert_eq!(hub.needs_you_rows("all").unwrap().len(), 3);
+    // The needs-you mail count counts the team's cards and nothing else of the set.
+    assert_eq!(own.len(), 2, "the cap and the card: {own:?}");
+    assert_eq!(hub.needs_you_mail_count(&acme("default")), Ok(1));
+}
+
+/// While a team's Inbox is still loading, its view and `all` say so instead of reading as
+/// nobody waiting; another team's view that has loaded still answers.
+#[test]
+fn a_loading_inbox_is_an_error_in_the_views_it_covers() {
+    use crate::live_hub::inbox_gate_tests::row;
+    use crate::mcp::session_list::SessionState;
+    let hub = crate::live_hub::LiveHub::default();
+    let mut model = hub.model.lock().unwrap();
+    let mut fixer = row("fixer", "Fixer", SessionState::Running);
+    fixer.team = Some(acme("quick-fix"));
+    model.rows = vec![row("lead", "Lead", SessionState::Running), fixer];
+    model.inbox = loaded(&["default"]);
+    crate::live_hub::project_agent_views(&mut model).unwrap();
+    drop(model);
+    let loading = Err("inbox projection is loading".to_string());
+    assert_eq!(hub.needs_you_rows("team:acme/quick-fix"), loading);
+    assert_eq!(hub.needs_you_rows("all"), loading);
+    assert_eq!(hub.needs_you_rows("team:acme/default"), Ok(vec![]));
+
+    hub.model.lock().unwrap().inbox = loaded(&["default", "quick-fix"]);
+    assert_eq!(hub.needs_you_rows("team:acme/quick-fix"), Ok(vec![]));
+    assert_eq!(hub.needs_you_rows("all"), Ok(vec![]));
+}
+
+/// A live session's permission ask, then its question with the pending ask's text, and an
+/// ended session marked failed, each reach the topic through `hub_inputs` and
+/// `project_agent_views`, and each clears when its signal does (a dismissed mark included).
+#[test]
+fn live_asks_and_a_failed_mark_reach_the_topic_and_clear() {
+    use crate::live_hub::inbox_gate_tests::row;
+    use crate::live_hub::projection::TopicRegistry;
+    use crate::mcp::session_list::SessionState;
+    let hub = crate::live_hub::LiveHub::default();
+    let mut model = hub.model.lock().unwrap();
+    model.rows = vec![
+        row("lead", "Lead", SessionState::Running),
+        row("ender", "Ender", SessionState::Exited),
+    ];
+    model.inbox = loaded(&["default"]);
+    for view in ["all", "team:acme/default"] {
+        TopicRegistry::snapshot(&mut model.projections, TOPIC, view).unwrap();
+    }
+    let mut step = |lead: Value, ender: Value| {
+        let scope = Some("team:acme/default".to_string());
+        let wire = vec![(scope.clone(), lead), (scope, ender)];
+        TopicRegistry::replace(&mut model.projections, "sessions", wire, None).unwrap();
+        let mut seen: Vec<_> = crate::live_hub::project_agent_views(&mut model)
+            .unwrap()
+            .into_iter()
+            .filter(|d| d.topic == TOPIC && (!d.upserts.is_empty() || !d.removes.is_empty()))
+            .map(|d| (d.view_key, d.upserts, d.removes))
+            .collect();
+        seen.sort_by(|a, b| a.0.cmp(&b.0));
+        seen
+    };
+    let id = |row: &Value| row["id"].as_str().unwrap().to_string();
+    let quiet = serde_json::json!({"id": "tab-ender", "alive": true});
+
+    let asked = step(
+        serde_json::json!({"id": "tab-lead", "alive": true, "needsYouKind": "permission"}),
+        quiet.clone(),
+    );
+    assert_eq!(asked.len(), 2, "all and the team's view: {asked:?}");
+    for (_, upserts, removes) in &asked {
+        assert_eq!(
+            upserts.iter().map(id).collect::<Vec<_>>(),
+            ["agent:tab-lead:permission"]
+        );
+        assert!(removes.is_empty());
+    }
+
+    let question = step(
+        serde_json::json!({"id": "tab-lead", "alive": true, "needsYouKind": "question", "pendingAsk": "Which branch?"}),
+        quiet,
+    );
+    assert_eq!(question.len(), 2, "{question:?}");
+    for (view, upserts, removes) in &question {
+        assert_eq!(upserts.len(), 1, "{view}");
+        assert_eq!(upserts[0]["id"], "agent:tab-lead:question");
+        assert_eq!(upserts[0]["question"], "Which branch?");
+        assert_eq!(upserts[0]["team"], "default");
+        assert_eq!(removes, &["agent:tab-lead:permission"]);
+    }
+
+    let failed = step(
+        serde_json::json!({"id": "tab-lead", "alive": true}),
+        serde_json::json!({"id": "tab-ender", "alive": false, "needsYouKind": "failed", "pendingAsk": "stale"}),
+    );
+    assert_eq!(failed.len(), 2, "{failed:?}");
+    for (view, upserts, removes) in &failed {
+        assert_eq!(
+            upserts.iter().map(id).collect::<Vec<_>>(),
+            ["agent:tab-ender:failed"],
+            "{view}"
+        );
+        assert!(
+            upserts[0].get("question").is_none(),
+            "an ended session asks nothing"
+        );
+        assert_eq!(removes, &["agent:tab-lead:question"]);
+    }
+
+    let dismissed = step(
+        serde_json::json!({"id": "tab-lead", "alive": true}),
+        serde_json::json!({"id": "tab-ender", "alive": false}),
+    );
+    assert_eq!(dismissed.len(), 2, "{dismissed:?}");
+    for (view, upserts, removes) in &dismissed {
+        assert!(upserts.is_empty(), "{view}");
+        assert_eq!(removes, &["agent:tab-ender:failed"]);
+    }
+    drop(model);
+    assert_eq!(hub.needs_you_rows("all"), Ok(vec![]));
+}
+
+/// Rebuild's work items are keyed by each row's handle, so a session's item and the cards it
+/// sent, by handle or by session id, all carry it; a row the registry has none for is left out.
+#[test]
+fn rebuild_keys_work_items_by_handle_for_sessions_and_cards() {
+    use crate::live_hub::inbox_gate_tests::row;
+    use crate::mcp::session_list::SessionState;
+    let rows = vec![
+        row("lead", "Lead", SessionState::Running),
+        row("solo", "Solo", SessionState::Running),
+    ];
+    let work_items = crate::live_hub::work_items_by_handle(&rows, |handle| {
+        (handle == "lead")
+            .then(|| crate::work_item::WorkItemId::parse("wi_00000000000000a1").unwrap())
+    });
+    assert_eq!(
+        work_items,
+        BTreeMap::from([("lead".to_string(), "wi_00000000000000a1".to_string())])
+    );
+    let sessions = [
+        serde_json::json!({"id": "tab-lead", "alive": true, "needsYouKind": "permission"}),
+        serde_json::json!({"id": "tab-solo", "alive": true, "needsYouKind": "permission"}),
+    ];
+    let card = |message_id: i64, from: &str| CardInput {
+        message_id,
+        from: from.into(),
+        org: Some("acme".into()),
+        team: Some("default".into()),
+        text: "Which branch?".into(),
+        ..Default::default()
+    };
+    let inputs = hub_inputs(
+        &rows,
+        &sessions,
+        vec![card(1, "lead"), card(2, "tab-lead")],
+        &[],
+        &work_items,
+    );
+    let set = needs_you(&inputs);
+    let placed: Vec<_> = set
+        .iter()
+        .map(|item| (item.id.as_str(), item.work_item.as_deref()))
+        .collect();
+    assert_eq!(
+        placed,
+        [
+            ("agent:tab-lead:permission", Some("wi_00000000000000a1")),
+            ("agent:tab-solo:permission", None),
+            ("inbox:acme/default/1", Some("wi_00000000000000a1")),
+            ("inbox:acme/default/2", Some("wi_00000000000000a1")),
+        ]
+    );
+}
+
+/// `codesense_overview` reads the caller's view from the running hub: a team's agent gets only
+/// its own team's items in the needsYou section, the person every team's, and a caller of no
+/// known team an error.
+#[test]
+fn the_overview_reads_a_team_callers_own_needs_you_section() {
+    use crate::context_repo::caller_scope::CallerScope;
+    use crate::live_hub::inbox_gate_tests::row;
+    use crate::mcp::session_list::SessionState;
+    use crate::weft::inbox::MessageKind;
+    use tauri::Manager;
+    let app = tauri::test::mock_builder()
+        .build(tauri::test::mock_context(tauri::test::noop_assets()))
+        .unwrap();
+    app.manage(crate::live_hub::LiveHub::default());
+    {
+        let hub = app.state::<crate::live_hub::LiveHub>();
+        let mut model = hub.model.lock().unwrap();
+        model.rows = vec![row("lead", "Lead", SessionState::Running)];
+        model.inbox = std::sync::Arc::new(inbox_with(&[
+            ("default", "lead", "Which branch?", MessageKind::NeedsYou),
+            (
+                "steward",
+                "tab-steward-lead",
+                "Rerun the judge?",
+                MessageKind::NeedsYou,
+            ),
+        ]));
+        crate::live_hub::project_agent_views(&mut model).unwrap();
+    }
+    let root = tempfile::tempdir().unwrap();
+    let steward = CallerScope::Team(crate::context_repo::inheritance::team_view(
+        root.path(),
+        "acme",
+        "steward",
+    ));
+    let section = |scope: &CallerScope| {
+        let inputs = crate::mcp::overview::OverviewInputs {
+            generated_at: "2026-11-15T14:02:00Z".into(),
+            active: None,
+            sessions: Ok(vec![]),
+            needs_you: crate::mcp::overview::read_needs_you(app.handle(), scope),
+            machines: Ok(vec![]),
+            agents: Ok(vec![]),
+            routines: Ok(vec![]),
+            human_unread: Ok(0),
+            roles: Ok(vec![]),
+            layouts: Ok(vec![]),
+            docs_root: None,
+            docs_version: Err("not read here".into()),
+        };
+        crate::mcp::overview::compose(&inputs)["needsYou"].clone()
+    };
+    let own = section(&steward);
+    assert_eq!(own["total"], 1, "{own}");
+    assert_eq!(own["items"][0]["team"], "steward");
+    assert_eq!(own["items"][0]["question"], "Rerun the judge?");
+    let every = section(&CallerScope::Human);
+    assert_eq!(every["total"], 2, "{every}");
+    assert_eq!(
+        section(&CallerScope::Unknown)["error"],
+        "the caller's team is unknown"
+    );
+}
+
+/// A view of the set nobody reads is swept like the other hub-built topics, and a later read
+/// rebuilds it with the same rows.
+#[test]
+fn an_unread_view_of_the_set_is_swept_and_rebuilt_on_read() {
+    use crate::live_hub::projection::{TopicRegistry, SWEEP_IDLE_SWEEPS};
+    let mut hub = TopicRegistry::default();
+    let (_, inputs) = sample_day();
+    publish(&mut hub, &inputs);
+    let view = "team:acme/delivery";
+    let before = hub.snapshot(TOPIC, view).unwrap().snapshot;
+    let mut evicted = Vec::new();
+    for sweep_no in 1..=SWEEP_IDLE_SWEEPS + 1 {
+        evicted.extend(hub.sweep_unwatched(sweep_no));
+    }
+    assert!(
+        evicted.contains(&(TOPIC.to_string(), view.to_string())),
+        "{evicted:?}"
+    );
+    assert_eq!(hub.snapshot(TOPIC, view).unwrap().snapshot, before);
 }

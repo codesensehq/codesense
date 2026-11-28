@@ -535,13 +535,13 @@ async fn needs_you_count_tracks_post_read_archive() {
     set_rows(&app, vec![row("worker", "Worker", SessionState::Idle)]);
     let hub = app.state::<LiveHub>();
     assert_eq!(
-        hub.needs_you_count(&team()),
+        hub.needs_you_mail_count(&team()),
         Err("inbox projection is loading".into())
     );
     refresh_inbox_with_host(app.handle(), &host, false)
         .await
         .unwrap();
-    assert_eq!(hub.needs_you_count(&team()), Ok(4), "updates don't count");
+    assert_eq!(hub.needs_you_mail_count(&team()), Ok(4), "updates don't count");
 
     // Each write is reported as the app's inbox event reports it: the ids it touched.
     let reported = |id: i64| {
@@ -559,14 +559,14 @@ async fn needs_you_count_tracks_post_read_archive() {
     refresh_inbox_with_host(app.handle(), &host, false)
         .await
         .unwrap();
-    assert_eq!(hub.needs_you_count(&team()), Ok(3), "a read question is answered");
+    assert_eq!(hub.needs_you_mail_count(&team()), Ok(3), "a read question is answered");
 
     ledger::inbox_mark_archived_many(&store, &[archived]).unwrap();
     reported(archived);
     refresh_inbox_with_host(app.handle(), &host, false)
         .await
         .unwrap();
-    assert_eq!(hub.needs_you_count(&team()), Ok(2), "an archived question is filed");
+    assert_eq!(hub.needs_you_mail_count(&team()), Ok(2), "an archived question is filed");
 
     // A question posted once the projection is held counts on the next refresh.
     let posted = ask("deploy?");
@@ -574,5 +574,5 @@ async fn needs_you_count_tracks_post_read_archive() {
     refresh_inbox_with_host(app.handle(), &host, false)
         .await
         .unwrap();
-    assert_eq!(hub.needs_you_count(&team()), Ok(3), "a new question waits");
+    assert_eq!(hub.needs_you_mail_count(&team()), Ok(3), "a new question waits");
 }

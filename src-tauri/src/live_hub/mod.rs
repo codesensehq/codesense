@@ -483,17 +483,39 @@ impl LiveHub {
         inbox.human_unread_total()
     }
     /// The needs-you set as the hub last published it, in one view: `all`, or a team's
-    /// `team:<org>/<team>`. Errors until a recompute has published it.
+    /// `team:<org>/<team>`. Errors until a recompute has published it, and while an Inbox the
+    /// view covers is still loading, so missing cards never read as nobody waiting: a team's
+    /// view needs its own team's Inbox, `all` the Inbox of every team a session row names.
     pub(crate) fn needs_you_rows(&self, view: &str) -> Result<Vec<serde_json::Value>, String> {
         let mut model = self.model.lock().unwrap();
         if !model.needs_you_projected {
             return Err("the needs-you set is not projected yet".into());
         }
+        let held: BTreeSet<String> = model
+            .inbox
+            .held_teams()
+            .iter()
+            .map(|team| view_key::team_key(&team.org, &team.team))
+            .collect();
+        let loading = if view == "all" {
+            model
+                .rows
+                .iter()
+                .filter_map(|row| row.team.as_ref())
+                .any(|team| !held.contains(&view_key::team_key(&team.org, &team.team)))
+        } else {
+            !held.contains(view)
+        };
+        if loading {
+            return Err("inbox projection is loading".into());
+        }
         Ok(TopicRegistry::snapshot(&mut model.projections, needs_you::TOPIC, view)?.snapshot)
     }
     /// `team`'s pending needs-you mail to the human: the sum of its `counts` row's
-    /// `needsYouBySender`. Errors while the team's projection is loading.
-    pub(crate) fn needs_you_count(
+    /// `needsYouBySender`, the bridge's `inbox({kind:'needs-you', countOnly:true})`. It counts
+    /// the set's Inbox cards only, never its agent asks, caps or failures, which
+    /// [`Self::needs_you_rows`] holds too. Errors while the team's projection is loading.
+    pub(crate) fn needs_you_mail_count(
         &self,
         team: &crate::commands::dashboard_launch::LaunchTeam,
     ) -> Result<u32, String> {
@@ -504,7 +526,7 @@ impl LiveHub {
             }
             std::sync::Arc::clone(&model.inbox)
         };
-        Ok(needs_you_total(&inbox, team))
+        Ok(needs_you_mail_total(&inbox, team))
     }
     pub(crate) fn inbox_view(
         &self,
@@ -544,8 +566,8 @@ impl LiveHub {
 }
 
 /// The sum of `team`'s `counts` row `needsYouBySender`: its pending (unread,
-/// unarchived) needs-you mail to the human.
-pub(crate) fn needs_you_total(
+/// unarchived) needs-you mail to the human, the set's cards and nothing else.
+pub(crate) fn needs_you_mail_total(
     projection: &inbox::InboxProjection,
     team: &crate::commands::dashboard_launch::LaunchTeam,
 ) -> u32 {
@@ -1326,6 +1348,17 @@ fn project_agent_views(model: &mut Model) -> Result<Vec<projection::Delta>, Stri
 /// Recompute the needs-you set on the events that refresh its inputs (sessions, the Inbox
 /// and spend), never on a timer. An unchanged set publishes nothing.
 fn project_needs_you(model: &mut Model) -> Result<Vec<projection::Delta>, String> {
+/// Each session row's work item from the launch registry, keyed by handle as
+/// [`needs_you::hub_inputs`] reads it. A row with none is left out.
+fn work_items_by_handle(
+    rows: &[SessionListRow],
+    work_item: impl Fn(&str) -> Option<crate::work_item::WorkItemId>,
+) -> BTreeMap<String, String> {
+    rows.iter()
+        .filter_map(|row| Some((row.handle.clone(), work_item(&row.handle)?.to_string())))
+        .collect()
+}
+
     let sessions = TopicRegistry::snapshot(&mut model.projections, "sessions", "all")?.snapshot;
     let inputs = needs_you::hub_inputs(
         &model.rows,
@@ -1779,10 +1812,7 @@ async fn rebuild(app: &tauri::AppHandle, cause: u8) -> Result<(), String> {
     );
     let workspace_rollups = agent_list::presentation::workspace_rollups(&resolved.rows, &wire);
     // Read before the hub lock: the registry is never locked under it.
-    let work_items: BTreeMap<String, String> = rows
-        .iter()
-        .filter_map(|row| Some((row.handle.clone(), launch.work_item(&row.handle)?.to_string())))
-        .collect();
+    let work_items = work_items_by_handle(&rows, |handle| launch.work_item(handle));
     let deltas = {
         let mut model = hub.model.lock().unwrap();
         let previous = model.projections.snapshot("sessions", "all")?.snapshot;

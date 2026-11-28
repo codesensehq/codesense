@@ -2560,7 +2560,7 @@ async fn fresh_projection(
 pub(crate) async fn needs_you_count(host: &dyn InboxHost, team: &LaunchTeam) -> Result<u32, String> {
     match InboxHost::needs_you_count(host, team) {
         Some(count) => count,
-        None => Ok(crate::live_hub::needs_you_total(
+        None => Ok(crate::live_hub::needs_you_mail_total(
             &fresh_projection(host, team).await?,
             team,
         )),
@@ -3477,7 +3477,7 @@ impl InboxHost for AppInboxHost {
             self.app
                 .try_state::<crate::live_hub::LiveHub>()
                 .ok_or_else(|| "live hub unavailable".to_string())
-                .and_then(|hub| crate::live_hub::LiveHub::needs_you_count(&hub, team)),
+                .and_then(|hub| crate::live_hub::LiveHub::needs_you_mail_count(&hub, team)),
         )
     }
     fn inbox_event(&self, event: InboxEvent) {
