@@ -38,12 +38,13 @@ function pathsKey(rows: WorktreeRow[] | null, ids: string): string {
     .join("\n");
 }
 
-/** The org roots of `slugs` (newline-joined), as one newline-joined string. */
+/** The org roots of `slugs` (newline-joined), as one newline-joined string. Before a
+ *  diff names any worktree (its first read is pending or failed, or it has none), every
+ *  org's root, so a head move anywhere reads it again. */
 function rootsKey(orgs: readonly { slug: string; org_root: string }[], slugs: string): string {
-  if (!slugs) return "";
-  const wanted = new Set(slugs.split("\n"));
+  const wanted = slugs ? new Set(slugs.split("\n")) : null;
   return orgs
-    .filter((o) => wanted.has(o.slug) && o.org_root)
+    .filter((o) => (!wanted || wanted.has(o.slug)) && o.org_root)
     .map((o) => o.org_root)
     .join("\n");
 }
@@ -130,7 +131,12 @@ export function LeadDiff({
       <header className="border-b px-3 py-2 text-[12px] font-medium">
         {leadDiffHeader(lead, diff)}
       </header>
-      {total === 0 && diff.branches.every((b) => !b.deleted) ? (
+      {error ? (
+        <p role="status" className="border-b px-3 py-1.5 text-[12px] text-muted-foreground">
+          {`Couldn't refresh the diff: ${error}`}
+        </p>
+      ) : null}
+      {total === 0 && diff.branches.every((b) => !b.deleted && !b.error) ? (
         <p className="p-3 text-[12px] text-muted-foreground">{NO_CHANGES}</p>
       ) : (
         <div className="flex min-h-0 flex-1">
@@ -228,16 +234,20 @@ function OpenedFile({
   onShow: (branch: LeadBranch) => void;
 }) {
   const { branch, file } = opened;
+  // The file's last read stays on screen while a newer one for the same file loads.
   const [read, setRead] = useState<{
+    file: string;
     key: string;
     redline: FileRedline | null;
     error: string | null;
   }>({
+    file: "",
     key: "",
     redline: null,
     error: null,
   });
-  const key = `${branch.worktree}\n${file.path}\n${generation}`;
+  const fileKey = `${branch.worktree}\n${file.path}`;
+  const key = `${fileKey}\n${generation}`;
   useEffect(() => {
     let cancelled = false;
     getFileRedline(
@@ -249,18 +259,23 @@ function OpenedFile({
       branch.worktree,
     ).then(
       (redline) => {
-        if (!cancelled) setRead({ key, redline, error: null });
+        if (!cancelled) setRead({ file: fileKey, key, redline, error: null });
       },
       (e: unknown) => {
         if (!cancelled)
-          setRead({ key, redline: null, error: e instanceof Error ? e.message : String(e) });
+          setRead({
+            file: fileKey,
+            key,
+            redline: null,
+            error: e instanceof Error ? e.message : String(e),
+          });
       },
     );
     return () => {
       cancelled = true;
     };
-  }, [key, repoPath, file.path, file.renamedFrom, branch.worktree]);
-  const redline = read.key === key ? read.redline : null;
+  }, [key, fileKey, repoPath, file.path, file.renamedFrom, branch.worktree]);
+  const redline = read.file === fileKey ? read.redline : null;
   const others = diff.branches.filter(
     (b) => b.worktree !== branch.worktree && b.files.some((f) => f.path === file.path),
   );
@@ -282,7 +297,7 @@ function OpenedFile({
           badges={file.badges}
           before={redline?.before ?? null}
           after={redline?.after ?? null}
-          error={read.key === key ? read.error : null}
+          error={read.file === fileKey ? read.error : null}
           inline={false}
           wordWrap
           expandAll={false}

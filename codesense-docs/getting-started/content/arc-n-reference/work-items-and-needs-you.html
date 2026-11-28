@@ -83,8 +83,10 @@
         <p>
           Neither reads anything while it is hidden. CodeSense watches each org's context repository at
           its root, so a branch head or ref that moves anywhere in the org reads a shown list or diff
-          again, and marks a hidden one stale so it reads again when it is shown. An open file reads
-          again with it, and closes when the new diff no longer lists it. A source worktree's own file
+          again, and marks a hidden one stale so it reads again when it is shown. An open file keeps
+          its last diff on screen while it reads again with it, and closes when the new diff no longer
+          lists it. A read that fails keeps the last diff, marked stale with the error, and is tried
+          again on the next move. A source worktree's own file
           changes recount its row only while that worktree is being watched, for example while its diff
           is open.
         </p>

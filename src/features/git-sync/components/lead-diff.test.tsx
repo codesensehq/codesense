@@ -234,6 +234,76 @@ describe("LeadDiff", () => {
     expect(screen.queryByTestId("file-diff")).toBeNull();
   });
 
+  it("reads an empty diff whose one branch could not be read as that branch, not no changes", async () => {
+    reads.getLeadDiff.mockResolvedValue({
+      ...DIFF,
+      branches: [branch(FIRST, false, { error: "registration changed", files: [] })],
+    });
+    render(<Probe shown />);
+    await settle();
+    expect(screen.getByText(`${FIRST} couldn't be read`)).toBeTruthy();
+    expect(screen.queryByText("Diff, no changes yet")).toBeNull();
+  });
+
+  it("keeps an open file's last diff on screen while a head move reads it again", async () => {
+    let release: (v: unknown) => void = () => {};
+    reads.getFileRedline.mockResolvedValueOnce({
+      status: "modified",
+      binary: false,
+      before: "base",
+      after: "first",
+    });
+    render(<Probe shown />);
+    await settle();
+    fireEvent.click(screen.getAllByText("README.md")[0]!);
+    await settle();
+    expect(screen.getByTestId("file-diff").textContent).toBe("README.md: first");
+    reads.getFileRedline.mockImplementationOnce(() => new Promise((r) => (release = r)));
+    moveHead();
+    await settle();
+    expect(reads.getFileRedline).toHaveBeenCalledTimes(2);
+    expect(screen.getByTestId("file-diff").textContent).toBe("README.md: first");
+    await act(async () => {
+      release({ status: "modified", binary: false, before: "base", after: "second" });
+    });
+    await settle();
+    expect(screen.getByTestId("file-diff").textContent).toBe("README.md: second");
+  });
+
+  it("tries a failed first read again on the next head move", async () => {
+    reads.getLeadDiff.mockRejectedValueOnce(new Error("index unreadable"));
+    render(<Probe shown />);
+    await settle();
+    expect(screen.getByTestId("lead-diff").textContent).toBe("index unreadable");
+    // No diff names a worktree yet, so a move under any org's root reads again.
+    moveHead();
+    await settle();
+    expect(reads.getLeadDiff).toHaveBeenCalledTimes(2);
+    expect(
+      screen.getByText("Diff for Sprint 3 lead · 3 worktrees, 20 files · read-only"),
+    ).toBeTruthy();
+  });
+
+  it("marks a kept diff stale and names the error when a recompute fails", async () => {
+    render(<Probe shown />);
+    await settle();
+    reads.getLeadDiff.mockRejectedValueOnce(new Error("index unreadable"));
+    moveHead();
+    await settle();
+    expect(reads.getLeadDiff).toHaveBeenCalledTimes(2);
+    expect(screen.getByTestId("lead-diff").dataset.stale).toBe("true");
+    expect(screen.getByRole("status").textContent).toBe(
+      "Couldn't refresh the diff: index unreadable",
+    );
+    expect(screen.getAllByTestId("lead-diff-branch")).toHaveLength(3);
+    // The next move reads again and the diff is current once more.
+    moveHead();
+    await settle();
+    expect(reads.getLeadDiff).toHaveBeenCalledTimes(3);
+    expect(screen.getByTestId("lead-diff").dataset.stale).toBeUndefined();
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
   it("makes no lead_diff call while hidden, and recomputes once per head move", async () => {
     const view = render(<Probe shown={false} />);
     await settle();
