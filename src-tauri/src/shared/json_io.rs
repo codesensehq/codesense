@@ -252,20 +252,16 @@ fn write_atomic_inner(path: &Path, json: &str, private: bool) -> Result<(), Json
     Ok(())
 }
 
-/// Flush the folder entry the rename wrote, so a power loss keeps the new file's name. Unix only
-/// (a directory can't be opened for a sync on Windows); the rename has landed, so a failure here
-/// is not an error of the write.
+/// Flush the folder entry the rename wrote, so a power loss keeps the new file's name. The rename
+/// has landed, so a failure here is not an error of the write.
 fn sync_parent(path: &Path) {
-    #[cfg(unix)]
-    {
-        let parent = path.parent().filter(|p| !std::ffi::OsStr::is_empty(p.as_os_str()));
-        if let Some(parent) = parent {
-            let _ = std::fs::File::open(parent).and_then(|dir| dir.sync_all());
-            record("sync-dir");
-        }
+    let parent = path
+        .parent()
+        .filter(|p| !std::ffi::OsStr::is_empty(p.as_os_str()));
+    if let Some(parent) = parent {
+        let _ = codesense_platform::fs::sync_dir(parent);
+        record("sync-dir");
     }
-    #[cfg(not(unix))]
-    let _ = path;
 }
 
 #[cfg(test)]
@@ -342,12 +338,7 @@ mod tests {
         EVENTS.with(|events| events.borrow_mut().clear());
         write_json_atomic_private(&dir.path().join("a.json"), &val).unwrap();
         let events = EVENTS.with(|events| events.borrow().clone());
-        let expected: &[&str] = if cfg!(unix) {
-            &["sync-file", "rename", "sync-dir"]
-        } else {
-            &["sync-file", "rename"]
-        };
-        assert_eq!(events, expected);
+        assert_eq!(events, ["sync-file", "rename", "sync-dir"]);
         // The plain writer keeps its cheaper path.
         EVENTS.with(|events| events.borrow_mut().clear());
         write_json_atomic(&dir.path().join("b.json"), &val).unwrap();
