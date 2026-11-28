@@ -30,6 +30,16 @@ import { expect, test, type Browser, type Page } from "@playwright/test";
  * `END_STATES` row matches that agent: none within 5 s fails "no end state matched", two fail
  * "ambiguous", and one that already holds before the click fails the sample rather than timing a
  * frame. A change that moves where that click lands adds its row here, in the same change.
+ *
+ * A second serial `describe` measures two more mock worlds, so a failure there never skips the
+ * cases above. `tiles_12` (`?perf=tiles12`, 12 workspaces tiled 4 × 3): the mean frame rate while
+ * the window resizes and a divider drags (`fps_12_tiles_resize`) and while the first tile scrolls
+ * (`fps_12_tiles_scroll`), after a 1 s idle control that refuses a page pacing under 30 fps; then,
+ * on macOS, Playwright WebKit's WebContent memory (`rss_12_tiles_renderer`,
+ * `footprint_12_tiles_webcontent`, MiB). `nav_5k` (`?perf=nav5k`, a 5,000-file team): the nav's
+ * first paint from the mock's scan answer (`nav_first_paint`) and the p95 of input to the next
+ * painted frame while scrolling the fully expanded nav to its end (`nav_scroll`). A failed check
+ * throws, so nothing is recorded for that run.
  */
 
 const ENABLED = process.env.MEASURE_PERF_BASELINE === "1";
@@ -57,6 +67,11 @@ const agentRow = (team: string, handle: string) =>
   `[data-row-key='agent:${JSON.stringify([team, handle])}']`;
 
 type Sample = { ms: number; endState: string };
+type Unit = "ms" | "fps" | "MiB";
+/** A recorded sample: the value under the field `scripts/perf-baseline.mjs` reads for its unit. */
+type Recorded = { ms?: number; fps?: number; mib?: number; endState: string };
+/** Animation frames counted over one timed window. */
+type Frames = { frames: number; ms: number; worst: number };
 type Ends = "agent" | "team" | "schedule";
 
 declare global {
@@ -65,6 +80,8 @@ declare global {
       ends: Record<Ends, (arg: string) => string | null>;
       done: Promise<Sample> | null;
       start: { ms: number; endState: string } | null;
+      navPaint?: { ms: number; endState: string };
+      frames?: { t0: number; stamps: number[]; on: boolean };
     };
   }
 }
@@ -171,11 +188,31 @@ function installClock(page: Page) {
 
       window.__perf = { ends: { agent, team, schedule }, done: null, start: null };
       const startFrame = () => {
+        // The 5,000-file world's scan stamps its own start (`perf-worlds.ts`); keep it.
+        if (window.__perf.start) return;
         const at = performance.now();
         if (shell()) window.__perf.start = { ms: at, endState: "shell" };
         else if (at < cap * 12) requestAnimationFrame(startFrame);
       };
       requestAnimationFrame(startFrame);
+      // The nav's first paint: the first frame, after the scan answered, with a file row drawn.
+      const navFrame = () => {
+        const start = window.__perf.start;
+        if (start?.endState === "scan_pipeline_tree") {
+          const rows = [
+            ...document.querySelectorAll('[role="listitem"][data-filepath*="/file-"]'),
+          ].filter(shown);
+          if (rows.length) {
+            const ms = performance.now() - start.ms;
+            window.__perf.navPaint = { ms, endState: `rows:${rows.length}` };
+            return;
+          }
+        }
+        if (performance.now() < cap * 12) requestAnimationFrame(navFrame);
+      };
+      if (new URLSearchParams(location.search).get("perf") === "nav5k") {
+        requestAnimationFrame(navFrame);
+      }
     },
     { cap: END_CAP_MS },
   );
@@ -232,20 +269,28 @@ async function timedClick(page: Page, trigger: string, ends: Ends, arg: string):
   });
 }
 
-async function freshPage(browser: Browser) {
+/** An interactive shell has drawn (the start clock stopped). */
+const shellReady = (page: Page) =>
+  page.waitForFunction(() => !!window.__perf.start, null, { timeout: 60_000 });
+
+/** A fresh context on `url`, once `ready` holds. */
+async function freshPage(browser: Browser, url = "/?agents=teams", ready = shellReady) {
   const context = await browser.newContext({ viewport: VIEWPORT });
   const page = await context.newPage();
   await installClock(page);
-  await page.goto("/?agents=teams");
-  await page.waitForFunction(() => !!window.__perf.start, null, { timeout: 60_000 });
+  await page.goto(url);
+  await ready(page);
   return { context, page };
 }
 
-const results: Record<string, { unit: "ms"; samples: Sample[] }> = {};
-const record = (key: string, sample: Sample) => {
-  results[key] ??= { unit: "ms", samples: [] };
-  results[key].samples.push({ ms: Math.round(sample.ms * 10) / 10, endState: sample.endState });
+const results: Record<string, { unit: Unit; samples: Recorded[] }> = {};
+/** The sample field `scripts/perf-baseline.mjs` reads for each unit. */
+const FIELD = { ms: "ms", fps: "fps", MiB: "mib" } as const;
+const record = (key: string, unit: Unit, value: number, endState: string) => {
+  results[key] ??= { unit, samples: [] };
+  results[key].samples.push({ [FIELD[unit]]: Math.round(value * 10) / 10, endState });
 };
+const recordMs = (key: string, sample: Sample) => record(key, "ms", sample.ms, sample.endState);
 
 function commit() {
   if (process.env.GITHUB_SHA) return process.env.GITHUB_SHA.slice(0, 12);
@@ -256,36 +301,38 @@ function commit() {
   }
 }
 
+let engine = "";
+
+test.beforeAll(({ browserName }) => {
+  engine = browserName;
+});
+
+// One file for both describes: every key measured in the run.
+test.afterAll(() => {
+  if (!Object.keys(results).length) return;
+  const file = {
+    engine,
+    runs: RUNS,
+    commit: commit(),
+    date: new Date().toISOString().slice(0, 10),
+    throttle: "none",
+    keys: results,
+  };
+  fs.mkdirSync(path.dirname(OUT), { recursive: true });
+  fs.writeFileSync(OUT, `${JSON.stringify(file, null, 2)}\n`);
+  console.log(`perf-baseline wrote ${OUT}: ${Object.keys(results).join(", ")}`);
+});
+
 test.describe("perf baseline (measurement)", () => {
   test.skip(!ENABLED, "opt-in: set MEASURE_PERF_BASELINE=1");
   test.describe.configure({ mode: "serial" });
-  let engine = "";
-
-  test.beforeAll(({ browserName }) => {
-    engine = browserName;
-  });
-
-  test.afterAll(() => {
-    if (!Object.keys(results).length) return;
-    const file = {
-      engine,
-      runs: RUNS,
-      commit: commit(),
-      date: new Date().toISOString().slice(0, 10),
-      throttle: "none",
-      keys: results,
-    };
-    fs.mkdirSync(path.dirname(OUT), { recursive: true });
-    fs.writeFileSync(OUT, `${JSON.stringify(file, null, 2)}\n`);
-    console.log(`perf-baseline wrote ${OUT}: ${Object.keys(results).join(", ")}`);
-  });
 
   test("cold_start_mock", async ({ browser }) => {
     test.setTimeout(30_000 + RUNS * 60_000);
     for (let run = 0; run < RUNS; run++) {
       const { context, page } = await freshPage(browser);
       try {
-        record("cold_start_mock", (await page.evaluate(() => window.__perf.start))!);
+        recordMs("cold_start_mock", (await page.evaluate(() => window.__perf.start))!);
       } finally {
         await context.close();
       }
@@ -299,7 +346,10 @@ test.describe("perf baseline (measurement)", () => {
       const { context, page } = await freshPage(browser);
       try {
         // Cold: the first click after load mounts the other team's view.
-        record("open_other_team_agent_cold", await timedClick(page, other, "agent", OTHER_SESSION));
+        recordMs(
+          "open_other_team_agent_cold",
+          await timedClick(page, other, "agent", OTHER_SESSION),
+        );
         // Warm: back to an agent of the home team, then the other team's agent again.
         await page.locator(agentRow(HOME_TEAM, HOME_AGENT)).scrollIntoViewIfNeeded();
         await page.locator(agentRow(HOME_TEAM, HOME_AGENT)).click();
@@ -307,7 +357,10 @@ test.describe("perf baseline (measurement)", () => {
         // The label alone isn't enough once agents open without a team switch: wait until no
         // view of the other agent is left on screen.
         await page.waitForFunction((session) => !window.__perf.ends.agent(session), OTHER_SESSION);
-        record("open_other_team_agent_warm", await timedClick(page, other, "agent", OTHER_SESSION));
+        recordMs(
+          "open_other_team_agent_warm",
+          await timedClick(page, other, "agent", OTHER_SESSION),
+        );
       } finally {
         await context.close();
       }
@@ -327,7 +380,7 @@ test.describe("perf baseline (measurement)", () => {
           "team",
           OTHER_TEAM.split(":")[1]!,
         );
-        record("team_switch", sample);
+        recordMs("team_switch", sample);
       } finally {
         await context.close();
       }
@@ -340,7 +393,7 @@ test.describe("perf baseline (measurement)", () => {
       const { context, page } = await freshPage(browser);
       try {
         await page.getByTestId("identity-menu-trigger").click();
-        record(
+        recordMs(
           "tab_open",
           await timedClick(page, '[data-testid="identity-menu-routines"]', "schedule", ""),
         );
@@ -361,6 +414,273 @@ test.describe("perf baseline (measurement)", () => {
       );
     } finally {
       await context.close();
+    }
+  });
+});
+
+// --- 12 tiles and a 5,000-file nav ------------------------------------------------------------
+
+const TILE_PANELS = '[data-testid^="workspace-panels-"]';
+const IDLE_FLOOR_FPS = 30;
+const NAV_LIST = '[role="list"]:has([data-filepath])';
+const NAV_FILE = (name: string) => `[role="listitem"][data-filepath$="/${name}"]`;
+const NAV_WHEEL_PX = 1_000;
+
+/** All 12 tiles are on screen, each with its terminal drawn. */
+const tilesReady = (page: Page) =>
+  page.waitForFunction(
+    (selector) => {
+      const shown = (el: Element | null) => {
+        const box = el?.getBoundingClientRect();
+        return !!box && box.width > 0 && box.height > 0;
+      };
+      const panels = [...document.querySelectorAll(selector)].filter(shown);
+      return panels.length === 12 && panels.every((p) => shown(p.querySelector(".xterm-screen")));
+    },
+    TILE_PANELS,
+    { timeout: 60_000 },
+  );
+
+/** Starts counting animation frames; the window opens now, just before the first input. */
+const beginFrames = (page: Page) =>
+  page.evaluate(() => {
+    const rec = { t0: performance.now(), stamps: [] as number[], on: true };
+    window.__perf.frames = rec;
+    const frame = () => {
+      if (!rec.on) return;
+      rec.stamps.push(performance.now());
+      requestAnimationFrame(frame);
+    };
+    requestAnimationFrame(frame);
+  });
+
+/** Closes the window at the next animation frame: frames counted, its length, the worst gap. */
+const endFrames = (page: Page): Promise<Frames> =>
+  page.evaluate(
+    () =>
+      new Promise<Frames>((resolve) =>
+        requestAnimationFrame(() => {
+          const rec = window.__perf.frames!;
+          rec.on = false;
+          const ms = performance.now() - rec.t0;
+          const marks = [rec.t0, ...rec.stamps, rec.t0 + ms];
+          const worst = Math.max(...marks.slice(1).map((at, i) => at - marks[i]));
+          resolve({ frames: rec.stamps.length, ms, worst });
+        }),
+      ),
+  );
+
+const fpsOf = ({ frames, ms }: Frames) => (frames * 1000) / ms;
+
+/** The first tile's box width and its scrollbar slider's offset (xterm scrolls by the slider). */
+const firstTile = (page: Page) =>
+  page
+    .locator(TILE_PANELS)
+    .first()
+    .evaluate((panel) => ({
+      width: panel.getBoundingClientRect().width,
+      slider: (panel.querySelector(".scrollbar.vertical .slider") as HTMLElement | null)?.style.top,
+    }));
+
+const MIB = { B: 1 / 1024 ** 2, KB: 1 / 1024, MB: 1, GB: 1024 } as const;
+
+/**
+ * Playwright WebKit's WebContent process: the largest by RSS of the WebContent binaries under its
+ * `ms-playwright/webkit-*` cache (a spare or closed context's may run beside it), with `footprint`
+ * read on it. Null when this isn't macOS; zero matches on macOS is a fault.
+ */
+function webContentMemory() {
+  if (process.platform !== "darwin") return null;
+  const matches = execFileSync("ps", ["-axo", "pid=,rss=,command="], { encoding: "utf8" })
+    .split("\n")
+    .map((line) => /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(line))
+    .filter((m): m is RegExpExecArray => !!m)
+    .filter((m) => /\/ms-playwright\/webkit-[^/]+\/.*com\.apple\.WebKit\.WebContent/.test(m[3]))
+    .map((m) => ({ pid: m[1], rssKiB: Number(m[2]) }));
+  if (!matches.length) throw new Error("no WebContent process");
+  const top = matches.reduce((a, b) => (b.rssKiB > a.rssKiB ? b : a));
+  const text = execFileSync("footprint", [top.pid], { encoding: "utf8" });
+  const found = /Footprint:\s*([\d.]+)\s*(B|KB|MB|GB)\b/.exec(text);
+  if (!found) throw new Error(`footprint ${top.pid}: no Footprint line`);
+  return {
+    rssMiB: top.rssKiB / 1024,
+    footprintMiB: Number(found[1]) * MIB[found[2] as keyof typeof MIB],
+    endState: `playwright-webkit-webcontent mock webcontent:${matches.length}`,
+  };
+}
+
+test.describe("perf baseline: 12 tiles and a 5,000-file nav (measurement)", () => {
+  test.skip(!ENABLED, "opt-in: set MEASURE_PERF_BASELINE=1");
+  test.describe.configure({ mode: "serial" });
+
+  test("tiles_12", async ({ browser }) => {
+    test.setTimeout(30_000 + RUNS * 120_000);
+    for (let run = 0; run < RUNS; run++) {
+      const { context, page } = await freshPage(browser, "/?perf=tiles12", tilesReady);
+      try {
+        // Guard: the mosaic holds exactly the world's 12 tiles, each terminal drawn.
+        await expect(page.locator(TILE_PANELS)).toHaveCount(12);
+        await expect(page.locator(`${TILE_PANELS} .xterm-screen`)).toHaveCount(12);
+
+        // Control: a page whose frames don't pace would make any frame rate fiction.
+        await beginFrames(page);
+        await page.waitForTimeout(1_000);
+        const idle = fpsOf(await endFrames(page));
+        if (idle < IDLE_FLOOR_FPS) {
+          throw new Error(`idle ${idle.toFixed(1)} fps is under ${IDLE_FLOOR_FPS}: not pacing`);
+        }
+
+        // Resize: the window steps 1600×950 → 1200×800 and back in 10 steps each, then the
+        // divider between the first two columns drags 300 px right over 30 moves.
+        const widthBefore = (await firstTile(page)).width;
+        // The handle just right of the first tile, in its row.
+        const handle = await page
+          .locator(TILE_PANELS)
+          .first()
+          .evaluate((panel) => {
+            const tile = panel.getBoundingClientRect();
+            const found = [
+              ...document.querySelectorAll(
+                '[data-slot="resizable-handle"][aria-orientation="vertical"]',
+              ),
+            ]
+              .map((el) => el.getBoundingClientRect())
+              .find(
+                (box) =>
+                  Math.abs(box.x - tile.right) < 4 && box.y < tile.bottom && box.bottom > tile.top,
+              );
+            return found && { x: found.x + found.width / 2, y: tile.top + tile.height / 2 };
+          });
+        if (!handle) throw new Error("no divider beside the first tile");
+        await beginFrames(page);
+        for (let i = 1; i <= 10; i++) {
+          await page.setViewportSize({ width: 1600 - 40 * i, height: 950 - 15 * i });
+        }
+        for (let i = 1; i <= 10; i++) {
+          await page.setViewportSize({ width: 1200 + 40 * i, height: 800 + 15 * i });
+        }
+        const { x, y } = handle;
+        await page.mouse.move(x, y);
+        await page.mouse.down();
+        for (let i = 1; i <= 30; i++) await page.mouse.move(x + 10 * i, y);
+        await page.mouse.up();
+        const resize = await endFrames(page);
+        const widthAfter = (await firstTile(page)).width;
+        if (Math.abs(widthAfter - widthBefore) < 1) {
+          throw new Error(`the divider drag left the first tile at ${widthBefore}px`);
+        }
+
+        // Scroll: 40 wheel steps of 120 px up the first tile's scrollback.
+        const screen = (await page.locator(`${TILE_PANELS} .xterm-screen`).first().boundingBox())!;
+        await page.mouse.move(screen.x + screen.width / 2, screen.y + screen.height / 2);
+        const sliderBefore = (await firstTile(page)).slider;
+        await beginFrames(page);
+        for (let i = 0; i < 40; i++) await page.mouse.wheel(0, -120);
+        const scroll = await endFrames(page);
+        const sliderAfter = (await firstTile(page)).slider;
+        if (!sliderBefore || sliderAfter === sliderBefore) {
+          throw new Error(
+            `the first tile did not scroll (slider ${sliderBefore} -> ${sliderAfter})`,
+          );
+        }
+
+        const ends = (f: Frames) =>
+          `frames:${f.frames} worst:${f.worst.toFixed(1)}ms idle:${idle.toFixed(1)}`;
+        // Read before recording, so a memory fault records nothing for this run.
+        const memory = webContentMemory();
+        record("fps_12_tiles_resize", "fps", fpsOf(resize), ends(resize));
+        record("fps_12_tiles_scroll", "fps", fpsOf(scroll), ends(scroll));
+        if (memory) {
+          record("rss_12_tiles_renderer", "MiB", memory.rssMiB, memory.endState);
+          record("footprint_12_tiles_webcontent", "MiB", memory.footprintMiB, memory.endState);
+        } else if (run === 0) {
+          test.info().annotations.push({
+            type: "skip",
+            description: `memory: WebContent is read on macOS only, not ${process.platform}`,
+          });
+        }
+      } finally {
+        await context.close();
+      }
+    }
+  });
+
+  test("nav_5k", async ({ browser }) => {
+    test.setTimeout(30_000 + RUNS * 180_000);
+    const navReady = (page: Page) =>
+      page.waitForFunction(() => !!window.__perf.navPaint, null, { timeout: 60_000 });
+    for (let run = 0; run < RUNS; run++) {
+      const { context, page } = await freshPage(browser, "/?perf=nav5k", navReady);
+      try {
+        const paint = (await page.evaluate(() => window.__perf.navPaint))!;
+
+        // Open every folder, so scrolling to the end crosses all 5,000 file rows.
+        const opened = await page.evaluate(async (list) => {
+          const nav = document.querySelector<HTMLElement>(list)!;
+          const frame = () => new Promise((resolve) => requestAnimationFrame(resolve));
+          const shown = (el: Element) => el.getBoundingClientRect().height > 0;
+          nav.scrollTop = 0;
+          let clicks = 0;
+          for (let guard = 0; guard < 2_000; guard++) {
+            await frame();
+            const closed = [
+              ...nav.querySelectorAll('button.cs-nav-row[aria-expanded="false"]'),
+            ].find(shown);
+            if (closed) {
+              (closed as HTMLElement).click();
+              clicks++;
+              continue;
+            }
+            if (nav.scrollTop + nav.clientHeight >= nav.scrollHeight - 1) {
+              nav.scrollTop = 0;
+              await frame();
+              await frame();
+              return clicks;
+            }
+            nav.scrollTop += nav.clientHeight;
+          }
+          throw new Error("the nav's folders kept opening");
+        }, NAV_LIST);
+        await expect(page.locator(NAV_FILE("file-00000.md"))).toBeVisible();
+
+        // Scroll to the end: each wheel step's input to the next frame that shows it moved.
+        const list = page.locator(NAV_LIST);
+        const area = (await list.boundingBox())!;
+        await page.mouse.move(area.x + area.width / 2, area.y + area.height / 2);
+        const steps: number[] = [];
+        for (let guard = 0; guard < 1_000; guard++) {
+          const atEnd = await list.evaluate((nav) => {
+            if (nav.scrollTop + nav.clientHeight >= nav.scrollHeight - 1) return true;
+            const before = nav.scrollTop;
+            window.__perf.done = new Promise((resolve, reject) => {
+              const onWheel = () => {
+                window.removeEventListener("wheel", onWheel, true);
+                const start = performance.now();
+                const frame = () => {
+                  const ms = performance.now() - start;
+                  if (nav.scrollTop !== before) return resolve({ ms, endState: "moved" });
+                  if (ms > 5_000) return reject(new Error("the nav did not scroll in 5 s"));
+                  requestAnimationFrame(frame);
+                };
+                requestAnimationFrame(frame);
+              };
+              window.addEventListener("wheel", onWheel, true);
+            });
+            return false;
+          });
+          if (atEnd) break;
+          await page.mouse.wheel(0, NAV_WHEEL_PX);
+          steps.push((await page.evaluate(() => window.__perf.done!)).ms);
+        }
+        await expect(page.locator(NAV_FILE("file-04999.md"))).toBeVisible();
+        if (!steps.length) throw new Error("the nav was already at its end");
+        const p95 = [...steps].sort((a, b) => a - b)[Math.ceil(0.95 * steps.length) - 1];
+
+        record("nav_first_paint", "ms", paint.ms, paint.endState);
+        record("nav_scroll", "ms", p95, `steps:${steps.length} opened:${opened}`);
+      } finally {
+        await context.close();
+      }
     }
   });
 });
