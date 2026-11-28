@@ -55,6 +55,7 @@ fn may_kill(registry: &WindowRegistry, label: &str, cause: ReloadCause) -> bool 
 pub(crate) struct RendererOps<'a> {
     pub snapshot: &'a dyn Fn() -> Vec<u32>,
     pub responsible: &'a dyn Fn(u32) -> Option<u32>,
+    /// `Err` of kind `NotFound` means the process had already exited.
     pub signal: &'a mut dyn FnMut(u32) -> std::io::Result<()>,
 }
 
@@ -62,12 +63,18 @@ fn webcontent_pids() -> Vec<u32> {
     crate::memory_metrics::renderer_webcontent_snapshot().1
 }
 
+/// `SIGKILL` to `pid`. A process that already exited (`ESRCH`) is `ErrorKind::NotFound`, so
+/// [`terminate_survivors`] tells it apart without a platform check of its own. Off unix it
+/// signals nothing.
 fn sigkill(pid: u32) -> std::io::Result<()> {
     #[cfg(unix)]
     if unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) } != 0 {
-        return Err(std::io::Error::last_os_error());
+        let error = std::io::Error::last_os_error();
+        if error.raw_os_error() == Some(libc::ESRCH) {
+            return Err(std::io::Error::new(std::io::ErrorKind::NotFound, error));
+        }
+        return Err(error);
     }
-    #[cfg(not(unix))]
     let _ = pid;
     Ok(())
 }
@@ -204,8 +211,7 @@ fn terminate_survivors(
                     return Ok(killed);
                 }
                 if let Err(error) = (ops.signal)(pid) {
-                    #[cfg(unix)]
-                    if error.raw_os_error() == Some(libc::ESRCH) {
+                    if error.kind() == std::io::ErrorKind::NotFound {
                         log::info!(target: "webview-watchdog", "renderer pid={pid} exited before termination");
                         continue;
                     }
@@ -518,6 +524,39 @@ mod scope {
         }
         assert_eq!(result, Ok(1));
         assert_eq!(sent, 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_renderer_that_exited_before_its_signal_is_not_an_error() {
+        let reg = reg(false);
+        let mut child = std::process::Command::new("sleep")
+            .arg("5")
+            .spawn()
+            .unwrap();
+        let pid = child.id();
+        let snapshot = move || vec![pid];
+        let responsible = |_: u32| Some(std::process::id());
+        let mut signal = |_: u32| -> std::io::Result<()> {
+            Err(std::io::Error::from(std::io::ErrorKind::NotFound))
+        };
+        let liveness = <RendererLiveness as Default>::default();
+        let result = kill_step(
+            &reg,
+            "main",
+            &liveness,
+            &[pid],
+            Instant::now(),
+            0,
+            &mut RendererOps {
+                snapshot: &snapshot,
+                responsible: &responsible,
+                signal: &mut signal,
+            },
+        );
+        let _ = child.kill();
+        let _ = child.wait();
+        assert_eq!(result, Ok(0));
     }
 
     #[test]
