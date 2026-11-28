@@ -31,7 +31,14 @@ vi.mock("@tauri-apps/api/core", async (importActual) => ({
     }
     if (command === "load_app_state") return "{}";
     if (command === "window_get_slice") {
-      return { label: "main", kind: "main", version: 1, layoutRef: null, items: [], pending: false };
+      return {
+        label: "main",
+        kind: "main",
+        version: 1,
+        layoutRef: null,
+        items: [],
+        pending: false,
+      };
     }
     if (command === "local_profile_status") return { active: null };
     if (command === "query_context") return { items: [] };
@@ -135,19 +142,16 @@ describe("only main runs main's registry client", () => {
   it.each([
     { main: true, calls: ["window_get_slice", "window_ready"], listening: 1 },
     { main: false, calls: [], listening: 0 },
-  ])(
-    "main=$main: the registry client runs only in main",
-    async ({ main, calls, listening }) => {
-      host.main = main;
-      const { unmount } = renderHook(() => useMainWindowRegistry());
-      await new Promise((resolve) => setTimeout(resolve, 0));
-      expect(
-        invoked.filter((name) => name === "window_get_slice" || name === "window_ready"),
-      ).toEqual(calls);
-      expect(bus.get("window:slice")?.size ?? 0).toBe(listening);
-      unmount();
-    },
-  );
+  ])("main=$main: the registry client runs only in main", async ({ main, calls, listening }) => {
+    host.main = main;
+    const { unmount } = renderHook(() => useMainWindowRegistry());
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(
+      invoked.filter((name) => name === "window_get_slice" || name === "window_ready"),
+    ).toEqual(calls);
+    expect(bus.get("window:slice")?.size ?? 0).toBe(listening);
+    unmount();
+  });
 });
 
 describe("a satellite registers listeners by their inventory class", () => {
