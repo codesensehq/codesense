@@ -595,6 +595,8 @@ test("rust.yml's Linux app job runs the shared suites and the Secret Service tes
     ),
   );
   assert.ok(beta.run.includes('mv target/nextest/ci/junit.xml "$RUNNER_TEMP/junit/license.xml"'));
+  // A hang outside nextest's per-test timer fails the step, not the job's 60-minute limit.
+  assert.equal(beta["timeout-minutes"], 15);
   // Only the beta step and PDF export's display-only renderer step filter the app's tests.
   const pdf = job.steps.find(
     (step) => step.name === "Test PDF export's renderer on a virtual display",
