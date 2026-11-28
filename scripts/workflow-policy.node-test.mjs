@@ -2873,8 +2873,8 @@ test("nightly.yml's frame-media job continues only past its media step", () => {
     if (step !== media[0]) assert.ok(!("continue-on-error" in step), step.name);
   const upload = job.steps.find((step) => step.name === "Upload failure traces");
   assert.equal(upload.if, "${{ !cancelled() && (failure() || steps.media.outcome == 'failure') }}");
-  // The marker carries its tracking issue and an expiry that has not passed (UTC, as the
-  // quarantine ledger dates its entries).
+  // The marker carries its tracking issue and an expiry that has not passed and is at most 30
+  // days ahead, as the quarantine ledger caps its entries (UTC, as it dates them).
   const lines = text.split("\n");
   const at = lines.findIndex((line) => /^\s*continue-on-error: true\s*$/.test(line));
   assert.ok(at > 0 && lines.slice(0, at).some((line) => /^\s*id: media\s*$/.test(line)), "marker");
@@ -2891,4 +2891,8 @@ test("nightly.yml's frame-media job continues only past its media step", () => {
   );
   const today = Date.parse(`${new Date().toISOString().slice(0, 10)}T00:00:00Z`);
   assert.ok(expires >= today, `the continue-on-error marker expired on ${removeBy}`);
+  assert.ok(
+    expires - today <= 30 * 86400000,
+    "the continue-on-error marker may be renewed at most 30 days ahead",
+  );
 });
