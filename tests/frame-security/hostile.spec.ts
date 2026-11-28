@@ -12,8 +12,8 @@ import { LINUX_WEBKIT_MEDIA_SKIP, resolveFrameFixtureBinary } from "./support/fi
 // darwin its contexts send them to the fixture as a proxy, much as the app's web views
 // reach the API listener (#490). The host page and every other `127.0.0.1` load stay direct.
 const test = base.extend({
-  contextOptions: async ({ contextOptions, browserName }, use) => {
-    await use(
+  contextOptions: async ({ contextOptions, browserName }, provide) => {
+    await provide(
       process.platform === "darwin" && browserName === "webkit"
         ? {
             ...contextOptions,
