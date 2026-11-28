@@ -26,7 +26,8 @@
         <p>
           A <strong>work item</strong> is the one piece of work a lead launch starts. Its id is
           <code>wi_</code> followed by 16 lowercase hex digits, for example
-          <code>wi_3f9a0c41d27e88b5</code>. Every session below the lead shares it.
+          <code>wi_3f9a0c41d27e88b5</code>. Every agent session below the lead shares it; a plain
+          shell has none.
         </p>
         <ul>
           <li>
@@ -38,10 +39,10 @@
           <li>A plain shell never has a work item, even when an agent opens it.</li>
         </ul>
         <p>
-          The work item is written on the session record, so <code>list_sessions</code> and the agent
-          tree can group by it. It is also written on the record of a context worktree that a launch
-          creates, together with its lead's session and agent. A worktree that is reused keeps what it
-          has.
+          Today the work item is carried by two records: the session record, and the record of a
+          context worktree that a launch creates, together with its lead's session and agent. A
+          worktree that is reused keeps what it has. Neither <code>list_sessions</code> nor the agent
+          tree shows or groups by it yet; grouping by work item comes later.
         </p>
       </section>
 
@@ -77,13 +78,18 @@
             </tr>
             <tr>
               <td>A restore after a restart</td>
-              <td>the original launcher, unchanged; <code>restoredBy</code> says what restored it</td>
+              <td>
+                the original launcher, unchanged; a relaunch after a restart also records
+                <code>restoredBy: "CodeSense restore"</code>
+              </td>
             </tr>
           </tbody>
         </table>
         <p>
-          A filter on <code>launched_by</code> for a routine matches both <code>routine:&lt;key&gt;</code>
-          and a record saved in the older <code>routine &lt;name&gt;</code> form.
+          A <code>launched_by</code> filter matches a record with the same text. A record saved in the
+          older <code>routine &lt;name&gt;</code> form also matches a <code>routine:&lt;key&gt;</code>
+          filter when the last part of the key is the name as a slug: <code>routine Steward weekly</code>
+          matches <code>routine:acme/ops/steward-weekly</code>.
         </p>
       </section>
 
