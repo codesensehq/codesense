@@ -1,1 +1,17 @@
-[]
+[
+  {
+    "file": "src-tauri/src/groups/store.rs",
+    "fn": "GroupStore::commit",
+    "what": "writes and deletes group files"
+  },
+  {
+    "file": "src-tauri/src/context_repo/scratch_space.rs",
+    "fn": "exclude_group_files",
+    "what": "writes the group exclude lines into the scratch repo"
+  },
+  {
+    "file": "src-tauri/src/context_repo/scratch_space.rs",
+    "fn": "open_group_space",
+    "what": "creates the group folder and its .gitignore"
+  }
+]

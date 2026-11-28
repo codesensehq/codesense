@@ -201,6 +201,26 @@ one entry per file:
 doesn't call `tilesEnabled()` in code; a mention in a comment or a string
 doesn't count.
 
+A Rust site is one entry per function, whose first statement returns when the
+flag is off (`if !tiles { return; }`). Its `fn` is `Type::method` for a method
+and the bare name for a free function:
+
+```json
+[
+  {
+    "file": "src-tauri/src/groups/store.rs",
+    "fn": "GroupStore::commit",
+    "what": "writes and deletes group files"
+  }
+]
+```
+
+The TS guard checks only a Rust entry's shape. The cargo guard
+`src-tauri/crates/codesense-guards/tests/tiles_flag_sites_guard.rs` (in
+`cargo test -p codesense-guards`) fails if a listed function doesn't return
+first thing with the flag off, and if any function under `src-tauri/src/`
+returns when the flag is off but isn't listed.
+
 ## Who maintains CodeSense
 
 CodeSense has a single maintainer, who reviews every change and makes the final

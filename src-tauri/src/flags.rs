@@ -20,7 +20,9 @@
 //!
 //! With the flag off the app is today's app on untouched old state, and no tile code writes
 //! any file: every tile-file writer and the tile host's mount check `tilesEnabled()` and are
-//! listed in `src/shared/lib/tiles-flag-sites.json`, which a guard test checks.
+//! listed in `src/shared/lib/tiles-flag-sites.json`, which a guard test checks. A Rust site is
+//! listed there too, one `{file, fn, what}` entry per function whose first statement returns
+//! with the flag off, and the `codesense-guards` test `tiles_flag_sites_guard.rs` checks it.
 
 use std::path::Path;
 
