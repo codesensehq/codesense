@@ -6,7 +6,7 @@ import { agentKeyOfRevision } from "@/features/viewer/lib/agent-rows";
 import { agentRowLabel, isHeadlessSession } from "@/features/viewer/lib/agent-row-presentation";
 import { isAgentSession, type ListedAgentRow } from "@/features/viewer/lib/hand-agents";
 import { useAgentListProjectionStore } from "@/features/viewer/lib/agent-list-projection";
-import { AGENT_RUNTIMES } from "@/shared/lib/agent-runtimes";
+import { runtimeOf, STARTER_PREFIX } from "@/shared/lib/agent-runtimes";
 import type { AgentRuntime } from "@/tauri/commands";
 
 /** The agent a tab runs, as its timers need it (SW-AGR-6). */
@@ -18,14 +18,6 @@ export interface TabTimerAgent {
   /** A saved agent: not a built-in starter and not a hand-started CLI. */
   saved: boolean;
   runtime: AgentRuntime;
-}
-
-const STARTER_PREFIX = "builtin/";
-
-/** The runtime a starter key or an agent CLI names; Claude unless it names another CLI. */
-export function runtimeOf(agentKey: string | null, cli: string | null | undefined): AgentRuntime {
-  const named = agentKey?.startsWith(STARTER_PREFIX) ? agentKey.slice(STARTER_PREFIX.length) : cli;
-  return AGENT_RUNTIMES.find((runtime) => named?.startsWith(runtime)) ?? "claude";
 }
 
 /**

@@ -9320,7 +9320,7 @@ describe("line one with a launch prompt", () => {
       expect(rowMenuRenders.count).toBe(0);
       await settleRows();
       const before = new Map(rowRenders);
-      // Another team's rows change: its faces load into the shared store.
+      // Another team's data lands in a shared store the rows do not read.
       const { useAvatarPacksStore } = await import("@/shared/hooks/use-avatar-packs");
       await act(async () =>
         useAvatarPacksStore.setState((state) => ({
@@ -9333,6 +9333,14 @@ describe("line one with a launch prompt", () => {
       await settleRows();
       expect(rowRenders).toEqual(before);
       expect(rowMenuRenders.count).toBe(0);
+      // Positive controls: the counters do move. A status change re-renders its row, and
+      // opening a row's menu renders the menu body.
+      const target = agents[0];
+      await act(async () => hooked(target.session));
+      expect(rowRenders.get(target.session)).toBeGreaterThan(before.get(target.session) ?? 0);
+      fireEvent.contextMenu(rowOf(target.handle));
+      await settleRows();
+      expect(rowMenuRenders.count).toBeGreaterThan(0);
     } finally {
       vi.useRealTimers();
     }

@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 import type { ReactNode } from "react";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAllAgentRowsStore } from "@/features/agents/lib/agent-names";
 import type { AgentTreeNode } from "@/features/viewer/lib/agent-list-view";
 import type { AgentSessionRow } from "@/tauri/commands";
 import type { IdentityMenuKit } from "./agent-identity-menus";
@@ -12,7 +13,7 @@ vi.mock("@/shared/lib/interrupt-agent", async (importOriginal) => ({
   interruptAgent,
 }));
 vi.mock("@/features/viewer/lib/agent-inbox-actions", () => ({
-  useAgentChatEligible: () => false,
+  useAgentChatEligible: () => true,
 }));
 
 import { RowMenu } from "./agent-row-menu";
@@ -38,8 +39,10 @@ const liveClaude = {
   sessionId: "s1",
   alive: true,
   hasAgent: true,
-  kind: "terminal",
+  kind: "dashboard-launched",
   handle: "h",
+  machineId: null,
+  launchedBy: "lead",
   agentRevision: "builtin/claude@1",
 } as unknown as AgentSessionRow;
 
@@ -59,8 +62,15 @@ function open(row: AgentSessionRow, hasTab: boolean, onStop = vi.fn()) {
       viaName="Lead"
       pinLabel="Pin"
       pinHint="Pin it"
+      onQuickView={() => {}}
       onReveal={() => {}}
+      onSelectHandle={() => {}}
+      onHideTab={() => {}}
       onTogglePin={() => {}}
+      onMessage={() => {}}
+      onOpenInbox={() => {}}
+      onOpenStory={() => {}}
+      onLaunchUnder={() => {}}
       onStop={onStop}
     />,
   );
@@ -68,6 +78,7 @@ function open(row: AgentSessionRow, hasTab: boolean, onStop = vi.fn()) {
   return { labels, onStop };
 }
 
+beforeEach(() => useAllAgentRowsStore.setState({ rows: null, error: null }));
 afterEach(() => {
   cleanup();
   interruptAgent.mockClear();
@@ -88,6 +99,34 @@ describe("RowMenu Interrupt", () => {
     expect(labels[labels.indexOf("Show") + 1]).toBe("Interrupt");
   });
 
+  it("is the only addition to the whole menu, in today's order", () => {
+    const today = (reveal: string, tab: boolean) => [
+      "Quick view",
+      reveal,
+      "Go to Lead",
+      ...(tab ? ["Hide tab"] : []),
+      "Pin",
+      "Message in inbox",
+      "Open inbox",
+      "Open story",
+      "Launch agent under Ann…",
+      "Stop…",
+    ];
+    for (const [hasTab, reveal] of [
+      [true, "Go to terminal"],
+      [false, "Show"],
+    ] as const) {
+      const { labels } = open(liveClaude, hasTab);
+      cleanup();
+      const withoutIt = labels.filter((l) => l !== "Interrupt");
+      expect(withoutIt.slice(0, today(reveal, hasTab).length)).toEqual(today(reveal, hasTab));
+      const { labels: plain } = open({ ...liveClaude, hasAgent: false }, hasTab);
+      cleanup();
+      expect(withoutIt).toEqual(plain);
+      expect(labels.length).toBe(plain.length + 1);
+    }
+  });
+
   it.each([
     ["headless", { kind: "headless" }],
     ["opencode", { agentRevision: "builtin/opencode@1" }],
@@ -95,19 +134,67 @@ describe("RowMenu Interrupt", () => {
     ["session-less", { sessionId: null }],
     ["shell", { hasAgent: false }],
     ["hasAgent absent", { hasAgent: undefined }],
+    ["on a remote machine", { machineId: "m-1" }],
   ])("is absent on a %s row", (_name, patch) => {
     const { labels } = open({ ...liveClaude, ...patch } as AgentSessionRow, true);
     expect(labels).not.toContain("Interrupt");
   });
+});
 
-  it("adds Interrupt and nothing else to the menu", () => {
-    const cases = [true, false].map((hasTab) => {
-      const withIt = open(liveClaude, hasTab).labels;
-      cleanup();
-      const without = open({ ...liveClaude, hasAgent: false }, hasTab).labels;
-      cleanup();
-      return [withIt.filter((l) => l !== "Interrupt"), without];
+describe("RowMenu Interrupt runtime", () => {
+  const savedRow = {
+    ...liveClaude,
+    agentRevision: "acme/web/helper@3",
+    detected: { cli: null, dot: null },
+  } as unknown as AgentSessionRow;
+  const withDefinition = (runtime: string) =>
+    useAllAgentRowsStore.setState({
+      rows: [{ key: "acme/web/helper", runtime, scope: "team" }] as never,
+      error: null,
     });
-    for (const [a, b] of cases) expect(a).toEqual(b);
+
+  it("uses a starter's own runtime", () => {
+    open({ ...liveClaude, agentRevision: "builtin/codex@1" } as AgentSessionRow, true);
+    fireEvent.click(screen.getByRole("menuitem", { name: "Interrupt" }));
+    expect(interruptAgent).toHaveBeenCalledWith(expect.anything(), "codex");
+  });
+
+  it("uses a saved agent's definition runtime", () => {
+    withDefinition("codex");
+    open(savedRow, true);
+    fireEvent.click(screen.getByRole("menuitem", { name: "Interrupt" }));
+    expect(interruptAgent).toHaveBeenCalledWith(expect.anything(), "codex");
+  });
+
+  it("offers nothing on a saved agent whose runtime has no key", () => {
+    withDefinition("hermes");
+    expect(open(savedRow, true).labels).not.toContain("Interrupt");
+  });
+
+  it("uses the detected CLI of a hand-started agent", () => {
+    const hand = {
+      ...liveClaude,
+      agentRevision: undefined,
+      detected: { cli: "codex", dot: null },
+    } as unknown as AgentSessionRow;
+    open(hand, true);
+    fireEvent.click(screen.getByRole("menuitem", { name: "Interrupt" }));
+    expect(interruptAgent).toHaveBeenCalledWith(expect.anything(), "codex");
+  });
+
+  it.each(["aider", "gemini", "cursor-agent"])(
+    "offers nothing on a hand-started %s terminal",
+    (cli) => {
+      const hand = {
+        ...liveClaude,
+        agentRevision: undefined,
+        detected: { cli, dot: null },
+      } as unknown as AgentSessionRow;
+      expect(open(hand, true).labels).not.toContain("Interrupt");
+    },
+  );
+
+  it("offers nothing on a saved agent whose definition has not loaded and whose CLI is unknown", () => {
+    expect(open(savedRow, true).labels).not.toContain("Interrupt");
   });
 });
