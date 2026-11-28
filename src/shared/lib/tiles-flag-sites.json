@@ -35,6 +35,10 @@
     "what": "creates the group folder and its .gitignore"
   },
   {
+    "file": "src/features/shell/components/tile-host-mount.tsx",
+    "what": "mounts the tile host over the content area"
+  },
+  {
     "file": "src-tauri/src/live_hub/groups.rs",
     "fn": "project",
     "what": "publishes group changes on the group and groups topics"
