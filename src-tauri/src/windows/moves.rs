@@ -60,6 +60,9 @@ pub mod reason {
     pub const PENDING_TARGET: &str = "pending_target";
     pub const SELF: &str = "self";
     pub const UNKNOWN_TARGET: &str = "unknown_target";
+    /// The target satellite already holds an item, or one is moving into it: a satellite
+    /// shows one item until it has a Layout.
+    pub const OCCUPIED: &str = "occupied";
     pub const TILES_OFF: &str = "tiles_off";
     pub const DIRTY: &str = "dirty";
     pub const GONE: &str = "gone";
@@ -68,20 +71,25 @@ pub mod reason {
     pub const WINDOW_FAILED: &str = "window_failed";
 }
 
-/// A per-kind refusal: `Some(reason)` refuses the move before any registry change.
-type KindCheck = fn(&ItemKey) -> Option<&'static str>;
+/// A per-kind refusal: `Some(reason)` refuses the move before any registry change. It
+/// runs under the registry's lock and may read the registry through `Locked`.
+pub type KindCheck = fn(&Locked<'_>, &ItemKey) -> Option<&'static str>;
 
 /// Per-kind checks, by `ItemKey::kind`. Other kinds register theirs here.
 const KIND_CHECKS: &[(&str, KindCheck)] = &[];
 
 /// The refusal, if any, the item's kind gives for a move.
-pub fn kind_check(key: &ItemKey) -> Option<&'static str> {
-    kind_check_in(KIND_CHECKS, key)
+pub fn kind_check(locked: &Locked<'_>, key: &ItemKey) -> Option<&'static str> {
+    kind_check_in(KIND_CHECKS, locked, key)
 }
 
-fn kind_check_in(checks: &[(&str, KindCheck)], key: &ItemKey) -> Option<&'static str> {
+fn kind_check_in(
+    checks: &[(&str, KindCheck)],
+    locked: &Locked<'_>,
+    key: &ItemKey,
+) -> Option<&'static str> {
     let (_, check) = Iterator::find(&mut checks.iter(), |(kind, _)| *kind == key.kind)?;
-    check(key)
+    check(locked, key)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -155,7 +163,6 @@ impl MoveBook {
         self.moves.remove(id)
     }
 
-    #[cfg(test)]
     fn ids(&self) -> Vec<String> {
         BTreeMap::keys(&self.moves).cloned().collect()
     }
@@ -312,8 +319,12 @@ pub fn move_item(
     } else if !MoveHost::window_exists(host, to) {
         // The entry outlives a closed window until the registry drops it on close.
         return refused(reason::UNKNOWN_TARGET);
+    } else if to != MAIN_LABEL
+        && (Locked::holds_any_item(&locked, to) || MoveBook::targets(Locked::book_ref(&locked), to))
+    {
+        return refused(reason::OCCUPIED);
     }
-    if let Some(why) = kind_check(key) {
+    if let Some(why) = kind_check(&locked, key) {
         return refused(why);
     }
 
@@ -553,8 +564,8 @@ pub fn window_gone(host: &impl MoveHost, registry: &WindowRegistry, label: &str)
 }
 
 /// Aborts every move in flight with `why`, under the caller's lock. Returns the windows
-/// to destroy once the caller releases it.
-#[cfg(test)]
+/// to destroy once the caller releases it. Quit and profile switch call it.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn abort_all_moves_locked(
     locked: &mut Locked<'_>,
     host: &impl MoveHost,
@@ -568,7 +579,7 @@ pub fn abort_all_moves_locked(
 }
 
 /// Aborts every move in flight with `why`.
-#[cfg(test)]
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn abort_all_moves(host: &impl MoveHost, registry: &WindowRegistry, why: &str) {
     let mut locked = registry.locked();
     let destroy = abort_all_moves_locked(&mut locked, host, why);
@@ -831,6 +842,45 @@ mod call {
     }
 
     #[test]
+    fn a_satellite_that_holds_an_item_is_refused_as_occupied() {
+        let reg = WindowRegistry::new();
+        let rec = Rec::new(&reg);
+        satellite(&rec, "sat-1", &[tab("a.md")]);
+        rec.clear();
+        let out = move_item(&rec, &reg, MAIN_LABEL, &tab("b.md"), "sat-1", true);
+        assert_eq!(reason_of(out), reason::OCCUPIED);
+        assert!(rec.fx.borrow().is_empty());
+        assert_eq!(reg.owner(&tab("b.md")), MAIN_LABEL);
+    }
+
+    #[test]
+    fn a_satellite_an_item_is_moving_into_is_refused_as_occupied() {
+        let reg = WindowRegistry::new();
+        let rec = Rec::new(&reg);
+        satellite(&rec, "sat-1", &[]);
+        started(move_item(
+            &rec,
+            &reg,
+            MAIN_LABEL,
+            &tab("a.md"),
+            "sat-1",
+            true,
+        ));
+        let out = move_item(&rec, &reg, MAIN_LABEL, &tab("b.md"), "sat-1", true);
+        assert_eq!(reason_of(out), reason::OCCUPIED);
+    }
+
+    #[test]
+    fn main_is_never_occupied() {
+        let reg = WindowRegistry::new();
+        let rec = Rec::new(&reg);
+        let (a, b) = (tab("a.md"), tab("b.md"));
+        satellite(&rec, "sat-1", &[a.clone(), b.clone()]);
+        started(move_item(&rec, &reg, "sat-1", &a, MAIN_LABEL, true));
+        started(move_item(&rec, &reg, "sat-1", &b, MAIN_LABEL, true));
+    }
+
+    #[test]
     fn a_refusal_changes_nothing() {
         let reg = WindowRegistry::new();
         let rec = Rec::new(&reg);
@@ -931,21 +981,27 @@ mod call {
 
     #[test]
     fn the_kind_check_refuses_with_its_own_reason_before_any_change() {
-        fn no_tabs(_: &ItemKey) -> Option<&'static str> {
-            Some("tab_refused")
+        // A check reads the registry under the move's lock.
+        fn no_tabs_from_main(locked: &Locked<'_>, key: &ItemKey) -> Option<&'static str> {
+            (Locked::item_owner(locked, key) == MAIN_LABEL).then_some("tab_refused")
         }
-        let checks: &[(&str, KindCheck)] = &[("tab", no_tabs)];
-        assert_eq!(kind_check_in(checks, &tab("a.md")), Some("tab_refused"));
+        let reg = WindowRegistry::new();
+        let locked = reg.locked();
+        let checks: &[(&str, KindCheck)] = &[("tab", no_tabs_from_main)];
+        assert_eq!(
+            kind_check_in(checks, &locked, &tab("a.md")),
+            Some("tab_refused")
+        );
         let other = ItemKey {
             kind: "tile".to_owned(),
             ..tab("a.md")
         };
-        assert_eq!(kind_check_in(checks, &other), None);
+        assert_eq!(kind_check_in(checks, &locked, &other), None);
         assert!(
             std::hint::black_box(KIND_CHECKS).is_empty(),
             "no kind registers a check yet"
         );
-        assert_eq!(kind_check(&tab("a.md")), None);
+        assert_eq!(kind_check(&locked, &tab("a.md")), None);
     }
 
     #[test]

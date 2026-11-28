@@ -311,6 +311,14 @@ impl Locked<'_> {
         self.state.entries.get(label).is_some_and(|e| e.pending)
     }
 
+    /// Whether `label`'s entry holds any item.
+    pub fn holds_any_item(&self, label: &str) -> bool {
+        self.state
+            .entries
+            .get(label)
+            .is_some_and(|e| !BTreeSet::is_empty(&e.items))
+    }
+
     pub fn number_of(&self, label: &str) -> Option<u32> {
         self.state.entries.get(label).map(|e| e.number)
     }
