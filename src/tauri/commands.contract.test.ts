@@ -1354,8 +1354,10 @@ describe("Tauri IPC Contract", () => {
     // Window registry: +4 on both sides (window_get_slice, window_ready,
     // window_set_layout, window_focus_owner), and +1 for patchAppStateKeys/patch_app_state_keys
     // (a satellite's app-state key patch), so 556/575.
-    const EXPECTED_TS_COMMAND_COUNT = 556;
-    const EXPECTED_RUST_COMMAND_COUNT = 575;
+    // +2 on both sides for windowMoveItem/window_move_item and
+    // windowHandOffAck/window_hand_off_ack (moving an item between windows), so 558/577.
+    const EXPECTED_TS_COMMAND_COUNT = 558;
+    const EXPECTED_RUST_COMMAND_COUNT = 577;
     // The Rust count runs ahead of the TS count by the RUST_ONLY_COMMANDS that have no
     // renderer IPC wrapper (the access revocation and two session watchers plus the WV-B5/C6
     // scope-layer and harvest-norm Tauri commands whose FE wrappers land in later WV stories):

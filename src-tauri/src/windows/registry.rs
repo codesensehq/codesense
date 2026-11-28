@@ -11,6 +11,11 @@
 //!   changed only by the transaction methods below, so no other module can move an item.
 //! - **One Layout per window.** `layoutRef` is an opaque Layout id or `None`; two windows
 //!   never hold the same non-null one.
+//! - **Numbers.** `main` is window 1; a satellite takes the lowest free number from 2 when
+//!   it is added, and keeps it while it is open.
+//! - **Moves.** The move transaction (`moves.rs`) keeps its book here, under the same lock,
+//!   and works through [`Locked`]. A window that is a move's target stays `pending` until
+//!   the move commits or aborts, even after it reports ready.
 //!
 //! A few std calls are written as paths (`Iterator::find(..)`, `Vec::is_empty(..)`) or
 //! reborrows (`&*label`) so `explicit_sync_unattended_writer_guard`'s call graph resolves
@@ -24,6 +29,7 @@ use tauri::{Emitter, Manager, Runtime};
 
 use super::item_key::ItemKey;
 use super::label::MAIN_LABEL;
+use super::moves::MoveBook;
 
 /// The event a window's new slice is sent on, to that window only.
 pub const SLICE_EVENT: &str = "window:slice";
@@ -35,25 +41,38 @@ pub enum WindowKind {
     Satellite,
 }
 
+/// The item a pending window is waiting for, so it can say what is coming and from where.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Incoming {
+    pub key: ItemKey,
+    /// The number of the window the item is moving from.
+    pub from_number: u32,
+}
+
 /// One window's entry. `items` is private: only this file's methods change it.
 #[derive(Debug)]
 pub struct WindowEntry {
     label: String,
     kind: WindowKind,
+    number: u32,
     layout_ref: Option<String>,
     items: BTreeSet<ItemKey>,
     pending: bool,
+    incoming: Option<Incoming>,
     version: u64,
 }
 
 impl WindowEntry {
-    fn new(label: &str, kind: WindowKind, pending: bool) -> Self {
+    fn new(label: &str, kind: WindowKind, number: u32, pending: bool) -> Self {
         Self {
             label: label.to_owned(),
             kind,
+            number,
             layout_ref: None,
             items: BTreeSet::new(),
             pending,
+            incoming: None,
             version: 1,
         }
     }
@@ -65,10 +84,15 @@ impl WindowEntry {
 pub struct WindowSlice {
     pub label: String,
     pub kind: WindowKind,
+    /// The window's number: 1 for `main`.
+    pub number: u32,
     pub version: u64,
     pub layout_ref: Option<String>,
     pub items: Vec<ItemKey>,
     pub pending: bool,
+    /// A pending move's target only: the item it is waiting for.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub incoming: Option<Incoming>,
     /// `main`'s slice only: every satellite-owned key (canonical string) → its owner.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub owners: Option<BTreeMap<String, String>>,
@@ -109,6 +133,7 @@ impl<R: Runtime> WindowHost for tauri::AppHandle<R> {
 #[derive(Debug)]
 struct State {
     entries: BTreeMap<String, WindowEntry>,
+    moves: MoveBook,
 }
 
 impl State {
@@ -135,10 +160,12 @@ impl State {
         Ok(WindowSlice {
             label: e.label.clone(),
             kind: e.kind,
+            number: e.number,
             version: e.version,
             layout_ref: e.layout_ref.clone(),
             items: e.items.iter().cloned().collect(),
             pending: e.pending,
+            incoming: e.incoming.clone(),
             owners: (e.kind == WindowKind::Main).then(|| self.owners()),
         })
     }
@@ -152,6 +179,190 @@ impl State {
         if let Ok(slice) = self.slice(label) {
             host.send_slice(&slice);
         }
+    }
+
+    /// The lowest window number from 2 that no open window holds.
+    fn free_number(&self) -> u32 {
+        let taken: BTreeSet<u32> = self.entries.values().map(|e| e.number).collect();
+        Iterator::find(&mut (2..), |n| !taken.contains(n))
+            .expect("u32 numbers outlast open windows")
+    }
+
+    fn add_satellite(
+        &mut self,
+        host: &impl WindowHost,
+        label: &str,
+        incoming: Option<Incoming>,
+    ) -> Result<WindowSlice, String> {
+        if self.entries.contains_key(label) {
+            return Err(format!("window {label:?} already exists"));
+        }
+        let mut entry = WindowEntry::new(label, WindowKind::Satellite, self.free_number(), true);
+        entry.incoming = incoming;
+        self.entries.insert(label.to_owned(), entry);
+        let slice = self.slice(label)?;
+        host.send_slice(&slice);
+        Ok(slice)
+    }
+
+    fn ready(&mut self, host: &impl WindowHost, label: &str) -> Result<(), String> {
+        let held = MoveBook::targets(&self.moves, label);
+        let entry = self
+            .entries
+            .get_mut(label)
+            .ok_or_else(|| format!("no window {label:?}"))?;
+        // A move's target stays pending until the move commits or aborts.
+        if entry.pending && !held {
+            entry.pending = false;
+            self.bump_slice(host, label);
+        }
+        Ok(())
+    }
+
+    fn set_pending(
+        &mut self,
+        host: &impl WindowHost,
+        label: &str,
+        pending: bool,
+    ) -> Result<(), String> {
+        let entry = self
+            .entries
+            .get_mut(label)
+            .ok_or_else(|| format!("no window {label:?}"))?;
+        let clear_incoming = !pending && entry.incoming.is_some();
+        if entry.pending != pending || clear_incoming {
+            entry.pending = pending;
+            if !pending {
+                entry.incoming = None;
+            }
+            self.bump_slice(host, label);
+        }
+        Ok(())
+    }
+
+    fn reassign_item(
+        &mut self,
+        host: &impl WindowHost,
+        key: &ItemKey,
+        to: &str,
+    ) -> Result<bool, String> {
+        self.entry(to)?;
+        let holders: Vec<String> = self
+            .entries
+            .values()
+            .filter(|e| e.items.contains(key))
+            .map(|e| e.label.clone())
+            .collect();
+        let to_main = to == MAIN_LABEL;
+        if (Vec::is_empty(&holders) && to_main) || (holders.len() == 1 && holders[0] == to) {
+            return Ok(false);
+        }
+        let mut changed: Vec<String> = Vec::new();
+        for label in &holders {
+            if label != to {
+                if let Some(e) = self.entries.get_mut(label) {
+                    e.items.remove(key);
+                }
+                changed.push(label.clone());
+            }
+        }
+        if !to_main {
+            if let Some(e) = self.entries.get_mut(to) {
+                if e.items.insert(key.clone()) {
+                    changed.push(to.to_owned());
+                }
+            }
+        }
+        self.bump_slice(host, MAIN_LABEL);
+        for label in changed {
+            self.bump_slice(host, &label);
+        }
+        Ok(true)
+    }
+
+    /// Drops a satellite that holds no item (a move's half-made target). Sends nothing: the
+    /// window is destroyed next.
+    fn remove_satellite(&mut self, label: &str) -> Result<(), String> {
+        let entry = self.entry(label)?;
+        if entry.kind != WindowKind::Satellite || !BTreeSet::is_empty(&entry.items) {
+            return Err(format!("window {label:?} is not an empty satellite"));
+        }
+        self.entries.remove(label);
+        Ok(())
+    }
+}
+
+/// The registry under its lock, for a transaction of several steps (`moves.rs`). It offers
+/// the same changes as the methods of [`WindowRegistry`], and the move book.
+pub struct Locked<'a> {
+    state: std::sync::MutexGuard<'a, State>,
+}
+
+impl Locked<'_> {
+    pub fn item_owner(&self, key: &ItemKey) -> String {
+        State::owner(&self.state, key).to_owned()
+    }
+
+    pub fn has_window(&self, label: &str) -> bool {
+        self.state.entries.contains_key(label)
+    }
+
+    pub fn is_pending(&self, label: &str) -> bool {
+        self.state.entries.get(label).is_some_and(|e| e.pending)
+    }
+
+    /// Whether `label`'s entry holds any item.
+    pub fn holds_any_item(&self, label: &str) -> bool {
+        self.state
+            .entries
+            .get(label)
+            .is_some_and(|e| !BTreeSet::is_empty(&e.items))
+    }
+
+    pub fn number_of(&self, label: &str) -> Option<u32> {
+        self.state.entries.get(label).map(|e| e.number)
+    }
+
+    pub fn add_pending_target(
+        &mut self,
+        host: &impl WindowHost,
+        label: &str,
+        incoming: Incoming,
+    ) -> Result<WindowSlice, String> {
+        State::add_satellite(&mut self.state, host, label, Some(incoming))
+    }
+
+    pub fn mark_window_ready(&mut self, host: &impl WindowHost, label: &str) -> Result<(), String> {
+        State::ready(&mut self.state, host, label)
+    }
+
+    pub fn clear_target_pending(
+        &mut self,
+        host: &impl WindowHost,
+        label: &str,
+    ) -> Result<(), String> {
+        State::set_pending(&mut self.state, host, label, false)
+    }
+
+    pub fn reassign_item(
+        &mut self,
+        host: &impl WindowHost,
+        key: &ItemKey,
+        to: &str,
+    ) -> Result<bool, String> {
+        State::reassign_item(&mut self.state, host, key, to)
+    }
+
+    pub fn remove_empty_satellite(&mut self, label: &str) -> Result<(), String> {
+        State::remove_satellite(&mut self.state, label)
+    }
+
+    pub fn book(&mut self) -> &mut MoveBook {
+        &mut self.state.moves
+    }
+
+    pub fn book_ref(&self) -> &MoveBook {
+        &self.state.moves
     }
 }
 
@@ -169,16 +380,31 @@ impl Default for WindowRegistry {
 
 impl WindowRegistry {
     pub fn new() -> Self {
-        let main = WindowEntry::new(MAIN_LABEL, WindowKind::Main, false);
+        let main = WindowEntry::new(MAIN_LABEL, WindowKind::Main, 1, false);
         Self {
             state: Mutex::new(State {
                 entries: BTreeMap::from([(MAIN_LABEL.to_owned(), main)]),
+                moves: <MoveBook as Default>::default(),
             }),
         }
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, State> {
         self.state.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    /// The registry under its lock, for the move transaction.
+    pub fn locked(&self) -> Locked<'_> {
+        Locked { state: self.lock() }
+    }
+
+    /// Whether the lock is held now (a test's check that an effect ran outside it).
+    #[cfg(test)]
+    pub fn is_locked(&self) -> bool {
+        matches!(
+            self.state.try_lock(),
+            Err(std::sync::TryLockError::WouldBlock)
+        )
     }
 
     /// The window that owns `key`: the satellite whose `items` hold it, else `main`.
@@ -194,18 +420,11 @@ impl WindowRegistry {
         self.lock().slice(label)
     }
 
-    /// The window's listeners have mounted and it holds its slice. Clears `pending`.
+    /// The window's listeners have mounted and it holds its slice. Clears `pending`, except
+    /// on a move's target, which stays pending until the move commits or aborts.
+    #[cfg(test)]
     pub fn ready(&self, host: &impl WindowHost, label: &str) -> Result<(), String> {
-        let mut state = self.lock();
-        let entry = state
-            .entries
-            .get_mut(label)
-            .ok_or_else(|| format!("no window {label:?}"))?;
-        if entry.pending {
-            entry.pending = false;
-            state.bump_slice(host, label);
-        }
-        Ok(())
+        State::ready(&mut self.lock(), host, label)
     }
 
     /// Sets `label`'s Layout. A window sets only its own; `main` may set any. When
@@ -246,93 +465,42 @@ impl WindowRegistry {
 
     /// Creates a satellite entry with no items, no Layout and `pending` set, and sends it
     /// its first slice. Bumps no other window.
-    #[cfg_attr(not(test), allow(dead_code))] // Called when a window opens; nothing opens one yet.
+    #[cfg(test)]
     pub fn add_satellite(
         &self,
         host: &impl WindowHost,
         label: &str,
     ) -> Result<WindowSlice, String> {
-        let mut state = self.lock();
-        if state.entries.contains_key(label) {
-            return Err(format!("window {label:?} already exists"));
-        }
-        state.entries.insert(
-            label.to_owned(),
-            WindowEntry::new(label, WindowKind::Satellite, true),
-        );
-        let slice = state.slice(label)?;
-        host.send_slice(&slice);
-        Ok(slice)
+        State::add_satellite(&mut self.lock(), host, label, None)
     }
 
     /// Sets `label`'s `pending` flag. Bumps only that window.
-    #[cfg_attr(not(test), allow(dead_code))] // Called by the move; nothing moves an item yet.
+    #[cfg(test)]
     pub fn set_pending(
         &self,
         host: &impl WindowHost,
         label: &str,
         pending: bool,
     ) -> Result<(), String> {
-        let mut state = self.lock();
-        let entry = state
-            .entries
-            .get_mut(label)
-            .ok_or_else(|| format!("no window {label:?}"))?;
-        if entry.pending != pending {
-            entry.pending = pending;
-            state.bump_slice(host, label);
-        }
-        Ok(())
+        State::set_pending(&mut self.lock(), host, label, pending)
     }
 
     /// Moves `key` from its owner to `to` in one step; with `to` = `main` the key leaves
     /// every satellite. `main`'s new owner map is sent (a bump of `main`'s slice) before
     /// the satellites' slices and before this returns, so an item event a caller sends
     /// afterwards reaches `main` after the map. Returns whether anything changed.
-    #[cfg_attr(not(test), allow(dead_code))] // Called by the move; nothing moves an item yet.
+    #[cfg(test)]
     pub fn reassign_item(
         &self,
         host: &impl WindowHost,
         key: &ItemKey,
         to: &str,
     ) -> Result<bool, String> {
-        let mut state = self.lock();
-        state.entry(to)?;
-        let holders: Vec<String> = state
-            .entries
-            .values()
-            .filter(|e| e.items.contains(key))
-            .map(|e| e.label.clone())
-            .collect();
-        let to_main = to == MAIN_LABEL;
-        if (Vec::is_empty(&holders) && to_main) || (holders.len() == 1 && holders[0] == to) {
-            return Ok(false);
-        }
-        let mut changed: Vec<String> = Vec::new();
-        for label in &holders {
-            if label != to {
-                if let Some(e) = state.entries.get_mut(label) {
-                    e.items.remove(key);
-                }
-                changed.push(label.clone());
-            }
-        }
-        if !to_main {
-            if let Some(e) = state.entries.get_mut(to) {
-                if e.items.insert(key.clone()) {
-                    changed.push(to.to_owned());
-                }
-            }
-        }
-        state.bump_slice(host, MAIN_LABEL);
-        for label in changed {
-            state.bump_slice(host, &label);
-        }
-        Ok(true)
+        State::reassign_item(&mut self.lock(), host, key, to)
     }
 
     /// Returns `key` to `main`: it leaves its satellite. Returns whether it was held.
-    #[cfg_attr(not(test), allow(dead_code))] // Called by the return path; nothing holds an item yet.
+    #[cfg(test)]
     pub fn return_to_main(&self, host: &impl WindowHost, key: &ItemKey) -> Result<bool, String> {
         self.reassign_item(host, key, MAIN_LABEL)
     }
@@ -441,7 +609,7 @@ mod slices {
             for l in labels {
                 state.entries.insert(
                     (*l).to_owned(),
-                    WindowEntry::new(l, WindowKind::Satellite, true),
+                    WindowEntry::new(l, WindowKind::Satellite, 0, true),
                 );
             }
         }
@@ -584,7 +752,7 @@ mod slices {
         assert_eq!(
             v,
             serde_json::json!({
-                "label": "main", "kind": "main", "version": 1, "layoutRef": null,
+                "label": "main", "kind": "main", "number": 1, "version": 1, "layoutRef": null,
                 "items": [], "pending": false, "owners": {}
             })
         );
@@ -603,7 +771,7 @@ mod layout {
             for l in ["sat-1", "sat-2"] {
                 state.entries.insert(
                     l.to_owned(),
-                    WindowEntry::new(l, WindowKind::Satellite, false),
+                    WindowEntry::new(l, WindowKind::Satellite, 0, false),
                 );
             }
         }

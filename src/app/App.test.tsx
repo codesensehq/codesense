@@ -42,6 +42,8 @@ vi.mock("@/tauri/commands", () => ({
     owners: {},
   }),
   windowReady: vi.fn(() => Promise.resolve()),
+  // A move hands main's tab off and main acks it.
+  windowHandOffAck: vi.fn().mockResolvedValue("ignored"),
   // Custom right panes: the app-wide pane registration lists them.
   listPanes: vi.fn().mockResolvedValue({ contentRoot: "", chain: [], panes: [] }),
   // Agent tabs follow their agents' names: the app reads the agents on mount.

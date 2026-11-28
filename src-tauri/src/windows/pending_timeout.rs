@@ -34,7 +34,6 @@ pub const fn pending_timeout_ms(cold_ms: &[u64]) -> u64 {
 }
 
 /// How long a new window may take to paint before its open counts as failed.
-#[allow(dead_code)] // read by the window-open path, which lands after this module.
 pub const PENDING_TIMEOUT_MS: u64 = pending_timeout_ms(COLD_FIRST_PAINTS_MS);
 
 #[cfg(test)]

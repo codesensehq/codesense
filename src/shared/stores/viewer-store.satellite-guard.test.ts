@@ -70,6 +70,7 @@ function mainSlice(owners: Record<string, string>): WindowSlice {
   return {
     label: "main",
     kind: "main",
+    number: 1,
     version: 2,
     layoutRef: null,
     items: [],
