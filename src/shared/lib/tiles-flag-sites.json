@@ -21,6 +21,6 @@
   },
   {
     "file": "src/shared/stores/layout-store-client.ts",
-    "what": "reads a layout's group file at launch and writes it through group_commit"
+    "what": "reads a layout's group file at launch, writes it through group_commit and keeps app-state's launch roots"
   }
 ]

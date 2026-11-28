@@ -5,7 +5,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { applyKitOp, KIT_OP_FAILED } from "@/shared/tiling/apply-kit-op";
 import type { KitOp } from "@/shared/tiling/kit-op";
-import { serializeMosaicNode, setNodeSizes, type MosaicNode } from "@/shared/tiling/mosaic-tree";
+import {
+  parseMosaicNode,
+  serializeMosaicNode,
+  setNodeSizes,
+  type MosaicNode,
+} from "@/shared/tiling/mosaic-tree";
 
 const commands = vi.hoisted(() => ({
   groupRead: vi.fn(),
@@ -22,6 +27,7 @@ import {
   hydrateLayouts,
   layoutFileRef,
   resetLayoutClientForTests,
+  savedRoot,
   saveLayout,
   type LayoutSlices,
   type LayoutTarget,
@@ -335,5 +341,62 @@ describe("hydrating", () => {
     expect(state.foregroundLayout[TEAM].preset).toBe("custom");
     expect(saved(state.foregroundLayoutByRail[TEAM][""].root)).toBe(saved(TREE));
     expect(state.tabGridLayout[`${TEAM}|ws-1`]).toEqual({ preset: "grid", root: TREE });
+  });
+});
+
+describe("one tree whichever way the flag goes", () => {
+  const fixture = JSON.parse(
+    readFileSync(resolve(__dirname, "../../../tests/fixtures/group-file-v2.json"), "utf8"),
+  ) as { root: unknown };
+  const tree = parseMosaicNode(fixture.root)!;
+  /** `app-state.json`'s viewer section as a flag-off build saved it. */
+  const appState = {
+    terminalTabGridSizes: { [GRID.workspaceKey]: { preset: "grid", root: fixture.root } },
+  };
+  const stateWith = (root: MosaicNode) =>
+    ({
+      ...emptyState(),
+      tabGridLayout: { [GRID.workspaceKey]: { preset: "grid", root } },
+    }) as unknown as LayoutSlices;
+
+  it("a flag-on write, a flag-off launch and a flag-on launch load the same tree", async () => {
+    // A flag-on launch with no group file yet: the first save writes the tree.
+    commands.groupRead.mockResolvedValue(null);
+    let written: MosaicNode | null = null;
+    commands.groupCommit.mockImplementation(async (_org, _file, baseRev: number, ops: KitOp[]) => {
+      written = applyAll(null, ops);
+      return { rev: baseRev + 1 };
+    });
+    await hydrateLayouts(stateWith(tree), () => {}, appState);
+    saveLayout(GRID, tree);
+    await flushGroupCommits();
+    expect(saved(written)).toBe(saved(tree));
+    // `app-state.json` keeps its launch root, byte for byte.
+    const kept = savedRoot("tabGridLayout", GRID.workspaceKey, setNodeSizes(tree, [], [10, 90]));
+    expect(JSON.stringify(kept)).toBe(JSON.stringify(fixture.root));
+
+    // A flag-off launch reads that root from `app-state.json`.
+    flag.on = false;
+    resetLayoutClientForTests();
+    const reads = commands.groupRead.mock.calls.length;
+    const offState = stateWith(parseMosaicNode(kept)!);
+    await hydrateLayouts(offState, () => {}, appState);
+    expect(saved(offState.tabGridLayout[GRID.workspaceKey].root)).toBe(saved(tree));
+    expect(commands.groupRead).toHaveBeenCalledTimes(reads);
+
+    // A flag-on launch reads it from the group file.
+    flag.on = true;
+    resetLayoutClientForTests();
+    commands.groupRead.mockResolvedValue({ rev: 1, tree: wire(written) });
+    const onState = stateWith(setNodeSizes(tree, [], [10, 90]));
+    await hydrateLayouts(onState, (update) => Object.assign(onState, update(onState)), appState);
+    expect(saved(onState.tabGridLayout[GRID.workspaceKey].root)).toBe(saved(tree));
+  });
+
+  it("with the flag off, a persist saves the live root", async () => {
+    flag.on = false;
+    await hydrateLayouts(stateWith(tree), () => {}, appState);
+    const live = setNodeSizes(tree, [], [10, 90]);
+    expect(savedRoot("tabGridLayout", GRID.workspaceKey, live)).toEqual(serializeMosaicNode(live));
   });
 });

@@ -248,14 +248,13 @@ import {
   type TeamOrderSource,
 } from "@/features/viewer/lib/workspace-order";
 import type { Heading } from "@/features/viewer/lib/note-headings";
-import { hydrateLayouts, saveLayout } from "@/shared/stores/layout-store-client";
+import { hydrateLayouts, savedRoot, saveLayout } from "@/shared/stores/layout-store-client";
 import type { KitOp } from "@/shared/tiling/kit-op";
 import {
   type MosaicNode,
   type SavedPresetTree,
   type TilePlacementTarget,
   parseMosaicNode,
-  serializeMosaicNode,
   type SavedMosaicNode,
   seedTreeFromFlat,
   buildBalancedGrid,
@@ -1887,12 +1886,14 @@ function restoredForegroundLayoutsByRail(
 }
 
 /** Layouts in their saved form, foreground and tab-grid alike: every root's
- *  leaves carry both keys, and a root of none saves as `null`. */
+ *  leaves carry both keys, and a root of none saves as `null`. With the tiles
+ *  flag on, each root is the one `app-state.json` held at launch (`savedRoot`). */
 function savedLayouts<T extends { root: MosaicNode | null }>(
   layouts: Record<string, T>,
+  slice: string,
 ): Record<string, Omit<T, "root"> & { root: SavedMosaicNode | null }> {
   return Object.fromEntries(
-    Object.entries(layouts).map(([k, v]) => [k, { ...v, root: serializeMosaicNode(v.root) }]),
+    Object.entries(layouts).map(([k, v]) => [k, { ...v, root: savedRoot(slice, k, v.root) }]),
   );
 }
 
@@ -1901,7 +1902,10 @@ function savedForegroundLayoutsByRail(
   byTeam: Record<string, Record<string, ForegroundLayout>>,
 ): Record<string, ReturnType<typeof savedLayouts<ForegroundLayout>>> {
   return Object.fromEntries(
-    Object.entries(byTeam).map(([tk, byRail]) => [tk, savedLayouts(byRail)]),
+    Object.entries(byTeam).map(([tk, byRail]) => [
+      tk,
+      savedLayouts(byRail, `foregroundLayoutByRail\n${tk}`),
+    ]),
   );
 }
 
@@ -6170,7 +6174,7 @@ function serializedViewerPrefs(state: ViewerState): Record<string, unknown> {
     agentsPaneHiddenTeams,
     agentsWorkspaceFilter,
     // Saved with both leaf keys, so a build that reads only `workspaceId` still opens it.
-    foregroundLayout: savedLayouts(foregroundLayout),
+    foregroundLayout: savedLayouts(foregroundLayout, "foregroundLayout"),
     // SW-EW-40: persist the per-rail foreground arrangement (railKeyByWorkspaceId
     // is runtime-only — a pure tree derivation — so it is NOT serialized here,
     // like selectedEpicDirName).
@@ -6212,7 +6216,7 @@ function serializedViewerPrefs(state: ViewerState): Record<string, unknown> {
     // Remote tab focus belongs to this viewer; local focus comes from its host.
     terminalViewerFocus: state.terminalLayout.focus ?? {},
     // The sizes each workspace's tab grid was dragged to (this viewer's own).
-    terminalTabGridSizes: savedLayouts(state.tabGridLayout),
+    terminalTabGridSizes: savedLayouts(state.tabGridLayout, "tabGridLayout"),
     statusNavExpandedPaths,
     settings,
     pipelineScope,
@@ -12959,7 +12963,7 @@ const viewerStore: StateCreator<ViewerState> = (set, get) => ({
         // Tab-grid sizes only for workspaces that came back, open or minimized.
         set((st) => ({ tabGridLayout: tabGridsOfLiveWorkspaces(st) }));
         // With the tiles flag on, each layout's group file wins over what was restored.
-        void hydrateLayouts(get(), set);
+        void hydrateLayouts(get(), set, data.viewer);
 
         // SW-WL-3 T1.3 / F-7: rebuild the (runtime-only) open-set from the
         // restored surfaces. Story workspaces were explicit user surfaces, so

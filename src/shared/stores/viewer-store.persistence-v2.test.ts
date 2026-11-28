@@ -22,6 +22,7 @@ import {
 import { useOrgStore } from "./org-store";
 import { serializeMosaicNode } from "@/shared/tiling";
 import * as commands from "@/tauri/commands";
+import { flushGroupCommits, resetLayoutClientForTests } from "./layout-store-client";
 import { buildRootWorkspaceId, NO_TEAM_SENTINEL } from "@/shared/lib/team-key";
 import { EMPTY_TERMINAL_LAYOUT } from "@/shared/lib/terminal-layout-projection";
 import type { DerivedPipelineTree } from "@/shared/lib/pipeline-graph/types";
@@ -85,7 +86,12 @@ describe("host-aware viewer identity", () => {
 // The persist → reload round-trip. Terminals are the host's, so the saved
 // viewer carries none of them; minimized workspaces round-trip as records.
 
+const tiles = vi.hoisted(() => ({ on: false }));
+vi.mock("@/shared/lib/tiles-enabled", () => ({ tilesEnabled: () => Promise.resolve(tiles.on) }));
+
 vi.mock("@/tauri/commands", () => ({
+  groupRead: vi.fn().mockResolvedValue(null),
+  groupCommit: vi.fn().mockResolvedValue({ rev: 1 }),
   saveAppState: vi.fn().mockResolvedValue(undefined),
   loadAppState: vi.fn().mockResolvedValue("{}"),
   listNotes: vi.fn().mockResolvedValue([]),
@@ -1625,6 +1631,53 @@ describe("mosaic leaves saved before leaves carried an id", () => {
     expect(s.foregroundLayoutByRail[TEAM_KEY].epic.root).toEqual(inMemory);
     expect(s.tabGridLayout[gridKey].root).toEqual(inMemory);
     applyOwnedViewerPrefs({}, true);
+  });
+
+  it("with the tiles flag on, a gesture and a persist leave each saved root as launch read it", async () => {
+    resetViewer();
+    seedOrg([SLUG_A]);
+    tiles.on = true;
+    try {
+      const workspace = {
+        id: "S-1",
+        kind: "story",
+        cwd: "/wt/S-1",
+        storyFilePath: "/stories/S-1.md",
+        storyId: "S-1",
+        status: "ready",
+      };
+      const launchFile = JSON.stringify({
+        viewer: { schemaVersion: 15, ...legacyViewer, workspaces: { [TEAM_KEY]: [workspace] } },
+      });
+      loadAppStateMock.mockResolvedValue(launchFile);
+      await useViewerStore.getState().loadPersistedState();
+      await flushGroupCommits();
+      const store = useViewerStore.getState();
+      store.setForegroundNodeSizes(TEAM_KEY, [], [60, 40]);
+      store.setTabGridSizes(TEAM_KEY, "S-1", "rows", inMemory as never, [], [60, 40]);
+      await flushGroupCommits();
+      const s = useViewerStore.getState();
+      const sizesOf = (root: unknown) => (root as { sizes: number[] }).sizes;
+      expect(sizesOf(s.foregroundLayout[TEAM_KEY].root)).toEqual([60, 40]);
+      expect(sizesOf(s.tabGridLayout[gridKey].root)).toEqual([60, 40]);
+      expect(commands.groupCommit).toHaveBeenCalled();
+      await persisted();
+      // The file as written: the launch file with every save's patch applied.
+      const viewer = committedViewerState(JSON.parse(launchFile)).viewer;
+      const fg = viewer.foregroundLayout as Record<string, { root: unknown }>;
+      const byRail = viewer.foregroundLayoutByRail as Record<
+        string,
+        Record<string, { root: unknown }>
+      >;
+      const grids = viewer.terminalTabGridSizes as Record<string, { root: unknown }>;
+      // The roots launch read, legacy leaves and sizes as they were.
+      expect(fg[TEAM_KEY].root).toEqual(legacyRoot);
+      expect(byRail[TEAM_KEY].epic.root).toEqual(legacyRoot);
+      expect(grids[gridKey].root).toEqual(legacyRoot);
+    } finally {
+      tiles.on = false;
+      resetLayoutClientForTests();
+    }
   });
 
   it("saves foreground and tab-grid layouts through one body, a root of none as none", async () => {

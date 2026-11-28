@@ -13,15 +13,22 @@
  * gesture. Any reply other than the next rev means another writer was folded in, so the window
  * re-reads the head and shows it.
  *
- * With the flag off nothing here reads or writes a group file, and `app-state.json` keeps the
- * layout as before.
+ * With the flag on, `app-state.json` keeps the roots it held at launch as a read-only fallback:
+ * `savedRoot` hands them back to the store's persist, so its bytes for them never change. With
+ * the flag off nothing here reads or writes a group file, and `app-state.json` saves the layout
+ * as before.
  */
 import { tilesEnabled } from "@/shared/lib/tiles-enabled";
 import { parseTeamKey } from "@/shared/lib/parse-team-key";
 import { parseWorkspaceKey } from "@/shared/lib/workspace-key";
 import { applyKitOp, KIT_OP_FAILED } from "@/shared/tiling/apply-kit-op";
 import type { KitOp } from "@/shared/tiling/kit-op";
-import { parseMosaicNode, type MosaicNode } from "@/shared/tiling/mosaic-tree";
+import {
+  parseMosaicNode,
+  serializeMosaicNode,
+  type MosaicNode,
+  type SavedMosaicNode,
+} from "@/shared/tiling/mosaic-tree";
 import { groupCommit, groupRead, type GroupFileRef } from "@/tauri/commands";
 import type { ViewerState } from "./viewer-store";
 
@@ -141,6 +148,45 @@ interface LayoutFile {
 let files = new Map<string, LayoutFile>();
 let lane: Promise<void> = Promise.resolve();
 let seed: Seed | null = null;
+/** The roots `app-state.json` held at launch, by `slotKey`; set once the flag reads on. */
+let launchRoots: Map<string, unknown> | null = null;
+
+/** A saved layout slot: the store slice that holds it (a rail's slice names its team too) and
+ *  its key there. */
+const slotKey = (slice: string, key: string) => `${slice}\n${key}`;
+
+/** Every saved root in `viewer`, the viewer section `app-state.json` held at launch. */
+function rootsOf(viewer: Record<string, unknown>): Map<string, unknown> {
+  const roots = new Map<string, unknown>();
+  const record = (v: unknown) =>
+    (v && typeof v === "object" ? v : {}) as Record<string, { root?: unknown } | undefined>;
+  const add = (slice: string, layouts: unknown) => {
+    for (const [key, layout] of Object.entries(record(layouts))) {
+      if (layout && typeof layout === "object" && "root" in layout) {
+        roots.set(slotKey(slice, key), layout.root);
+      }
+    }
+  };
+  add("foregroundLayout", viewer.foregroundLayout);
+  for (const [teamKey, rails] of Object.entries(record(viewer.foregroundLayoutByRail))) {
+    add(slotKey("foregroundLayoutByRail", teamKey), rails);
+  }
+  add("tabGridLayout", viewer.terminalTabGridSizes);
+  return roots;
+}
+
+/**
+ * The root the store's persist saves for slot `key` of `slice`: with the flag on, the one
+ * `app-state.json` held at launch (none for a slot it didn't hold); else `root`, saved.
+ */
+export function savedRoot(
+  slice: string,
+  key: string,
+  root: MosaicNode | null,
+): SavedMosaicNode | null {
+  if (!launchRoots) return serializeMosaicNode(root);
+  return (launchRoots.get(slotKey(slice, key)) ?? null) as SavedMosaicNode | null;
+}
 
 /** Runs `step` after every step before it, so ops reach a file in the order they were made. */
 function inLane(step: () => Promise<void>): Promise<void> {
@@ -318,11 +364,17 @@ function targetsOf(state: LayoutSlices): LayoutTarget[] {
 /**
  * Reads the group file of every layout `state` holds and shows each tree found through `set`,
  * which also shows a head a later conflict reloads. A layout with no group file keeps what
- * `app-state.json` restored.
+ * `app-state.json` restored. `launch` is the viewer section `app-state.json` held, whose roots
+ * the store then saves unchanged.
  */
-export function hydrateLayouts(state: LayoutSlices, set: Seed): Promise<void> {
+export function hydrateLayouts(
+  state: LayoutSlices,
+  set: Seed,
+  launch: Record<string, unknown> = {},
+): Promise<void> {
   return inLane(async () => {
     if (!(await tilesEnabled())) return;
+    launchRoots = rootsOf(launch);
     seed = set;
     for (const target of targetsOf(state)) {
       const f = await fileFor(target);
@@ -337,4 +389,5 @@ export function resetLayoutClientForTests(): void {
   files = new Map();
   lane = Promise.resolve();
   seed = null;
+  launchRoots = null;
 }
