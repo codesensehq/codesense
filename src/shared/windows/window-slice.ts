@@ -8,7 +8,7 @@ export const WINDOW_SLICE_EVENT = "window:slice";
 type WindowKind = "main" | "satellite";
 
 /** The item a pending move's target waits for, and the window it comes from. */
-export interface Incoming {
+interface Incoming {
   key: ItemKey;
   fromNumber: number;
 }

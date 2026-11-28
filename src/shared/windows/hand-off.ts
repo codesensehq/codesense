@@ -44,7 +44,7 @@ export interface HandOff {
 }
 
 /** Whether `key` has an unsaved edit in this window. */
-export function isItemDirty(key: ItemKey): boolean {
+function isItemDirty(key: ItemKey): boolean {
   return readTeamKeyed(useViewerStore.getState().editingDirtyPaths, key.team, []).includes(key.id);
 }
 
