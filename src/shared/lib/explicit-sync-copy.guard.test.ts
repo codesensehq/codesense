@@ -21,7 +21,8 @@ const BANNED =
 /** Copy only: a string without whitespace is an identifier (an event field, a test id). */
 const phrases = (path: string) => copyStrings(path).filter(({ text }) => /\s/.test(text.trim()));
 
-describe("app copy promises no automatic sync (SW-XS-11)", () => {
+// The scan reads every source file under src/: seconds locally, longer on a loaded CI runner.
+describe("app copy promises no automatic sync (SW-XS-11)", { timeout: 20_000 }, () => {
   it("no user-facing string says projected, materialize, every worktree or in sync", () => {
     const hits = sourceFiles(join(ROOT, "src")).flatMap((path) =>
       phrases(path)
