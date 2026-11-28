@@ -4301,9 +4301,10 @@ pub(crate) mod agent_opens {
     mod dashboard_launches {
         use super::*;
 
-        /// The port a dashboard's launch opens through: the page's own org and team is the
-        /// active team (`page_active_team`, the one `ScopedPort` uses), over the test host.
-        struct PagePort(Arc<FakeHost>, crate::dashboard_publish::state::Scope);
+        /// The port a dashboard's launch opens through, over the test host. Its active team
+        /// is another org's team, never the page's: the page's team has to come from the
+        /// launch itself.
+        struct PagePort(Arc<FakeHost>, ActiveTeam);
 
         #[async_trait::async_trait]
         impl OpenWorkspacePort for PagePort {
@@ -4318,10 +4319,7 @@ pub(crate) mod agent_opens {
                 Err("target required".into())
             }
             async fn targeted(&self) -> Result<(ActiveTeam, Box<dyn OpenHost>), String> {
-                Ok((
-                    crate::dashboard_publish::actions::page_active_team(&self.1),
-                    Box::new(SharedHost(self.0.clone())),
-                ))
+                Ok((self.1.clone(), Box::new(SharedHost(self.0.clone()))))
             }
             fn reveal(&self, _handle: &str, _focus: bool) {}
         }
@@ -4342,46 +4340,48 @@ pub(crate) mod agent_opens {
             }
         }
 
-        /// A dashboard launch with no launcher records the page's org and team, on the story
-        /// route and on the team-workspace fallback, while another team also exists.
+        /// Another org's team, active on the port while the page's own team is launched into.
+        fn elsewhere() -> ActiveTeam {
+            ActiveTeam {
+                org: "elsewhere-org".into(),
+                team: "elsewhere".into(),
+            }
+        }
+
+        /// A dashboard launch with no launcher records the page's org and team on the
+        /// team-workspace fallback, not the active team's. The story route is not pinned
+        /// here: its team is stamped by the story launch spine, which needs the running app.
         #[tokio::test]
-        async fn a_dashboard_launch_records_the_pages_team_on_both_routes() {
+        async fn a_dashboard_launch_records_the_pages_team_on_the_fallback_route() {
             let tmp = tempfile::tempdir().unwrap();
-            let (host, port, key) = setup(tmp.path(), draft("triage", AgentCli::Claude));
-            let (host, _) = with_story(host, port, "SW-P", PARENT_TEAM);
+            let (host, _port, key) = setup(tmp.path(), draft("triage", AgentCli::Claude));
             let scope = page(AGENT_TEAM);
-            let port = PagePort(host.clone(), scope.clone());
+            let port = PagePort(host.clone(), elsewhere());
             let team_scope = team_caller(tmp.path(), AGENT_TEAM);
             let caller = (tmp.path(), &alice(), &team_scope);
             let expected = LaunchTeam {
                 org: AGENT_ORG.to_string(),
                 team: AGENT_TEAM.to_string(),
             };
-            for (id, has_worktree) in [("SW-9", true), ("SW-FALLBACK", false)] {
-                let launched = crate::dashboard_publish::actions::launch(
-                    &port,
-                    &launch_action(&key),
-                    id,
-                    &scope,
-                    "board",
-                    has_worktree,
-                    caller,
-                )
-                .await
-                .unwrap();
-                let handle = launched["handle"].as_str().unwrap();
-                assert_eq!(
-                    host.registry.launch_team(handle),
-                    Some(expected.clone()),
-                    "{id} (worktree {has_worktree}): {launched}"
-                );
-            }
-            assert_eq!(host.launches().len(), 2);
+            let launched = crate::dashboard_publish::actions::launch(
+                &port,
+                &launch_action(&key),
+                "SW-FALLBACK",
+                &scope,
+                "board",
+                false,
+                caller,
+            )
+            .await
+            .unwrap();
+            let handle = launched["handle"].as_str().unwrap();
+            assert_eq!(host.registry.launch_team(handle), Some(expected), "{launched}");
+            assert_eq!(host.launches().len(), 1);
         }
 
         /// A page whose team the caller can't launch into is refused, and nothing is launched.
-        /// `launch` folds every open error into "failed", so the unchanged `MISSING` is pinned
-        /// on the real open entry with the same port and caller.
+        /// `launch` folds every open error into "failed", so it cannot show the reason; the
+        /// unchanged `MISSING` is pinned on the real open entry with the same port and caller.
         #[tokio::test]
         async fn a_dashboard_launch_into_a_team_it_cannot_launch_into_is_missing() {
             let tmp = tempfile::tempdir().unwrap();
@@ -4390,7 +4390,7 @@ pub(crate) mod agent_opens {
             // The caller is the agent team's; the page names its parent.
             let team_scope = team_caller(tmp.path(), AGENT_TEAM);
             let scope = page(PARENT_TEAM);
-            let port = PagePort(host.clone(), scope.clone());
+            let port = PagePort(host.clone(), elsewhere());
             let caller = (tmp.path(), &alice(), &team_scope);
             for has_worktree in [true, false] {
                 let refused = crate::dashboard_publish::actions::launch(

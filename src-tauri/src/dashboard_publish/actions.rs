@@ -710,16 +710,6 @@ pub fn open_stream(
     })
 }
 
-/// The team a dashboard's launch is active in: its page's own org and team.
-pub(crate) fn page_active_team(
-    scope: &super::state::Scope,
-) -> crate::commands::workspace_open::ActiveTeam {
-    crate::commands::workspace_open::ActiveTeam {
-        org: scope.org.clone(),
-        team: scope.team.clone(),
-    }
-}
-
 struct ScopedPort {
     app: tauri::AppHandle,
     scope: super::state::Scope,
@@ -747,7 +737,10 @@ impl crate::commands::workspace_open::OpenWorkspacePort for ScopedPort {
     > {
         let ctx = crate::commands::route_to_context::derive_active_context(&self.app).await?;
         Ok((
-            page_active_team(&self.scope),
+            crate::commands::workspace_open::ActiveTeam {
+                org: self.scope.org.clone(),
+                team: self.scope.team.clone(),
+            },
             Box::new(crate::commands::workspace_open::AppOpenHost {
                 app: self.app.clone(),
                 principal: ctx.principal(),
