@@ -34,7 +34,8 @@ import { expect, test, type Browser, type Page } from "@playwright/test";
  * A second serial `describe` measures two more mock worlds, so a failure there never skips the
  * cases above. `tiles_12` (`?perf=tiles12`, 12 workspaces tiled 4 × 3): the mean frame rate while
  * the window resizes and a divider drags (`fps_12_tiles_resize`) and while the first tile scrolls
- * (`fps_12_tiles_scroll`), after a 1 s idle control that refuses a page pacing under 30 fps; then,
+ * (`fps_12_tiles_scroll`), after a 1 s idle control, once the tiles have settled, that refuses a page pacing under 30
+ * fps; then,
  * on macOS, Playwright WebKit's WebContent memory (`rss_12_tiles_renderer`,
  * `footprint_12_tiles_webcontent`, MiB). `nav_5k` (`?perf=nav5k`, a 5,000-file team): the nav's
  * first paint from the mock's scan answer (`nav_first_paint`) and the p95 of input to the next
@@ -441,6 +442,40 @@ const tilesReady = (page: Page) =>
     { timeout: 60_000 },
   );
 
+/**
+ * Every tile's scrollback has been written and parsed (each scrollbar has a slider, and none has
+ * moved for half a second) and the page is quiet (timers fire on time), so a window that opens
+ * next samples the page itself and not leftover boot work.
+ */
+const tilesSettled = (page: Page) =>
+  page.evaluate(
+    ({ selector, deadline }) =>
+      new Promise<void>((resolve, reject) => {
+        const start = performance.now();
+        let last = "";
+        let steady = 0;
+        let due = start + 100;
+        const poll = () => {
+          const now = performance.now();
+          const late = now - due;
+          due = now + 100;
+          const sliders = [...document.querySelectorAll(selector)].map((panel) => {
+            const slider = panel.querySelector<HTMLElement>(".scrollbar.vertical .slider");
+            return slider && parseFloat(slider.style.height) > 0 ? slider.style.top : "";
+          });
+          const sig = sliders.join("|");
+          const parsed = sliders.length === 12 && sliders.every(Boolean);
+          steady = parsed && sig === last && late < 30 ? steady + 1 : 0;
+          last = sig;
+          if (steady >= 5) return resolve();
+          if (now - start > deadline) return reject(new Error("the tiles did not settle in time"));
+          setTimeout(poll, 100);
+        };
+        setTimeout(poll, 100);
+      }),
+    { selector: TILE_PANELS, deadline: 30_000 },
+  );
+
 /** Starts counting animation frames; the window opens now, just before the first input. */
 const beginFrames = (page: Page) =>
   page.evaluate(() => {
@@ -522,7 +557,9 @@ test.describe("perf baseline: 12 tiles and a 5,000-file nav (measurement)", () =
         await expect(page.locator(TILE_PANELS)).toHaveCount(12);
         await expect(page.locator(`${TILE_PANELS} .xterm-screen`)).toHaveCount(12);
 
-        // Control: a page whose frames don't pace would make any frame rate fiction.
+        // Control: a page whose frames don't pace would make any frame rate fiction. It opens
+        // once the scrollback is parsed and the page is quiet.
+        await tilesSettled(page);
         await beginFrames(page);
         await page.waitForTimeout(1_000);
         const idle = fpsOf(await endFrames(page));
