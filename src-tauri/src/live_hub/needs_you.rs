@@ -85,14 +85,17 @@ pub struct CardInput {
 
 #[derive(Debug, Clone, Default)]
 pub struct NeedsYouInputs {
-    pub sessions: Vec<SessionInput>,
+    pub agent_sessions: Vec<SessionInput>,
     pub cards: Vec<CardInput>,
 }
 
 /// The set, one item per id, in id order.
 pub fn needs_you(inputs: &NeedsYouInputs) -> Vec<NeedsYouItem> {
-    let sessions: BTreeMap<&str, &SessionInput> =
-        inputs.sessions.iter().map(|s| (&*s.session, s)).collect();
+    let sessions: BTreeMap<&str, &SessionInput> = inputs
+        .agent_sessions
+        .iter()
+        .map(|s| (&*s.session, s))
+        .collect();
     let mut items = BTreeMap::new();
     for card in &inputs.cards {
         let kind = card_kind(card.summary.as_deref(), &card.text);
@@ -117,7 +120,7 @@ pub fn needs_you(inputs: &NeedsYouInputs) -> Vec<NeedsYouItem> {
         };
         items.insert(item.id.clone(), item);
     }
-    for session in &inputs.sessions {
+    for session in &inputs.agent_sessions {
         let agent = |kind: NeedsYouKind, slug: &str, question: Option<String>| NeedsYouItem {
             id: format!("agent:{}:{slug}", session.session),
             kind,
@@ -258,7 +261,7 @@ pub(crate) fn hub_inputs(
         }
     }
     NeedsYouInputs {
-        sessions: live,
+        agent_sessions: live,
         cards,
     }
 }

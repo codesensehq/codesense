@@ -45,7 +45,13 @@ fn sample_day() -> (Value, NeedsYouInputs) {
             work_item: None,
         })
         .collect();
-    (day, NeedsYouInputs { sessions, cards })
+    (
+        day,
+        NeedsYouInputs {
+            agent_sessions: sessions,
+            cards,
+        },
+    )
 }
 
 fn ids(items: &[NeedsYouItem]) -> Vec<&str> {
@@ -121,7 +127,7 @@ fn a_failed_agent_counts_and_an_fyi_about_a_failed_run_does_not() {
     let (_, mut inputs) = sample_day();
     // Overlaid here, never written into the shared fixture.
     let quick_fix = inputs
-        .sessions
+        .agent_sessions
         .iter_mut()
         .find(|s| s.session == "tab-quick-fix-lead")
         .unwrap();
@@ -284,7 +290,7 @@ fn only_asks_map_in_and_an_agents_own_states_stay_out() {
         ..Default::default()
     };
     let inputs = NeedsYouInputs {
-        sessions: [
+        agent_sessions: [
             "question",
             "permission",
             "failed",
@@ -319,7 +325,7 @@ fn only_asks_map_in_and_an_agents_own_states_stay_out() {
 #[test]
 fn a_capped_agent_that_also_asks_is_two_items() {
     let inputs = NeedsYouInputs {
-        sessions: vec![SessionInput {
+        agent_sessions: vec![SessionInput {
             session: "tab-a".into(),
             needs_you_kind: Some("permission".into()),
             capped: true,
@@ -434,21 +440,21 @@ fn the_topic_patches_each_change_in_its_own_place_and_nothing_else() {
         }),
         ("agent:tab-steward-lead:permission", |inputs, on| {
             let s = inputs
-                .sessions
+                .agent_sessions
                 .iter_mut()
                 .find(|s| s.session == "tab-steward-lead");
             s.unwrap().needs_you_kind = on.then(|| "permission".into());
         }),
         ("agent:tab-steward-lead:capped", |inputs, on| {
             let s = inputs
-                .sessions
+                .agent_sessions
                 .iter_mut()
                 .find(|s| s.session == "tab-steward-lead");
             s.unwrap().capped = on;
         }),
         ("agent:tab-steward-lead:failed", |inputs, on| {
             let s = inputs
-                .sessions
+                .agent_sessions
                 .iter_mut()
                 .find(|s| s.session == "tab-steward-lead");
             s.unwrap().needs_you_kind = on.then(|| "failed".into());
@@ -462,7 +468,7 @@ fn the_topic_patches_each_change_in_its_own_place_and_nothing_else() {
     }
 
     // Another team's agent launched (minting its work item) with no ask of its own.
-    inputs.sessions.push(SessionInput {
+    inputs.agent_sessions.push(SessionInput {
         session: "tab-new".into(),
         org: Some("acme".into()),
         team: Some("quick-fix".into()),
