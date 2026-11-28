@@ -3,7 +3,8 @@
  * The satellite probe route, for the two-window e2e driver and its mock spec: a satellite
  * booted with `?window=<label>&probe=<path>` mounts `SatelliteRoot` with a one-item slice for
  * `<path>` and a renderer that draws only that file's `HtmlViewer`, so a spec drives a real
- * dashboard bridge in a second window with no registry entry behind it.
+ * dashboard bridge in a second window. The window's registry entry holds no item; the probe's
+ * slice is its own, built here from the query.
  *
  * The dashboard reports what its bridge calls returned by posting
  * `{type: "probe:result", key, text}` to this page; the route keeps each answer in
