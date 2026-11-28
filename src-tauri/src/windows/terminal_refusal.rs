@@ -21,8 +21,8 @@ pub mod reason {
     pub const OLD_SERVER: &str = "old_server";
 }
 
-/// The text for [`reason::OLD_SERVER`].
-pub const OLD_SERVER_TEXT: &str = "Update the terminal server to move terminals between windows";
+/// The text for [`reason::OLD_SERVER`], as the viewer check words it.
+pub const OLD_SERVER_TEXT: &str = crate::commands::pty_viewer::UPDATE_TO_MOVE;
 
 /// What the check reads about one terminal.
 #[derive(Debug, Clone, PartialEq, Eq)]

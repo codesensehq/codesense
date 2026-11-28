@@ -480,13 +480,13 @@ describe("the move reason codes", () => {
     expectTypeOf<Extract<MoveRefusal, "occupied" | "stale">>().toEqualTypeOf<
       "occupied" | "stale"
     >();
-    expectTypeOf<"tab_refused">().toMatchTypeOf<MoveRefusal>();
+    expectTypeOf<"tab_refused">().toExtend<MoveRefusal>();
   });
 
   it("name the four abort reasons, beside an open tail for abort_all_moves' own", () => {
     expectTypeOf<Extract<AbortReason, "dirty" | "gone" | "timeout" | "no_ack">>().toEqualTypeOf<
       "dirty" | "gone" | "timeout" | "no_ack"
     >();
-    expectTypeOf<"quit">().toMatchTypeOf<AbortReason>();
+    expectTypeOf<"quit">().toExtend<AbortReason>();
   });
 });
