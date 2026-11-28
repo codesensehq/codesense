@@ -12,6 +12,7 @@ import type {
 } from "@/tauri/commands";
 import {
   EMPTY_TERMINAL_LAYOUT,
+  sessionTarget,
   type TerminalLayoutProjection,
 } from "@/shared/lib/terminal-layout-projection";
 import { createActivityRecovery } from "./terminal-activity-recovery";
@@ -21,6 +22,7 @@ import {
   getSessionActivityAt,
   useAgentStateStore,
 } from "@/shared/stores/agent-state-store";
+const placedS = (layout: TerminalLayoutProjection) => !!sessionTarget(layout, "s");
 const target: RuntimeMemberTarget = {
   member: { machineId: "local", slot: "sidecar" },
   admissionRevision: "1",
@@ -134,11 +136,11 @@ describe("activity recovery admission", () => {
       },
     });
     h.recovery.reconcile();
-    expect(isRunningAgent(useAgentStateStore.getState(), "s", h.getLayout())).toBe(false);
+    expect(isRunningAgent(useAgentStateStore.getState(), "s", placedS(h.getLayout()))).toBe(false);
     expect(useAgentInboxRailStore.getState().bySession.s).toBe(open);
     h.requests[1]({ target, snapshots: [snap(2, "idle")] });
     await Promise.resolve();
-    expect(isRunningAgent(useAgentStateStore.getState(), "s", h.getLayout())).toBe(true);
+    expect(isRunningAgent(useAgentStateStore.getState(), "s", placedS(h.getLayout()))).toBe(true);
     expect(useAgentInboxRailStore.getState().bySession.s).toBe(open);
     h.event({ ...snap(3), exit: { code: 0, signal: null, requested: false } });
     expect(useAgentInboxRailStore.getState().bySession.s).toBeUndefined();
@@ -152,12 +154,12 @@ describe("activity recovery admission", () => {
       processAgentBySession: { s: "codex" },
       activityBySession: { s: { freshness: "unavailable" as const, snapshot: null } },
     };
-    expect(isRunningAgent(state, "s", h.getLayout())).toBe(true);
+    expect(isRunningAgent(state, "s", placedS(h.getLayout()))).toBe(true);
     expect(
       isRunningAgent(
         { ...state, activityBySession: { s: { freshness: "recovering", snapshot: null } } },
         "s",
-        h.getLayout(),
+        placedS(h.getLayout()),
       ),
     ).toBe(false);
     const layout = h.getLayout();
@@ -173,7 +175,7 @@ describe("activity recovery admission", () => {
         },
       },
     };
-    expect(isRunningAgent(state, "s", offline)).toBe(false);
+    expect(isRunningAgent(state, "s", placedS(offline))).toBe(false);
     h.recovery.dispose();
   });
   it("projects queued activity from its original receipt and replay cannot rejuvenate it", async () => {

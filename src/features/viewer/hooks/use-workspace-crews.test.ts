@@ -24,6 +24,8 @@ vi.mock("@/shared/stores/viewer-store", async (importOriginal) => {
   return {
     findTabLocationBySessionId: actual.findTabLocationBySessionId,
     selectHiddenTerminalTabIndex: () => ({}),
+    selectRunningTerminalTabIndex: () => tabIndex,
+    selectMinimizedTerminalTabIndex: () => ({}),
     normalizeWorkspaceDir: actual.normalizeWorkspaceDir,
     useViewerStore: (sel: (s: unknown) => unknown) =>
       sel({ workspaces, agentIdentity, softClosedWorkspaces: {}, terminalLayout: { byKey: {} } }),

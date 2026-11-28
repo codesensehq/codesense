@@ -10,9 +10,14 @@ import { RemoteTerminalPane } from "./remote-terminal-pane";
 import { PendingRemoteOpens } from "./pending-remote-opens";
 import { workspaceKey } from "@/shared/lib/workspace-key";
 import {
+  Profiler,
+  createContext,
+  memo,
   useCallback,
+  useContext,
   useEffect,
   useId,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -26,7 +31,10 @@ import {
   selectActiveTerminalTab,
   selectExpandedWorkspaceId,
 } from "@/features/viewer/lib/cli-workspace/store/viewer-access";
-import type { Workspace } from "@/features/viewer/lib/cli-workspace/store/viewer-access";
+import type {
+  TerminalTab,
+  Workspace,
+} from "@/features/viewer/lib/cli-workspace/store/viewer-access";
 import {
   useWorkspaceTabsSlice,
   useWorkspaceActiveTab,
@@ -92,6 +100,7 @@ import {
   restartTab,
 } from "../lib/terminal-close";
 import { harnessPaneKey } from "../lib/harness-pane-key";
+import { useKeyedView, useKeyedViewStore, type KeyedViewStore } from "../lib/keyed-view-store";
 import { warmTerminalTabIds } from "../lib/terminal-warm-tabs";
 import {
   showOneTab,
@@ -107,6 +116,7 @@ import {
   focusTileKey,
   usePaneFocusIndicator,
   useTileFocusIndicator,
+  type FocusIndicator,
 } from "../lib/focus-indicator";
 import { getEffectiveTerminalFontPx } from "@/shared/lib/font-sizes";
 import { useTeamWorkspaces } from "@/shared/hooks/use-team-workspaces";
@@ -175,7 +185,38 @@ function useWorkspaceTabs(teamKey: string, workspaceId: string) {
 // a remounted slot re-attaches the SAME display (nothing is rebuilt).
 // ---------------------------------------------------------------------------
 
+/** Test-only seam: told each time a tile frame or a tab-grid cell commits a render and each time one
+ *  mounts. Frame ids read `tile:{workspaceId}`, cell ids `cell:{workspaceId}/{tabId}`. Nothing
+ *  renders for it when absent. */
+export interface FrameProbe {
+  /** A `React.Profiler` commit of the frame's or cell's own render (not its descendants'). */
+  render: (frameId: string, phase: "mount" | "update" | "nested-update") => void;
+  /** The frame or cell mounted (a remount counts again). */
+  mount: (frameId: string) => void;
+}
+
+const FrameProbeContext = createContext<FrameProbe | undefined>(undefined);
+
+/** Reports the render and the mount of the component that places it: it renders exactly when its
+ *  parent does, so a commit of its `Profiler` is the parent's own render, not a descendant's. */
+function FrameBeacon({ probe, frameId }: { probe: FrameProbe; frameId: string }) {
+  useEffect(() => {
+    probe.mount(frameId);
+  }, [probe, frameId]);
+  return (
+    <Profiler id={frameId} onRender={(_id, phase) => probe.render(frameId, phase)}>
+      <Beat />
+    </Profiler>
+  );
+}
+
+function Beat() {
+  return null;
+}
+
 interface WorkspaceTerminalPanelsProps {
+  /** Test-only: see {@link FrameProbe}. */
+  frameProbe?: FrameProbe;
   /** The team whose workspaces the CLI shows. It can differ from the active team:
    *  the CLI keeps the team it last moved to when the active team changes. */
   teamKey: string;
@@ -197,13 +238,15 @@ interface WorkspaceTerminalPanelsProps {
   onStoryStatusChange?: (workspaceId: string, newStatus: PipelineStatus) => void;
 }
 
-/** Context threaded through the recursive render so leaves can render their
- *  chrome and terminal body without prop-drilling. */
-interface RenderShared {
-  teamKey: string;
-  /** The CLI column is on screen: its terminals are visible. */
+/** What one tile frame draws from, besides its own subscriptions: the facts about this tile and the
+ *  few values shared by every tile. Equal views keep one identity ({@link KeyedViewStore}), so a
+ *  frame redraws only when its own view changes: a focus move changes two, an added tile changes
+ *  the tiles whose layout changed. */
+interface TileView {
+  workspace: Workspace;
+  /** The CLI column is on screen and this tile is not hidden behind a zoomed one. */
   shown: boolean;
-  /** See {@link WorkspaceTerminalPanelsProps.teamHidden}. */
+  /** See {@link WorkspaceTerminalPanelsProps.teamHidden}, with the same zoom rule. */
   teamHidden: boolean;
   /** T.6: synthetic repo key for the active workspace — drives the file-refresh
    *  live-reload signal the SW-EW-28 expanded HUD shares (SW-SC-4 gate). */
@@ -217,27 +260,33 @@ interface RenderShared {
    *  dropped when `isConsole && !split`. Split (N≥2) keeps the id (the top
    *  switcher marks only one focused chip, so tiles still disambiguate). */
   isConsole: boolean;
-  workspaceById: Map<string, Workspace>;
-  focusedWorkspaceId: string | undefined;
-  themeConfig: TerminalThemeConfig;
-  effectiveZoomId: string | null;
+  isFocused: boolean;
+  isZoomed: boolean;
+  /** Some tile is zoomed (this one or another). */
+  zoomActive: boolean;
+  /** Only the zoomed tile reads these: how many tiles it hides, and which. */
   hiddenTileCount: number;
   hiddenTileIds: readonly string[];
+  themeConfig: TerminalThemeConfig;
   terminalFontPx: number;
-  closeWorkspace: (teamKey: string, workspaceId: string) => void;
-  toggleZoom: (teamKey: string, tileId: string) => void;
   /** SW-EW-12 AC-11: double-click the tile's story-id → open doc + recenter. */
   onOpenStoryDoc?: (storyFilePath: string) => void;
   /** SW-EW-18 AC-6: set a story tile's lifecycle status. */
   onStoryStatusChange?: (workspaceId: string, newStatus: PipelineStatus) => void;
-  /** SW-EW-33: the workspace id currently being dragged (tray chip unwrapped), or
-   *  null when no drag is in progress. Drives the per-tile edge-zone mounting. */
-  draggedWorkspaceId: string | null;
-  /** SW-EW-33: zone ids (`tile:{ws}:{side}`) whose drop would be a no-op for the
-   *  CURRENT drag — suppressed so a highlighted zone always yields a real move.
-   *  Empty when nothing is dragging / a minimized chip is dragged (always adds). */
-  suppressedZoneIds: ReadonlySet<string>;
+  /** SW-EW-33: the sides of this tile's edge zones that a drop would not use, while another
+   *  workspace is dragged; null when no drag is in progress, this tile is the dragged one, or no
+   *  side would change the arrangement. A real field, not a ref: the zones follow the live drag. */
+  zoneDisabledSides: readonly TileEdgeSide[] | null;
 }
+
+/** What a frame reads from its panel: the store of its view and the team it shows. Stable for the
+ *  panel's life, so a change to one tile's view reaches only that tile's frame. */
+interface TileFrameHost {
+  store: KeyedViewStore<TileView>;
+  teamKey: string;
+}
+
+const TileFrameHostContext = createContext<TileFrameHost | null>(null);
 
 /** The tile chrome's zoom: the expanded tile goes back to the grid; any other tile is focused
  *  and expanded. */
@@ -254,6 +303,7 @@ export function WorkspaceTerminalPanels({
   repoPath,
   onOpenStoryDoc,
   onStoryStatusChange,
+  frameProbe,
 }: WorkspaceTerminalPanelsProps) {
   const workspaces = useTeamWorkspaces(teamKey);
   const shownByStore = useTerminalVisible();
@@ -268,7 +318,7 @@ export function WorkspaceTerminalPanels({
   // them once per render off the imperative door is equivalent to the previous
   // reactive `useViewerStore((s) => s.action)` subscriptions (which never fired
   // — the ref never changes) and keeps them out of the reactive read surface.
-  const { closeWorkspace, setForegroundNodeSizes } = getViewerState();
+  const { setForegroundNodeSizes } = getViewerState();
   const focusedWorkspaceId = useFocusedWorkspaceId(teamKey);
   const isConsole = useIsConsole();
   // SW-EW-40: in grouped tray mode the mosaic renders ONLY the selected epic's
@@ -380,34 +430,69 @@ export function WorkspaceTerminalPanels({
   );
   const hiddenTileCount = effectiveZoomId ? tiles.length - 1 : 0;
 
-  const workspaceById = useMemo(() => new Map(tiles.map((w) => [w.id, w])), [tiles]);
+  // The panel's props are the caller's, often new closures each render: tiles read them through
+  // stable wrappers so a render of the panel alone redraws no tile.
+  const latestCallbacks = useRef({ onOpenStoryDoc, onStoryStatusChange });
+  useLayoutEffect(() => {
+    latestCallbacks.current = { onOpenStoryDoc, onStoryStatusChange };
+  });
+  const hasOpenStoryDoc = onOpenStoryDoc !== undefined;
+  const hasStoryStatusChange = onStoryStatusChange !== undefined;
+  const stableOpenStoryDoc = useMemo(
+    () =>
+      hasOpenStoryDoc
+        ? (path: string) => latestCallbacks.current.onOpenStoryDoc?.(path)
+        : undefined,
+    [hasOpenStoryDoc],
+  );
+  const stableStoryStatusChange = useMemo(
+    () =>
+      hasStoryStatusChange
+        ? (id: string, status: PipelineStatus) =>
+            latestCallbacks.current.onStoryStatusChange?.(id, status)
+        : undefined,
+    [hasStoryStatusChange],
+  );
 
-  // SW-EW-32: the epic HUD card now self-fetches its summary via
-  // `useStoryDetails(epicDocPath, headings)` (honoring the configured headings),
-  // so the old per-epic `## Purpose` tree-walk map is gone — both story and epic
-  // tiles resolve their summary through the one hook.
+  const tileViews = new Map<string, TileView>();
+  for (const ws of tiles) {
+    const isZoomed = ws.id === effectiveZoomId;
+    const covered = effectiveZoomId !== null && !isZoomed;
+    tileViews.set(ws.id, {
+      workspace: ws,
+      shown: shown && !covered,
+      teamHidden: teamHidden && !covered,
+      repoPath,
+      split,
+      isConsole,
+      isFocused: ws.id === focusedWorkspaceId,
+      isZoomed,
+      zoomActive: effectiveZoomId !== null,
+      hiddenTileCount: isZoomed ? hiddenTileCount : 0,
+      hiddenTileIds: isZoomed ? hiddenTileIds : EMPTY_WS_IDS,
+      themeConfig,
+      terminalFontPx,
+      onOpenStoryDoc: stableOpenStoryDoc,
+      onStoryStatusChange: stableStoryStatusChange,
+      zoneDisabledSides: zoneDisabledSides(ws.id, draggedWorkspaceId, suppressedZoneIds),
+    });
+  }
+  const tileStore = useKeyedViewStore(tileViews);
+  const frameHost = useMemo<TileFrameHost>(
+    () => ({ store: tileStore, teamKey }),
+    [tileStore, teamKey],
+  );
 
-  const shared: RenderShared = {
-    teamKey,
-    shown,
-    teamHidden,
-    repoPath,
-    split,
-    isConsole,
-    workspaceById,
-    focusedWorkspaceId,
-    themeConfig,
-    effectiveZoomId,
-    hiddenTileCount,
-    hiddenTileIds,
-    terminalFontPx,
-    draggedWorkspaceId,
-    suppressedZoneIds,
-    closeWorkspace,
-    toggleZoom: toggleTileZoom,
-    onOpenStoryDoc,
-    onStoryStatusChange,
-  };
+  // A stable `renderLeaf`: the kit redraws every leaf when it is a new function. Each tile's
+  // changing facts reach its frame through the view store, not through this function.
+  const renderLeaf = useCallback(
+    (id: string) => (
+      // Each team's grid is its own subtree (the CLI keeps one per warm team), so the
+      // workspace id alone identifies a tile and a team switch never remounts it.
+      <WorkspaceTileFrame key={id} id={id} />
+    ),
+    [],
+  );
 
   // PT-13: the whole grid stays a drop target for the empty-area / center
   // fallback; SW-EW-17 adds per-tile edge zones inside each frame.
@@ -417,27 +502,41 @@ export function WorkspaceTerminalPanels({
   });
 
   return (
-    <div
-      ref={setNodeRef}
-      className={`flex-1 min-h-0 relative${isOver ? " outline outline-2 outline-accent outline-offset-[-2px] rounded" : ""}`}
-      data-drop-active={isOver ? "true" : "false"}
-    >
-      {/* Frame layer: the mosaic tree (resizable panels + chrome + drop zones).
-          Split-vs-1-up now rides in `shared.split`. */}
-      <MosaicView
-        resizeIdentity={teamKey}
-        node={root}
-        zoomPath={zoomPath}
-        onSizesCommit={(path, sizes) => setForegroundNodeSizes(teamKey, path, sizes)}
-        renderLeaf={(id) => {
-          const ws = workspaceById.get(id);
-          // Each team's grid is its own subtree (the CLI keeps one per warm team), so the
-          // workspace id alone identifies a tile and a team switch never remounts it.
-          return ws ? <WorkspaceTileFrame key={id} workspace={ws} shared={shared} /> : null;
-        }}
-      />
-    </div>
+    <FrameProbeContext.Provider value={frameProbe}>
+      <TileFrameHostContext.Provider value={frameHost}>
+        <div
+          ref={setNodeRef}
+          className={`flex-1 min-h-0 relative${isOver ? " outline outline-2 outline-accent outline-offset-[-2px] rounded" : ""}`}
+          data-drop-active={isOver ? "true" : "false"}
+        >
+          {/* Frame layer: the mosaic tree (resizable panels + chrome + drop zones). */}
+          <MosaicView
+            resizeIdentity={teamKey}
+            node={root}
+            zoomPath={zoomPath}
+            onSizesCommit={(path, sizes) => setForegroundNodeSizes(teamKey, path, sizes)}
+            renderLeaf={renderLeaf}
+          />
+        </div>
+      </TileFrameHostContext.Provider>
+    </FrameProbeContext.Provider>
   );
+}
+
+/** SW-EW-33: the sides of a tile's edge zones that the current drag would not use, or null when the
+ *  tile shows no zones: no drag in progress, the tile is the dragged workspace's own (dropping a
+ *  workspace onto its own tile is a no-op, so the affordance would mislead), or no side would
+ *  change the arrangement (a highlighted zone is always a real move). */
+function zoneDisabledSides(
+  workspaceId: string,
+  draggedWorkspaceId: string | null,
+  suppressedZoneIds: ReadonlySet<string>,
+): readonly TileEdgeSide[] | null {
+  if (!draggedWorkspaceId || draggedWorkspaceId === workspaceId) return null;
+  const disabled = TILE_EDGE_SIDES.filter((side) =>
+    suppressedZoneIds.has(tileZoneId(workspaceId, side)),
+  );
+  return disabled.length === TILE_EDGE_SIDES.length ? null : disabled;
 }
 
 // ---------------------------------------------------------------------------
@@ -807,9 +906,9 @@ function SetupDiagnosticStream({
 // terminal manager, so a leaf remount on rearrange rebuilds nothing.
 // ---------------------------------------------------------------------------
 
-interface WorkspaceTileFrameProps {
-  workspace: Workspace;
-  shared: RenderShared;
+interface TileFrameContentProps {
+  teamKey: string;
+  view: TileView;
 }
 
 /** A chrome press on one of these keeps its own focus (buttons, menus, the tab
@@ -835,8 +934,17 @@ function useFocusTile(teamKey: string, workspaceId: string): () => void {
   }, [teamKey, workspaceId]);
 }
 
-function WorkspaceTileFrame({ workspace: ws, shared }: WorkspaceTileFrameProps) {
-  const { teamKey, split } = shared;
+/** One mosaic leaf. Its props are its id alone: what it draws comes from its panel's view store, so
+ *  it redraws only for a change to its own view (or to its own subscriptions below). */
+const WorkspaceTileFrame = memo(function WorkspaceTileFrame({ id }: { id: string }) {
+  const host = useContext(TileFrameHostContext)!;
+  const view = useKeyedView(host.store, id);
+  return view ? <TileFrameContent teamKey={host.teamKey} view={view} /> : null;
+});
+
+const TileFrameContent = memo(function TileFrameContent({ teamKey, view }: TileFrameContentProps) {
+  const { workspace: ws, split } = view;
+  const probe = useContext(FrameProbeContext);
   // A warm team's hidden grid: its ids may repeat the shown team's, so it takes no drag.
   const hiddenGrid = useCliDragStale();
   const { tabs, activeTabId } = useWorkspaceTabs(teamKey, ws.id);
@@ -848,8 +956,7 @@ function WorkspaceTileFrame({ workspace: ws, shared }: WorkspaceTileFrameProps) 
   const showGrid = useShouldRenderTabGrid(teamKey, ws.id);
   const canGrid = useIsExpandedWorkspace(teamKey, ws.id);
 
-  const isFocused = ws.id === shared.focusedWorkspaceId;
-  const isZoomed = ws.id === shared.effectiveZoomId;
+  const { isFocused, isZoomed } = view;
 
   const focusTile = useFocusTile(teamKey, ws.id);
   const tileKey = focusTileKey(teamKey, ws.id);
@@ -912,6 +1019,7 @@ function WorkspaceTileFrame({ workspace: ws, shared }: WorkspaceTileFrameProps) 
       // tile up and leave its tab bar under the workspace pills.
       className={`flex flex-col h-full min-h-0 relative overflow-clip ${isDragging ? "opacity-50" : ""}`}
     >
+      {probe && <FrameBeacon probe={probe} frameId={`tile:${ws.id}`} />}
       {/* AC-2: identity chrome renders at N≥1 (including 1-up). The drag handle +
           zoom toggle are split-only (omitted at N=1). SW-EW-30: the
           minimize/Exit control is NOT split-gated anymore — it renders at every
@@ -937,13 +1045,11 @@ function WorkspaceTileFrame({ workspace: ws, shared }: WorkspaceTileFrameProps) 
           // the mount decision and the show decision can't disagree: a story
           // (statusBadge=true) keeps its title + status; identity-less kinds
           // (epic/root/generic) stay hidden exactly as before.
-          hideIdentity={
-            shared.isConsole && !shared.split && !getKindCapabilities(ws.kind).statusBadge
-          }
+          hideIdentity={view.isConsole && !view.split && !getKindCapabilities(ws.kind).statusBadge}
           tabs={tabs}
           activeTabId={activeTabId}
-          chromeBg={shared.themeConfig.chromeBg}
-          terminalBg={shared.themeConfig.theme.background}
+          chromeBg={view.themeConfig.chromeBg}
+          terminalBg={view.themeConfig.theme.background}
           // Hide (–) and the default close (✕) are available at EVERY N —
           // including the lone tile (N=1); closing the last workspace drains the
           // CLI to its empty state. Zoom below stays split-only — it genuinely
@@ -955,17 +1061,17 @@ function WorkspaceTileFrame({ workspace: ws, shared }: WorkspaceTileFrameProps) 
             split
               ? () => {
                   focusTile();
-                  shared.toggleZoom(teamKey, ws.id);
+                  toggleTileZoom(teamKey, ws.id);
                 }
               : undefined
           }
           isZoomed={isZoomed}
-          hiddenTileCount={isZoomed ? shared.hiddenTileCount : 0}
-          hiddenAttentionScope={isZoomed ? { teamKey, wsIds: shared.hiddenTileIds } : undefined}
-          onOpenStoryDoc={shared.onOpenStoryDoc}
+          hiddenTileCount={view.hiddenTileCount}
+          hiddenAttentionScope={isZoomed ? { teamKey, wsIds: view.hiddenTileIds } : undefined}
+          onOpenStoryDoc={view.onOpenStoryDoc}
           onStoryStatusChange={
-            shared.onStoryStatusChange
-              ? (newStatus) => shared.onStoryStatusChange!(ws.id, newStatus)
+            view.onStoryStatusChange
+              ? (newStatus) => view.onStoryStatusChange!(ws.id, newStatus)
               : undefined
           }
           // SW-EW-46: the tab-grid dial surface (only meaningful while expanded).
@@ -978,7 +1084,7 @@ function WorkspaceTileFrame({ workspace: ws, shared }: WorkspaceTileFrameProps) 
       {/* SW-TP CAP-13: the standalone per-tab primitives toolbar is retired.
           Its contents (cwd, progress note, Editor/Diff/Inbox/HUD toggles) have
           moved into the per-tab TerminalGridCaption strip above each visible
-          tab's terminal body. See mount in `renderPane` below. */}
+          tab's terminal body. See mount in `TerminalPane`. */}
       {/* The tile's "agent needs you" slot: a pending ask_user from one of this
           tile's tabs, between the chrome and the terminal (never over it). */}
       <TileNeedsYouSlot
@@ -992,7 +1098,7 @@ function WorkspaceTileFrame({ workspace: ws, shared }: WorkspaceTileFrameProps) 
           <WorkspaceErrorPlaceholder
             workspaceId={ws.id}
             statusError={ws.statusError}
-            onClose={() => shared.closeWorkspace(teamKey, ws.id)}
+            onClose={() => getViewerState().closeWorkspace(teamKey, ws.id)}
             setupFailure={{ ws, teamKey }}
           />
         ) : (
@@ -1000,11 +1106,11 @@ function WorkspaceTileFrame({ workspace: ws, shared }: WorkspaceTileFrameProps) 
             <WorkspaceTerminalBody
               workspace={ws}
               teamKey={teamKey}
-              shown={shared.shown && (!shared.effectiveZoomId || isZoomed)}
-              teamHidden={shared.teamHidden && (!shared.effectiveZoomId || isZoomed)}
+              shown={view.shown}
+              teamHidden={view.teamHidden}
               isFocused={isFocused}
-              terminalFontPx={shared.terminalFontPx}
-              themeConfig={shared.themeConfig}
+              terminalFontPx={view.terminalFontPx}
+              themeConfig={view.themeConfig}
             />
           </div>
         )}
@@ -1038,8 +1144,8 @@ function WorkspaceTileFrame({ workspace: ws, shared }: WorkspaceTileFrameProps) 
           hostTeamKey={teamKey}
           workspace={ws}
           isFocused={isFocused}
-          repoPath={shared.repoPath}
-          zoomActive={shared.effectiveZoomId !== null}
+          repoPath={view.repoPath}
+          zoomActive={view.zoomActive}
         />
         {/* The per-tab source-diff review overlay — same per-tile mount as
             StoryHud, but render-gated on `isFocused` AND keyed on the active
@@ -1049,7 +1155,7 @@ function WorkspaceTileFrame({ workspace: ws, shared }: WorkspaceTileFrameProps) 
           teamKey={teamKey}
           activeTabSessionId={activeTabId}
           isFocused={isFocused}
-          zoomActive={shared.effectiveZoomId !== null}
+          zoomActive={view.zoomActive}
         />
         {/* SW-TP D1: the SourceFolderOverlay file-browse surface is retired.
             The Editor overlay now covers all folder-rooted tabs (CAP-1) and the
@@ -1063,20 +1169,18 @@ function WorkspaceTileFrame({ workspace: ws, shared }: WorkspaceTileFrameProps) 
           activeTabSessionId={activeTabId}
           isFocused={isFocused}
         />
-        <TileEdgeZones
-          workspaceId={ws.id}
-          draggedWorkspaceId={shared.draggedWorkspaceId}
-          suppressedZoneIds={shared.suppressedZoneIds}
-        />
+        {view.zoneDisabledSides && (
+          <TileZoneFrame workspaceId={ws.id} disabledSides={view.zoneDisabledSides} />
+        )}
       </div>
     </div>
   );
-}
+});
 
 // ---------------------------------------------------------------------------
-// TileEdgeZones — SW-EW-17 / SW-EW-33: the four edge drop bands overlaid on a
-// tile, mounted ONLY while a drag is active (driven by `draggedWorkspaceId` from
-// the parent's dnd monitor) so they never intercept terminal input otherwise. A
+// Tile edge zones — SW-EW-17 / SW-EW-33: the four edge drop bands overlaid on a
+// tile, mounted ONLY while a drag is active (the tile's `zoneDisabledSides` view
+// field, from the panel's dnd monitor) so they never intercept terminal input otherwise. A
 // drop resolves to `tile:{wsId}:{side}` (see terminal-drag).
 // ---------------------------------------------------------------------------
 
@@ -1088,30 +1192,6 @@ function WorkspaceTileFrame({ workspace: ws, shared }: WorkspaceTileFrameProps) 
 // boxes are the tiling kit's `EDGE_BANDS`, the table the collision reads too.
 
 const pct = (fraction: number) => `${fraction * 100}%`;
-
-function TileEdgeZones({
-  workspaceId,
-  draggedWorkspaceId,
-  suppressedZoneIds,
-}: {
-  workspaceId: string;
-  draggedWorkspaceId: string | null;
-  suppressedZoneIds: ReadonlySet<string>;
-}) {
-  if (!draggedWorkspaceId) return null; // no drag in progress → no zones
-  // SW-EW-33: don't offer drop zones on the tile of the workspace being dragged —
-  // dropping a workspace onto its own tile is a no-op (you can't split/move it
-  // against itself), so showing the affordance is misleading.
-  if (draggedWorkspaceId === workspaceId) return null;
-  // SW-EW-33: also drop any edge whose placement wouldn't change the arrangement
-  // (e.g. dropping a tile onto the edge it already occupies) — a highlighted zone
-  // is always a real move.
-  const disabledSides = TILE_EDGE_SIDES.filter((side) =>
-    suppressedZoneIds.has(tileZoneId(workspaceId, side)),
-  );
-  if (disabledSides.length === TILE_EDGE_SIDES.length) return null;
-  return <TileZoneFrame workspaceId={workspaceId} disabledSides={disabledSides} />;
-}
 
 /** The overlay over one tile while a drag is on: one frame droppable spanning the tile, which
  *  the collision detection reads (with the sides the tile doesn't offer), and a band per offered
@@ -1333,7 +1413,150 @@ function TabGridView({
   );
 }
 
-function WorkspaceTerminalBody({
+/** What one pane draws from: the facts about its tab, and the values every pane of the workspace
+ *  shares. Equal views keep one identity ({@link KeyedViewStore}), so a grid cell redraws only when
+ *  its own view changes. */
+interface PaneView {
+  workspace: Workspace;
+  teamKey: string;
+  tab: TerminalTab;
+  tabIndex: number;
+  /** A grid cell (its caption above its terminal) or the active tab on Tabs. */
+  isCell: boolean;
+  isActiveTab: boolean;
+  isVisible: boolean;
+  /** The inbox beside the terminal is shown: the pane is visible, or the CLI is hidden and the
+   *  rail stays up. */
+  inboxVisible: boolean;
+  paneFocus: FocusIndicator | undefined;
+  /** The owning tile's focus, threaded only to the active tab's caption. */
+  tileFocusIndicator: FocusIndicator | undefined;
+  autoFocus: boolean;
+  /** The cell the keyboard moves to when this one is closed from its caption. */
+  neighbourTabId: string | undefined;
+  life: number;
+  attachGeneration: number;
+  terminalFontPx: number;
+  themeConfig: TerminalThemeConfig;
+  contextLanding: boolean;
+  onContextHold: () => void;
+  onContextHoldDropped: () => void;
+  onContextHoldTimeout: () => void;
+}
+
+/** What a grid cell reads from its tile's body: the store of its view. Stable for the body's life. */
+const PaneViewsContext = createContext<KeyedViewStore<PaneView> | null>(null);
+
+/** A cell's tab selection: a press or a focus into the cell selects its tab, so the store follows
+ *  focus. Passive autofocus on the displayed fallback is not a local choice while the saved remote
+ *  tab reconnects; a press or a different cell is navigation. */
+function selectCell(teamKey: string, workspaceId: string, tabId: string, explicit = false) {
+  const store = getViewerState();
+  if (!explicit && selectActiveTerminalTab(store, teamKey, workspaceId) === tabId) return;
+  if (explicit) beginContextNavigation();
+  store.setActiveTerminalTab(teamKey, tabId, workspaceId);
+}
+
+/** A grid cell: its pane, redrawn only when its own view changes. The kit's `renderCell` is stable
+ *  and hands each cell only its tab id. */
+const TabGridCell = memo(function TabGridCell({ tabId }: { tabId: string }) {
+  const store = useContext(PaneViewsContext)!;
+  const probe = useContext(FrameProbeContext);
+  const view = useKeyedView(store, tabId);
+  if (!view) return null;
+  return (
+    <>
+      {probe && <FrameBeacon probe={probe} frameId={`cell:${view.workspace.id}/${tabId}`} />}
+      <TerminalPane view={view} />
+    </>
+  );
+});
+
+/** One tab's body: a grid cell (its caption above its terminal) or the active tab on Tabs.
+ *  `data-pane-id` + click-to-focus are the cell-only extras (D6: a cell is a directionally-navigable
+ *  pane keyed by its tab id). */
+const TerminalPane = memo(function TerminalPane({ view }: { view: PaneView }) {
+  const { workspace: ws, teamKey, tab, isCell, isActiveTab: isActiveTabInWs, isVisible } = view;
+  return (
+    <div
+      className={paneBodyView(isCell)}
+      style={isVisible ? undefined : { display: "none" }}
+      inert={!isVisible}
+      aria-hidden={!isVisible || undefined}
+      data-pane-id={isCell ? tab.id : undefined}
+      data-testid={isCell ? `terminal-grid-cell-${tab.id}` : undefined}
+      {...{ [FOCUS_PANE_ATTR]: tab.id }}
+      data-pane-active={isActiveTabInWs ? "" : undefined}
+      data-focus-indicator={view.paneFocus}
+      // A cell selects its tab when pressed or when focus reaches it
+      // any other way (Tab, ⌘⌥ arrows), so the store follows focus.
+      onPointerDownCapture={isCell ? () => selectCell(teamKey, ws.id, tab.id, true) : undefined}
+      onFocusCapture={isCell ? () => selectCell(teamKey, ws.id, tab.id) : undefined}
+    >
+      {/* SW-UX-CLI-10 / SW-TP CAP-6: the per-tab toolbar strip. Previously
+          grid-cell-only (SW-UX-CLI-10); now mounted for EVERY visible tab
+          (grid-mode: one per cell; tabs-mode: one for the active tab) so the
+          toolbar replaces the retired standalone TabPrimitivesToolbar. */}
+      {isVisible && (
+        <TerminalGridCaption
+          tab={tab}
+          isActive={isActiveTabInWs}
+          background={view.themeConfig.chromeBg}
+          foreground={view.themeConfig.theme.foreground ?? "inherit"}
+          onFocusCell={() => selectCell(teamKey, ws.id, tab.id, true)}
+          onZoomCell={() => zoomTerminalCell(teamKey, ws.id, tab.id)}
+          onClose={() => closeTab(teamKey, ws.id, tab.id)}
+          neighbourTabId={view.neighbourTabId}
+          workspace={ws}
+          teamKey={teamKey}
+          // SW-TP CAP-12: thread the owning tile's focus indicator only for the
+          // active tab's caption. Non-active cell captions in a split stay neutral
+          // so the one-line-per-tile rule holds.
+          tileFocusIndicator={view.tileFocusIndicator}
+        />
+      )}
+      {/* `isCell`-only behavior (cell-focus marker, keyboard close targeting
+          via `data-pane-id`) remains gated above; the caption itself is now
+          universal. Hidden tiles keep their existing rail; warm neighbours do not. */}
+      <InboxSplit tab={tab} teamKey={teamKey} visible={view.inboxVisible}>
+        {tab.origin ? (
+          <RemoteTerminalPane
+            tab={tab}
+            teamKey={teamKey}
+            workspaceId={ws.id}
+            workspaceKey={workspaceKey(teamKey, ws)}
+            visible={isVisible}
+            autoFocus={view.autoFocus}
+            attachGeneration={view.attachGeneration}
+            fontSizePx={view.terminalFontPx}
+            themeConfig={view.themeConfig}
+          />
+        ) : (
+          <ShellTerminalPanel
+            key={view.life}
+            life={view.life}
+            sessionId={tab.sessionId}
+            exit={tab.exit}
+            workspaceId={ws.id}
+            harnessPaneKey={harnessPaneKey(ws.id, view.tabIndex, tab.id)}
+            teamKey={teamKey}
+            visible={isVisible}
+            attachGeneration={view.attachGeneration}
+            autoFocus={view.autoFocus}
+            fontSizePx={view.terminalFontPx}
+            themeConfig={view.themeConfig}
+            contextLanding={view.contextLanding}
+            onContextHold={view.onContextHold}
+            onContextHoldDropped={view.onContextHoldDropped}
+            onContextHoldTimeout={view.onContextHoldTimeout}
+          />
+        )}
+      </InboxSplit>
+    </div>
+  );
+});
+
+const WorkspaceTerminalBody = memo(function WorkspaceTerminalBody({
   workspace: ws,
   teamKey,
   shown,
@@ -1432,19 +1655,9 @@ function WorkspaceTerminalBody({
   const paneFocusIndicator = usePaneFocusIndicator(focusTileKey(teamKey, ws.id));
   // SW-TP CAP-12: per-tile focus signal for the per-tab caption's bottom
   // border. Non-undefined only when the tile is focused; the active tab's
-  // caption threads this (see renderPane below), non-active cells stay
+  // caption threads this (see `TerminalPane`), non-active cells stay
   // neutral so the one-blue-line-per-level rule still holds.
   const tileFocusIndicator = useTileFocusIndicator(focusTileKey(teamKey, ws.id));
-  const selectCell = (tabId: string, explicit = false) => {
-    const store = getViewerState();
-    // Passive autofocus on the displayed fallback is not a local choice while
-    // the saved remote tab reconnects. A press or a different cell is navigation.
-    if (!explicit && selectActiveTerminalTab(store, teamKey, ws.id) === tabId) return;
-    if (explicit) beginContextNavigation();
-    store.setActiveTerminalTab(teamKey, tabId, ws.id);
-  };
-  // A tab's pane is keyed by its lives: a new process started in the tab (the
-  // ended bar's Restart / Relaunch) gets a new pane attached to it.
   const lives = useTerminalLives();
 
   // Hidden tiles retain their existing active pane, without extra warm neighbours, unless the
@@ -1454,94 +1667,40 @@ function WorkspaceTerminalBody({
       ? warmTerminalTabIds(tabs, activeTabId, selection.previous, true)
       : tabs.filter((tab) => tab.id === activeTabId).map((tab) => tab.id);
 
-  // One tab's body: a grid cell (its caption above its terminal) or the active
-  // tab on Tabs. `data-pane-id` + click-to-focus are the cell-only extras (D6: a
-  // cell is a directionally-navigable pane keyed by its tab id).
-  const renderPane = (tabIndex: number, isCell: boolean) => {
-    const tab = tabs[tabIndex];
-    const isActiveTabInWs = tab.id === activeTabId;
-    const isVisible = shown && (isCell || isActiveTabInWs);
-    const paneFocus = isCell ? paneFocusIndicator(tab.id) : undefined;
-    const autoFocus = isFocused && isActiveTabInWs;
-    return (
-      <div
-        key={tab.id}
-        className={paneBodyView(isCell)}
-        style={isVisible ? undefined : { display: "none" }}
-        inert={!isVisible}
-        aria-hidden={!isVisible || undefined}
-        data-pane-id={isCell ? tab.id : undefined}
-        data-testid={isCell ? `terminal-grid-cell-${tab.id}` : undefined}
-        {...{ [FOCUS_PANE_ATTR]: tab.id }}
-        data-pane-active={isActiveTabInWs ? "" : undefined}
-        data-focus-indicator={paneFocus}
-        // A cell selects its tab when pressed or when focus reaches it
-        // any other way (Tab, ⌘⌥ arrows), so the store follows focus.
-        onPointerDownCapture={isCell ? () => selectCell(tab.id, true) : undefined}
-        onFocusCapture={isCell ? () => selectCell(tab.id) : undefined}
-      >
-        {/* SW-UX-CLI-10 / SW-TP CAP-6: the per-tab toolbar strip. Previously
-            grid-cell-only (SW-UX-CLI-10); now mounted for EVERY visible tab
-            (grid-mode: one per cell; tabs-mode: one for the active tab) so the
-            toolbar replaces the retired standalone TabPrimitivesToolbar. */}
-        {isVisible && (
-          <TerminalGridCaption
-            tab={tab}
-            isActive={isActiveTabInWs}
-            background={themeConfig.chromeBg}
-            foreground={themeConfig.theme.foreground ?? "inherit"}
-            onFocusCell={() => selectCell(tab.id, true)}
-            onZoomCell={() => zoomTerminalCell(teamKey, ws.id, tab.id)}
-            onClose={() => closeTab(teamKey, ws.id, tab.id)}
-            neighbourTabId={isCell ? cellNeighbour.get(tab.id) : undefined}
-            workspace={ws}
-            teamKey={teamKey}
-            // SW-TP CAP-12: thread the owning tile's focus indicator only for the
-            // active tab's caption. Non-active cell captions in a split stay neutral
-            // so the one-line-per-tile rule holds.
-            tileFocusIndicator={isActiveTabInWs ? tileFocusIndicator : undefined}
-          />
-        )}
-        {/* `isCell`-only behavior (cell-focus marker, keyboard close targeting
-            via `data-pane-id`) remains gated above; the caption itself is now
-            universal. Hidden tiles keep their existing rail; warm neighbours do not. */}
-        <InboxSplit tab={tab} teamKey={teamKey} visible={isVisible || !shown}>
-          {tab.origin ? (
-            <RemoteTerminalPane
-              tab={tab}
-              teamKey={teamKey}
-              workspaceId={ws.id}
-              workspaceKey={workspaceKey(teamKey, ws)}
-              visible={isVisible}
-              autoFocus={autoFocus}
-              attachGeneration={currentActivationGeneration(teamKey)}
-              fontSizePx={terminalFontPx}
-              themeConfig={themeConfig}
-            />
-          ) : (
-            <ShellTerminalPanel
-              key={lives[tab.id] ?? 0}
-              life={lives[tab.id] ?? 0}
-              sessionId={tab.sessionId}
-              exit={tab.exit}
-              workspaceId={ws.id}
-              harnessPaneKey={harnessPaneKey(ws.id, tabIndex, tab.id)}
-              teamKey={teamKey}
-              visible={isVisible}
-              attachGeneration={currentActivationGeneration(teamKey)}
-              autoFocus={autoFocus}
-              fontSizePx={terminalFontPx}
-              themeConfig={themeConfig}
-              contextLanding={overlay.contextLanding}
-              onContextHold={onContextHold}
-              onContextHoldDropped={onContextHoldDropped}
-              onContextHoldTimeout={onContextHoldTimeout}
-            />
-          )}
-        </InboxSplit>
-      </div>
-    );
-  };
+  // Every tab's pane view. A tab's pane is keyed by its lives: a new process started in the tab
+  // (the ended bar's Restart / Relaunch) gets a new pane attached to it.
+  const attachGeneration = currentActivationGeneration(teamKey);
+  const paneViews = new Map<string, PaneView>();
+  tabs.forEach((tab, tabIndex) => {
+    const isActiveTab = tab.id === activeTabId;
+    const isCell = showGrid;
+    const isVisible = shown && (isCell || isActiveTab);
+    paneViews.set(tab.id, {
+      workspace: ws,
+      teamKey,
+      tab,
+      tabIndex,
+      isCell,
+      isActiveTab,
+      isVisible,
+      inboxVisible: isVisible || !shown,
+      paneFocus: isCell ? paneFocusIndicator(tab.id) : undefined,
+      tileFocusIndicator: isActiveTab ? tileFocusIndicator : undefined,
+      autoFocus: isFocused && isActiveTab,
+      neighbourTabId: isCell ? cellNeighbour.get(tab.id) : undefined,
+      life: lives[tab.id] ?? 0,
+      attachGeneration,
+      terminalFontPx,
+      themeConfig,
+      contextLanding: overlay.contextLanding,
+      onContextHold,
+      onContextHoldDropped,
+      onContextHoldTimeout,
+    });
+  });
+  const paneStore = useKeyedViewStore(paneViews);
+  // Stable, so a tab add or a focus move redraws only the cells whose view changed.
+  const renderCell = useCallback((tabId: string) => <TabGridCell key={tabId} tabId={tabId} />, []);
 
   return (
     <div data-surface="terminal" className="h-full w-full relative">
@@ -1679,29 +1838,27 @@ function WorkspaceTerminalBody({
       {/* Keyed siblings retain their pane and slot when selection moves. */}
       <div ref={gridWrapRef} className="absolute inset-0">
         {showGrid ? (
-          <TabGridView
-            teamKey={teamKey}
-            workspaceId={ws.id}
-            cellIds={cellIds}
-            maxCols={maxCols}
-            maxRows={maxRows}
-            renderCell={(tabId) => {
-              const index = tabs.findIndex((t) => t.id === tabId);
-              return index === -1 ? null : renderPane(index, true);
-            }}
-          />
+          <PaneViewsContext.Provider value={paneStore}>
+            <TabGridView
+              teamKey={teamKey}
+              workspaceId={ws.id}
+              cellIds={cellIds}
+              maxCols={maxCols}
+              maxRows={maxRows}
+              renderCell={renderCell}
+            />
+          </PaneViewsContext.Provider>
         ) : (
-          mountedIds.map((id) =>
-            renderPane(
-              tabs.findIndex((tab) => tab.id === id),
-              false,
-            ),
-          )
+          mountedIds.map((id) => {
+            // The store's own view keeps its identity while equal, so the memo can skip.
+            const view = paneStore.get(id);
+            return view ? <TerminalPane key={id} view={view} /> : null;
+          })
         )}
       </div>
     </div>
   );
-}
+});
 
 // ---------------------------------------------------------------------------
 // useTileTabActions — tab bundle scoped to ONE tile's workspace

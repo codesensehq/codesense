@@ -1,17 +1,20 @@
 // SPDX-License-Identifier: MIT
 import { useMemo } from "react";
+import { useShallow } from "zustand/react/shallow";
 
 import { agentRowLabel } from "@/features/viewer/lib/agent-row-presentation";
 import { duplicateFaceTags, resolveAgentFace } from "@/features/viewer/lib/agent-list-view";
-import {
-  useMinimizedTerminalTabIndex,
-  useRunningTerminalTabIndex,
-} from "@/features/viewer/lib/cli-workspace/store/terminal-selectors";
 import { isAgentSession } from "@/features/viewer/lib/hand-agents";
 import { useAgentListProjectionStore } from "@/features/viewer/lib/agent-list-projection";
 import { useAgentIdentityChoices } from "@/features/viewer/hooks/use-listed-agents";
 import { useAvatarPacks } from "@/shared/hooks/use-avatar-packs";
-import { findTabLocationBySessionId, type TerminalTabIndex } from "@/shared/stores/viewer-store";
+import {
+  findTabLocationBySessionId,
+  selectMinimizedTerminalTabIndex,
+  selectRunningTerminalTabIndex,
+  useViewerStore,
+  type TerminalTabIndex,
+} from "@/shared/stores/viewer-store";
 import type { AgentIdentityChoice } from "@/shared/lib/agent-identity-choice";
 import type { AgentSessionRow } from "@/tauri/commands";
 
@@ -29,12 +32,27 @@ export function useFaceTags(teamKey: string | null): ReadonlyMap<string, number>
   const sessions = useAgentListProjectionStore((s) => s.sessions);
   const choices = useAgentIdentityChoices(teamKey ?? undefined);
   const { faces } = useAvatarPacks();
-  const running = useRunningTerminalTabIndex();
-  const minimized = useMinimizedTerminalTabIndex();
+  const teamOf = useTabTeamBySession();
   return useMemo(
-    () => faceTagsFor(teamKey, { sessions, choices, faces, running, minimized }),
-    [teamKey, sessions, choices, faces, running, minimized],
+    () => faceTags(teamKey, { sessions, choices, faces, teamOf }),
+    [teamKey, sessions, choices, faces, teamOf],
   );
+}
+
+/** The team of each session whose tab is open. A running tab wins over a minimized one. */
+function teamBySession(
+  minimized: TerminalTabIndex,
+  running: TerminalTabIndex,
+): Record<string, string> {
+  const teamOf: Record<string, string> = {};
+  for (const index of [minimized, running]) {
+    for (const [team, byWorkspace] of Object.entries(index)) {
+      for (const tabs of Object.values(byWorkspace)) {
+        for (const tab of tabs) if (tab.sessionId) teamOf[tab.sessionId] = team;
+      }
+    }
+  }
+  return teamOf;
 }
 
 /** The inputs {@link faceTagsFor} reads, all from the stores. */
@@ -54,15 +72,35 @@ export function faceTagsFor(
   teamKey: string | null,
   input: FaceTagInput,
 ): ReadonlyMap<string, number> {
-  const { sessions, choices, faces, running, minimized } = input;
+  const { running, minimized, ...rest } = input;
+  const teamOf = teamBySession(minimized, running);
+  return faceTags(teamKey, { ...rest, teamOf });
+}
+
+/** The team of every session whose tab is open, by session id: equal while no session moves, so
+ *  a layout edit that leaves the tabs' teams alone does not redraw its readers. */
+function useTabTeamBySession(): Readonly<Record<string, string>> {
+  return useViewerStore(
+    useShallow((s) =>
+      teamBySession(selectMinimizedTerminalTabIndex(s), selectRunningTerminalTabIndex(s)),
+    ),
+  );
+}
+
+interface FaceTagSource {
+  sessions: readonly AgentSessionRow[] | null;
+  choices: Readonly<Record<string, AgentIdentityChoice>>;
+  faces: ReturnType<typeof useAvatarPacks>["faces"];
+  teamOf: Readonly<Record<string, string>>;
+}
+
+function faceTags(teamKey: string | null, input: FaceTagSource): ReadonlyMap<string, number> {
+  const { sessions, choices, faces, teamOf } = input;
   if (!sessions) return NO_TAGS;
   const entries = sessions.flatMap((row) => {
     if (!isAgentSession(row)) return [];
-    const loc = row.sessionId
-      ? (findTabLocationBySessionId(running, row.sessionId) ??
-        findTabLocationBySessionId(minimized, row.sessionId))
-      : null;
-    if (teamKey !== null && loc && loc.teamKey !== teamKey) return [];
+    const team = row.sessionId ? teamOf[row.sessionId] : undefined;
+    if (teamKey !== null && team !== undefined && team !== teamKey) return [];
     const face = resolveAgentFace(row, {
       name: agentRowLabel(row),
       choice: choices[row.handle],
@@ -76,15 +114,12 @@ export function faceTagsFor(
 
 /** The team whose workspace holds a session's tab, if any. */
 export function useTabTeamOf(sessionId: string | undefined): string | null {
-  const running = useRunningTerminalTabIndex();
-  const minimized = useMinimizedTerminalTabIndex();
-  return useMemo(() => {
-    if (!sessionId) return null;
-    return (
-      (
-        findTabLocationBySessionId(running, sessionId) ??
-        findTabLocationBySessionId(minimized, sessionId)
-      )?.teamKey ?? null
-    );
-  }, [sessionId, running, minimized]);
+  return useViewerStore((s) =>
+    sessionId
+      ? ((
+          findTabLocationBySessionId(selectRunningTerminalTabIndex(s), sessionId) ??
+          findTabLocationBySessionId(selectMinimizedTerminalTabIndex(s), sessionId)
+        )?.teamKey ?? null)
+      : null,
+  );
 }

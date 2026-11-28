@@ -89,7 +89,9 @@ group). Each render runs `stabilizeTree` against the previous one:
 release time, so it stays right after leaves move.
 
 **Keep `renderLeaf` stable.** Wrap it in `useCallback` with the dependencies it
-really reads. A new function every render redraws every leaf.
+really reads. A new function every render redraws every leaf. The CLI workspace's tile
+mosaic and its tab grid are conforming callers: what changes per leaf reaches the leaf through
+a keyed view store, not through `renderLeaf`.
 
 ## Drop zones
 
