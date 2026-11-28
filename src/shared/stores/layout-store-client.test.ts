@@ -45,6 +45,10 @@ const hub = vi.hoisted(() => {
 vi.mock("@/tauri/commands", () => commands);
 vi.mock("@/shared/lib/tiles-enabled", () => ({ tilesEnabled: () => Promise.resolve(flag.on) }));
 vi.mock("@/features/dashboard/lib/live-hub", () => ({ liveHub: { watch: hub.watch } }));
+const log = vi.hoisted(() => ({ warn: vi.fn() }));
+vi.mock("@/shared/lib/logger", () => ({
+  logger: { warn: log.warn, info: vi.fn(), error: vi.fn(), debug: vi.fn() },
+}));
 
 import {
   buildOps,
@@ -114,6 +118,7 @@ beforeEach(() => {
   resetLayoutClientForTests();
   hub.watches.length = 0;
   hub.watch.mockClear();
+  log.warn.mockClear();
   commands.groupRead.mockReset().mockResolvedValue({ rev: 3, tree: wire(TREE) });
   let rev = 3;
   commands.groupCommit.mockReset().mockImplementation(async () => ({ rev: ++rev }));
@@ -335,6 +340,62 @@ describe("a conflict", () => {
     await flushGroupCommits();
     expect(commands.groupCommit).toHaveBeenCalledTimes(1);
     expect(saved(state.foregroundLayout[TEAM].root)).toBe(saved(head));
+  });
+
+  it("a commit that throws re-reads the head and shows it, and the next save builds on it", async () => {
+    const { state } = await hydrated();
+    const head = split("row", [leaf("ws-c"), leaf("ws-a"), leaf("ws-b")]);
+    commands.groupCommit.mockRejectedValueOnce(new Error("disk full"));
+    commands.groupRead.mockResolvedValue({ rev: 5, tree: wire(head) });
+    const swap: KitOp = { op: "swap", a: "ws-a", b: "ws-c" };
+    saveLayout(FG, applyAll(TREE, [swap]), swap);
+    await flushGroupCommits();
+    expect(commands.groupRead).toHaveBeenCalledTimes(2);
+    expect(saved(state.foregroundLayout[TEAM].root)).toBe(saved(head));
+    expect(log.warn).toHaveBeenCalledTimes(1);
+
+    commands.groupCommit.mockResolvedValueOnce({ rev: 6 });
+    const close: KitOp = { op: "close", leafId: "ws-b" };
+    saveLayout(FG, applyAll(head, [close]), close);
+    await flushGroupCommits();
+    expect(commands.groupCommit.mock.calls[1][2]).toBe(5);
+    expect(commitOps(1)).toEqual([close]);
+  });
+
+  it("a replay that conflicts again is replayed on each newer head", async () => {
+    const { state } = await hydrated();
+    const at7 = split("row", [leaf("ws-a"), leaf("ws-b"), leaf("ws-c")]);
+    const at8 = split("row", [leaf("ws-b"), leaf("ws-a"), leaf("ws-c")]);
+    commands.groupCommit
+      .mockResolvedValueOnce({ conflict: { currentRevision: 7 } })
+      .mockResolvedValueOnce({ conflict: { currentRevision: 8 } })
+      .mockResolvedValueOnce({ rev: 9 });
+    commands.groupRead
+      .mockResolvedValueOnce({ rev: 7, tree: wire(at7) })
+      .mockResolvedValueOnce({ rev: 8, tree: wire(at8) });
+    const swap: KitOp = { op: "swap", a: "ws-a", b: "ws-c" };
+    saveLayout(FG, applyAll(TREE, [swap]), swap);
+    await flushGroupCommits();
+    expect(commands.groupCommit).toHaveBeenCalledTimes(3);
+    expect(commands.groupCommit.mock.calls.map((c) => c[2])).toEqual([3, 7, 8]);
+    expect(saved(state.foregroundLayout[TEAM].root)).toBe(saved(applyAll(at8, [swap])));
+    expect(log.warn).not.toHaveBeenCalled();
+  });
+
+  it("past three replays, shows the head and logs the gesture it dropped", async () => {
+    const { state } = await hydrated();
+    const head = split("row", [leaf("ws-b"), leaf("ws-a"), leaf("ws-c")]);
+    let rev = 3;
+    commands.groupCommit.mockImplementation(async () => ({
+      conflict: { currentRevision: ++rev },
+    }));
+    commands.groupRead.mockImplementation(async () => ({ rev, tree: wire(head) }));
+    const swap: KitOp = { op: "swap", a: "ws-a", b: "ws-c" };
+    saveLayout(FG, applyAll(TREE, [swap]), swap);
+    await flushGroupCommits();
+    expect(commands.groupCommit).toHaveBeenCalledTimes(4);
+    expect(saved(state.foregroundLayout[TEAM].root)).toBe(saved(head));
+    expect(log.warn).toHaveBeenCalledTimes(1);
   });
 
   it("a reply past the next rev re-reads the head and shows it", async () => {

@@ -10,7 +10,8 @@
  * `flushGroupCommits` sends what is pending now (gesture end, window close). A conflict reloads
  * the head and replays the ops on it, unless an agent's write touched the same tiles
  * (`collided`): then the window shows the head and drops the ops, and the person repeats the
- * gesture. Any reply other than the next rev means another writer was folded in, so the window
+ * gesture. A replay that conflicts again is replayed on the newer head, three times at most,
+ * then dropped and logged; a commit that fails outright re-reads the head and shows it. Any reply other than the next rev means another writer was folded in, so the window
  * re-reads the head and shows it.
  *
  * Another writer's change (an agent's ops) arrives through the host's live hub: the window
@@ -24,6 +25,7 @@
  * as before.
  */
 import { tilesEnabled } from "@/shared/lib/tiles-enabled";
+import { logger } from "@/shared/lib/logger";
 import { parseTeamKey } from "@/shared/lib/parse-team-key";
 import { parseWorkspaceKey } from "@/shared/lib/workspace-key";
 import { applyKitOp, KIT_OP_FAILED } from "@/shared/tiling/apply-kit-op";
@@ -54,6 +56,8 @@ export type LayoutSlices = Pick<
 type Seed = (update: (s: LayoutSlices) => Partial<LayoutSlices>) => void;
 
 const COALESCE_MS = 100;
+/** Replays of one gesture on a newer head before it is dropped. */
+const REPLAYS = 3;
 /** Hex digits of the sha-256 kept in a file id. */
 const ID_HEX = 32;
 
@@ -327,35 +331,47 @@ function show(f: LayoutFile) {
   seed?.((s) => seeded(s, f.target, root));
 }
 
-/** Sends `ops` on the file's rev and settles the reply. */
+/** Sends `ops` on the file's rev and settles the reply. A commit that throws re-reads the
+ *  head and shows it, so the next save goes out on a rev the store holds. */
 async function commit(f: LayoutFile, ops: KitOp[]): Promise<void> {
-  const base = f.rev;
-  const reply = await groupCommit(f.org, f.file, base, ops);
-  if ("rev" in reply) {
-    const after = applyAll(f.tree, ops);
-    if (reply.rev === base + 1 && after !== KIT_OP_FAILED) {
-      f.rev = reply.rev;
-      f.tree = after;
-      f.shown = applyAll(after, [...f.pending.values()]) as MosaicNode | null;
-      return;
-    }
+  try {
+    if (await place(f, ops)) return;
+  } catch (error) {
+    logger.warn("tiling", `A layout change wasn't saved: ${String(error)}`);
     await readHead(f);
-    show(f);
-    return;
-  }
-  await readHead(f);
-  if (!reply.conflict.collided) {
-    const replayed = await groupCommit(f.org, f.file, f.rev, ops);
-    const after = applyAll(f.tree, ops);
-    if ("rev" in replayed && replayed.rev === f.rev + 1 && after !== KIT_OP_FAILED) {
-      f.rev = replayed.rev;
-      f.tree = after;
-      f.shown = after;
-    } else {
-      await readHead(f);
-    }
   }
   show(f);
+}
+
+/**
+ * Sends `ops` on the file's rev, and after each plain conflict reloads the head and replays them
+ * on it, up to {@link REPLAYS} times; past that the gesture is dropped and logged. True when the
+ * first send placed them as the next rev, which the screen already shows; else the file holds
+ * the head to show.
+ */
+async function place(f: LayoutFile, ops: KitOp[]): Promise<boolean> {
+  for (let replay = 0; ; replay++) {
+    const base = f.rev;
+    const reply = await groupCommit(f.org, f.file, base, ops);
+    if ("rev" in reply) {
+      const after = applyAll(f.tree, ops);
+      if (reply.rev !== base + 1 || after === KIT_OP_FAILED) {
+        await readHead(f);
+        return false;
+      }
+      f.rev = reply.rev;
+      f.tree = after;
+      const shown = applyAll(after, [...f.pending.values()]);
+      f.shown = shown === KIT_OP_FAILED ? after : shown;
+      return replay === 0;
+    }
+    await readHead(f);
+    if (reply.conflict.collided) return false;
+    if (replay === REPLAYS) {
+      logger.warn("tiling", `A layout change was dropped after ${REPLAYS} conflicting replays`);
+      return false;
+    }
+  }
 }
 
 async function sendPending(f: LayoutFile): Promise<void> {
