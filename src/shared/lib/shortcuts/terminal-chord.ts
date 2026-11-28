@@ -44,11 +44,9 @@ function tryParse(keystroke: string): KeystrokeParts | null {
   }
 }
 
-/** `parts` with Shift added when it is a bare Ctrl control key; the same object otherwise. A
- *  `Ctrl` (⌃⌘) chord is never lifted: it matches only on macOS. */
+/** `parts` with Shift added when it is a bare Ctrl control key; the same object otherwise. */
 function lifted(parts: KeystrokeParts): KeystrokeParts {
-  const bareControlKey =
-    parts.cmdOrCtrl && !parts.shift && !parts.alt && isControlKey(parts.key);
+  const bareControlKey = parts.cmdOrCtrl && !parts.shift && !parts.alt && isControlKey(parts.key);
   return bareControlKey ? { ...parts, shift: true } : parts;
 }
 

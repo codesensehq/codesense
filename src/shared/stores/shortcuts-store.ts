@@ -230,7 +230,11 @@ function canonicalChord(
   }
   // The frame shim's key formatter can't parse Ctrl, so a dashboard command stays off ⌃⌘.
   if (isDashboardCommandActionId(actionId) && namesCtrl(canonical)) {
-    return { ok: false, reason: "reserved", detail: "Dashboard commands can't use the Ctrl modifier with Cmd" };
+    return {
+      ok: false,
+      reason: "reserved",
+      detail: "Dashboard commands can't use the Ctrl modifier with Cmd",
+    };
   }
   const reserved = isDashboardCommandActionId(actionId)
     ? isReservedForDashboardCommand(canonical)
