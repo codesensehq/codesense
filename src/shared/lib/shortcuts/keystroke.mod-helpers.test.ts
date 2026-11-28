@@ -8,6 +8,7 @@ import {
   hasCtrlAndCmd,
   hasMod,
   hasPlatformMod,
+  isCtrlChordUnavailable,
   keydownEvent,
   matchesKeystroke,
   modifiersFrom,
@@ -150,5 +151,21 @@ describe("keydownEvent", () => {
     setPlatform("MacIntel");
     const mac = { key: "[", code: "Digit8", metaKey: true, altKey: true, modifierAltGraph: true };
     expect(matchesKeystroke(keydownEvent(mac), "CmdOrCtrl+Alt+[")).toBe(true);
+  });
+});
+
+describe("isCtrlChordUnavailable", () => {
+  it("is true for a Ctrl chord off macOS and false on macOS", () => {
+    setPlatform("Linux x86_64");
+    expect(isCtrlChordUnavailable("Ctrl+CmdOrCtrl+Alt+A")).toBe(true);
+    expect(isCtrlChordUnavailable("CmdOrCtrl+Alt+A")).toBe(false);
+    setPlatform("MacIntel");
+    expect(isCtrlChordUnavailable("Ctrl+CmdOrCtrl+Alt+A")).toBe(false);
+  });
+
+  it("does not throw on a capture that does not parse, such as a bare + key", () => {
+    setPlatform("Linux x86_64");
+    expect(isCtrlChordUnavailable("CmdOrCtrl++")).toBe(false);
+    expect(isCtrlChordUnavailable("+")).toBe(false);
   });
 });

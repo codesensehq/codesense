@@ -129,9 +129,18 @@ export function hasCtrlAndCmd(e: ModifierState): boolean {
   return !!(e.metaKey && e.ctrlKey);
 }
 
+/** Whether a binding names the ⌃ modifier; an unparseable one (such as a "+" key capture) does not. */
+export function namesCtrl(keystroke: string): boolean {
+  try {
+    return parseKeystroke(keystroke).ctrl === true;
+  } catch {
+    return false;
+  }
+}
+
 /** A keystroke that names Ctrl with Cmd while this OS has no such chord, so it could never fire. */
 export function isCtrlChordUnavailable(keystroke: string): boolean {
-  return !isMac() && parseKeystroke(keystroke).ctrl === true;
+  return !isMac() && namesCtrl(keystroke);
 }
 
 /** The Meta key itself: a macOS Cmd feature that stays Cmd-only. */

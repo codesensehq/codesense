@@ -100,6 +100,16 @@ describe("useShortcutsStore — setShortcut", () => {
     expect(useShortcutsStore.getState().shortcuts["settings.open"]).toBeUndefined();
   });
 
+  it("refuses a Ctrl+Cmd chord for a dashboard command, which the frame cannot format", () => {
+    const dashboard = "dashboard:team:acme:dev/inbox/archive";
+    const result = useShortcutsStore.getState().setShortcut(dashboard, "Ctrl+CmdOrCtrl+Alt+A");
+    expect(result).toMatchObject({ ok: false, reason: "reserved" });
+    expect(useShortcutsStore.getState().shortcuts[dashboard]).toBeUndefined();
+    expect(
+      useShortcutsStore.getState().takeShortcut(dashboard, "Ctrl+CmdOrCtrl+Alt+A"),
+    ).toMatchObject({ ok: false, reason: "reserved" });
+  });
+
   it("rejects a conflicting keystroke and names the conflicting action", () => {
     // SW-SN-6: CmdOrCtrl+Shift+O is now nav.goto-heading (nav.switch-org moved to
     // CmdOrCtrl+Shift+G). Setting another action to Shift+O conflicts with it.

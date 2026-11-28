@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 import { useEffect } from "react";
 
-import { matchesKeystroke, parseKeystroke } from "@/shared/lib/shortcuts/keystroke";
+import { matchesKeystroke, namesCtrl, parseKeystroke } from "@/shared/lib/shortcuts/keystroke";
 import { isTerminalBracketKey } from "@/shared/lib/shortcuts/terminal-chord";
 import {
   allShortcutActions,
@@ -93,15 +93,6 @@ export function useShortcutHandler(): void {
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
   }, [shortcuts, hasActiveWorkspace, hasTeam, settingsPanelOpen]);
-}
-
-/** Whether a binding names the ⌃ modifier; an unparseable one does not. */
-function namesCtrl(keystroke: string): boolean {
-  try {
-    return parseKeystroke(keystroke).ctrl === true;
-  } catch {
-    return false;
-  }
 }
 
 /** Match a key using the current bindings and the same UI gate for host and frame keys. */
