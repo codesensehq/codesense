@@ -34,6 +34,8 @@ const message = (
       rendered: `${level}: ${text}`,
     },
   });
+const aborting = (target) =>
+  message("error", null, { code: null, text: "aborting due to 1 previous error", target });
 const artifact = (target) => JSON.stringify({ reason: "compiler-artifact", target });
 const finished = (success) => JSON.stringify({ reason: "build-finished", success });
 
@@ -52,9 +54,34 @@ test("passes warnings and deny lints in the app crate outside the module", () =>
     message("warning", "src-tauri/src/windows/mod.rs", { code: "unused_imports" }),
     message("warning", "src-tauri/src/windows/e2e_names.rs"),
     message("error", "src-tauri/src/commands/fs.rs", { code: "clippy::never_loop" }),
+    aborting(APP),
     finished(false),
   ];
   assert.deepEqual(clippyProblems(lines.join("\n")), []);
+});
+
+test("fails closed when the app crate's check ends without rustc's summary after a lint", () => {
+  // A killed rustc leaves the lint it had printed and no "aborting due to" summary, so the
+  // lint pass may never have reached the module.
+  const lines = [
+    message("error", "src-tauri/src/commands/fs.rs", { code: "clippy::never_loop" }),
+    finished(false),
+  ];
+  assert.deepEqual(clippyProblems(lines.join("\n")), [
+    "the app crate's check ended without rustc's summary (a crash or a killed rustc), so the module may not have been linted",
+  ]);
+});
+
+test("fails a compiler crash anywhere, even with the app crate's summary", () => {
+  const lines = [
+    message("error", "src-tauri/src/commands/fs.rs", { code: "clippy::never_loop" }),
+    message("error: internal compiler error", null, { code: null, text: "unexpected panic" }),
+    aborting(APP),
+    finished(false),
+  ];
+  assert.deepEqual(clippyProblems(lines.join("\n")), [
+    "the compiler crashed (error: internal compiler error): unexpected panic",
+  ]);
 });
 
 test("fails any lint or warning in the module or a file under it", () => {
