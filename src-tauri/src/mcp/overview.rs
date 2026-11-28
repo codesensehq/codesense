@@ -260,6 +260,9 @@ fn sessions_section(
     let (items, truncated) = capped(items);
     json!({
         "total": rows.len(),
+        // Sessions by their own state. Its `needs-you` is a session blocked or waiting on a
+        // permission, not the set: one session can hold two items or none (a blocked agent asks
+        // nothing), and an ended sender's card still counts there.
         "byState": count_by(rows, |r| str_at(r, "state").map(str::to_string)),
         "byMachine": count_by(rows, |r| Some(str_at(r, "machine").unwrap_or("unknown").to_string())),
         "needsYou": needs_you,
@@ -614,6 +617,19 @@ pub(crate) fn needs_you_view(
     }
 }
 
+/// The caller's view of the needs-you set from the running hub: the person's `all`, a team's
+/// agent its own team's. A caller of no known team errors before the hub is asked.
+pub(crate) fn read_needs_you<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    scope: &crate::context_repo::caller_scope::CallerScope,
+) -> Result<Vec<Value>, String> {
+    use tauri::Manager;
+    let view = needs_you_view(scope)?;
+    app.try_state::<crate::live_hub::LiveHub>()
+        .ok_or_else(|| "the live hub is not running".to_string())?
+        .needs_you_rows(&view)
+}
+
 /// Reads every source the overview needs from the running app. Never fails: a source
 /// that can't be read becomes its section's `error`.
 pub(crate) async fn gather(
@@ -647,7 +663,7 @@ pub(crate) async fn gather(
     };
 
     // Read before `scope` moves into the routines read below.
-    let needs_you_scope = needs_you_view(&scope);
+    let needs_you = read_needs_you(app, &scope);
 
     let (agents, routines, docs_root) = match &ambient {
         Ok((home, user_id)) => {
@@ -735,11 +751,6 @@ pub(crate) async fn gather(
         }
         Err(error) => Err(error),
     };
-
-    let needs_you = app
-        .try_state::<crate::live_hub::LiveHub>()
-        .ok_or_else(|| "the live hub is not running".to_string())
-        .and_then(|hub| hub.needs_you_rows(&needs_you_scope?));
 
     OverviewInputs {
         generated_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
@@ -1000,6 +1011,39 @@ mod tests {
         assert_eq!(out["workspaces"]["total"], 0);
         assert_eq!(out["docs"]["org"], "codesense/docs");
         assert_eq!(out["docs"]["root"], Value::Null);
+    }
+
+    /// `byState` counts sessions by their own state and `needsYou` counts the set's items, so
+    /// they differ by design: a blocked agent is a `needs-you` session that asks nothing, a
+    /// capped agent that also asks is one session and two items, and an ended sender's card is
+    /// an item with no running session.
+    #[test]
+    fn by_state_counts_sessions_and_the_set_counts_items() {
+        let mut inputs = empty();
+        inputs.sessions = Ok(vec![
+            json!({"handle":"blocked","displayName":"blocked","state":"needs-you","machine":"This Mac"}),
+            json!({"handle":"capped","displayName":"capped","state":"running","machine":"This Mac"}),
+            json!({"handle":"gone","displayName":"gone","state":"exited","machine":"This Mac"}),
+        ]);
+        inputs.needs_you = Ok(vec![
+            json!({"id":"agent:capped:capped","kind":"capped","session":"capped"}),
+            json!({"id":"agent:capped:question","kind":"question","session":"capped","question":"Which branch?"}),
+            json!({"id":"inbox:acme/web/3","kind":"question","session":"gone","messageId":3,"question":"Ship it?"}),
+        ]);
+        let out = compose(&inputs);
+        assert_eq!(out["sessions"]["byState"]["needs-you"], 1);
+        assert_eq!(out["needsYou"]["total"], 3);
+        let waiting: Vec<&str> = out["sessions"]["needsYou"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s["handle"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            waiting,
+            ["capped", "gone"],
+            "the set names who waits, not byState"
+        );
     }
 
     #[test]

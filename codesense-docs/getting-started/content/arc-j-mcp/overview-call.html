@@ -324,7 +324,7 @@
             </tr>
             <tr>
               <td>sessions</td>
-              <td><code>total</code>, <code>byState</code>, <code>byMachine</code>, <code>needsYou</code> (the sessions the needs-you set's items are about, or an <code>error</code> when the set could not be read), and <code>notExited</code>: each running agent or terminal's handle, state, machine, workspace, story, role, who launched it and its unread count.</td>
+              <td><code>total</code>, <code>byState</code> (sessions by their own state; its <code>needs-you</code> counts sessions blocked or waiting on a permission, so it can differ from the <code>needsYou</code> section's <code>total</code>, which counts the set's items), <code>byMachine</code>, <code>needsYou</code> (the sessions the needs-you set's items are about, or an <code>error</code> when the set could not be read), and <code>notExited</code>: each running agent or terminal's handle, state, machine, workspace, story, role, who launched it and its unread count.</td>
             </tr>
             <tr>
               <td>needsYou</td>
