@@ -26,13 +26,14 @@ const HELPER = "shared/windows/listen-scoped.ts";
 const RAW_LISTENERS = new Set(["listen", "once"]);
 /** The `current-window.ts` handle getters whose `.listen`/`.once` register on that webview alone. */
 const HANDLE_GETTERS = new Set(["currentWindow", "currentWebview", "currentWebviewWindow"]);
-/** The files that may register on a handle: webview-scoped, and either gated to `main` by hand
- *  or a satellite's own registry client. */
+/** The files that may register on a handle: webview-scoped, and either gated to `main` by hand,
+ *  a satellite's own registry client, or the move commands' abort toast (sent to the source). */
 const HANDLE_LISTENERS = new Set([
   "shared/hooks/use-rendered-document-bridge.ts",
   "shared/windows/use-main-window-registry.ts",
   "shared/windows/use-main-window-moves.ts",
   "shared/windows/satellite-registry.ts",
+  "shared/windows/move-commands.ts",
 ]);
 
 interface Site {
