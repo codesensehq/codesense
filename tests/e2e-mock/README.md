@@ -174,3 +174,38 @@ exit 1, and `record` prints the same `FAIL` lines without failing.
 `record` replaces only that runner's set. Keys listed in `M1_ONLY_KEYS`
 (`scripts/perf-baseline.mjs`) belong to the `m1` set alone: CI never writes
 them, and `record` drops them for any other runner.
+
+### The tile and nav keys
+
+Two more cases measure worlds the mock opens by query, each opt-in so every other
+world boots unchanged:
+
+- `?perf=tiles12`: 12 workspaces tiled 4 × 3, each running one shell with 2,400
+  lines of scrollback. The case resizes the window and drags a divider, then
+  wheels through the first tile's history, and reads the renderer's memory
+  after both.
+- `?perf=nav5k`: a team whose content tree is exactly 5,000 files in nested
+  folders (`area-NN/group-N/file-NNNNN.md`). The case times the nav's first
+  paint of a file row from the tree scan's answer, then opens every folder and
+  wheels from the first file to the last, timing each step.
+
+| Key                             | Unit | What it measures                                             |
+| ------------------------------- | ---- | ------------------------------------------------------------ |
+| `fps_12_tiles_resize`           | fps  | Mean frame rate while the window resizes and a divider drags |
+| `fps_12_tiles_scroll`           | fps  | Mean frame rate while a tile's scrollback wheels             |
+| `rss_12_tiles_renderer`         | MiB  | Resident memory of the page's WebContent process             |
+| `footprint_12_tiles_webcontent` | MiB  | `footprint` of the same process (macOS only)                 |
+| `nav_first_paint`               | ms   | Tree scan answered to the first frame that shows a file row  |
+| `nav_scroll`                    | ms   | Wheel event to the first frame the list has moved, per step  |
+
+Each sample's end state records what the run saw: frame count, worst frame and
+idle frame rate for the fps keys, the WebContent process count for memory, rows
+painted for the first paint, and steps and folders opened for the scroll.
+
+The memory keys read the Playwright WebKit build's WebContent process, which
+holds the mock page and nothing else, not the desktop app's webview. Read them as
+a ratio between runs of the same build on the same machine, never as the app's
+absolute memory. Off macOS the `footprint` key is skipped with an annotation.
+
+With the default 5 runs, the tail each key is compared on is its worst run: the
+p5 for fps (lower is worse) and the p95 for ms and MiB.
