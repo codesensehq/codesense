@@ -35,6 +35,11 @@ test("a satellite probe reads a team file and hears it change @p0", async ({ pag
   );
   await expect
     .poll(() => probeResults(page))
-    .toEqual({ read: "written after the probe loaded", push: "probe-read.txt" });
+    .toEqual({
+      read: "written after the probe loaded",
+      push: "probe-read.txt",
+      // When the viewer's frame first drew, which the real-app first-paint spec reads.
+      painted: expect.stringMatching(/^\d{13}$/),
+    });
   expect(errors).toEqual([]);
 });

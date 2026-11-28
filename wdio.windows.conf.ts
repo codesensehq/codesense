@@ -8,7 +8,8 @@
 // service also connects to). WebdriverIO loads this file again in each worker, which inherits
 // the launcher's environment, so the home and the port are chosen once and kept there.
 //
-// Env: CODESENSE_WINDOWS_E2E_APP names another app binary (default: the debug build).
+// Env: CODESENSE_WINDOWS_E2E_APP names another app binary (default: the debug build);
+// CODESENSE_WINDOWS_E2E_FIRST_PAINT=1 runs only the first-paint spec.
 import { mkdirSync, mkdtempSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -54,13 +55,17 @@ if (!process.env.CODESENSE_WINDOWS_E2E_HOME) {
   process.env.WEBKIT_DISABLE_DMABUF_RENDERER ??= "1";
 }
 const port = Number(process.env.TAURI_WEBDRIVER_PORT);
+const FIRST_PAINT = "./tests/windows/first-paint.e2e.ts";
+const firstPaint = process.env.CODESENSE_WINDOWS_E2E_FIRST_PAINT === "1";
 
 const application =
   process.env.CODESENSE_WINDOWS_E2E_APP ?? path.join(root, "target", "debug", "codesense");
 
 export const config: WebdriverIO.Config = {
   runner: "local",
-  specs: ["./tests/windows/**/*.e2e.ts"],
+  // The first-paint spec needs the launch's first window, so it runs alone, in a run of its own.
+  specs: [firstPaint ? FIRST_PAINT : "./tests/windows/**/*.e2e.ts"],
+  exclude: firstPaint ? [] : [FIRST_PAINT],
   // One app, so one worker.
   maxInstances: 1,
   capabilities: [

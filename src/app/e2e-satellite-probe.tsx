@@ -10,6 +10,9 @@
  * `window.__CODESENSE_PROBE_RESULTS__` (`{key: text}`), so a spec reads it from the top page
  * with a plain `browser.execute` and never enters the cross-origin frame.
  *
+ * It also records `painted`, the epoch ms of the first animation frame after the viewer's frame
+ * element appears, which the first-paint spec times a window's open against.
+ *
  * It also runs the registry client (listen, pull, `window_ready`), so its registry entry
  * stops being pending once it has mounted, as a satellite's should. The slices it pulls are
  * dropped: the probe shows its own.
@@ -17,7 +20,7 @@
  * `main.tsx` loads this only in `webdriver` and `mock` builds; it is proven absent from the
  * release bundle (`scripts/verify-webdriver-absence.ts`) by its results global and its marker.
  */
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { HtmlViewer } from "@/features/dashboard/components/html-viewer";
 import { currentWebviewWindow, currentWindowLabel } from "@/shared/lib/current-window";
@@ -83,6 +86,28 @@ export function collectProbeResults(target: Window = window): () => void {
   return () => target.removeEventListener("message", onMessage);
 }
 
+/**
+ * Records in `results.painted` the epoch ms of the first animation frame after an iframe is
+ * under `root` (the viewer's frame element, drawn before its document loads). Returns the stop.
+ */
+export function markFirstFrame(root: Element, results: Record<string, string>): () => void {
+  let frame = 0;
+  const observer = new MutationObserver(check);
+  function check() {
+    if (!root.querySelector("iframe")) return;
+    observer.disconnect();
+    frame = requestAnimationFrame(() => {
+      results.painted = String(Date.now());
+    });
+  }
+  observer.observe(root, { childList: true, subtree: true });
+  check();
+  return () => {
+    observer.disconnect();
+    cancelAnimationFrame(frame);
+  };
+}
+
 /** Starts the registry client for `label`; returns its stop. */
 function reportReady(label: string): () => void {
   let stopped = false;
@@ -135,10 +160,19 @@ export function SatelliteProbe({ path }: { path: string }): ReactNode {
       path,
     ),
   );
-  useEffect(() => collectProbeResults(), []);
+  const root = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const stopResults = collectProbeResults();
+    const results = window.__CODESENSE_PROBE_RESULTS__;
+    const stopPaint = root.current && results ? markFirstFrame(root.current, results) : () => {};
+    return () => {
+      stopPaint();
+      stopResults();
+    };
+  }, []);
   useEffect(() => reportReady(currentWindowLabel()), []);
   return (
-    <div data-e2e-probe={PROBE_MARKER} className="contents">
+    <div ref={root} data-e2e-probe={PROBE_MARKER} className="contents">
       <SatelliteRoot source={source} renderer={renderProbe} />
     </div>
   );

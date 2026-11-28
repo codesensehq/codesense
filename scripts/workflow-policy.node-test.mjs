@@ -665,6 +665,16 @@ test("rust.yml's two-window e2e job tests, builds and drives the webdriver app",
   assert.equal(build.run, "pnpm build:e2e:windows");
   const [runAt, run] = step("Drive two windows");
   assert.equal(run.run, "xvfb-run -a pnpm test:e2e:windows");
+  // Five launches of the first-paint spec alone, so each has a cold first window.
+  const [paintAt, paint] = step("Time first paints over five launches");
+  assert.equal(paint.if, "(success() || failure()) && steps.build.outcome == 'success'");
+  assert.deepEqual(paint.env, { CODESENSE_WINDOWS_E2E_FIRST_PAINT: "1" });
+  assert.equal(
+    paint.run,
+    "for launch in 1 2 3 4 5; do\n" +
+      '  FIRST_PAINT_LAUNCH="$launch" xvfb-run -a pnpm test:e2e:windows\n' +
+      "done\n",
+  );
   const [presentAt, present] = step("Check the absence check sees the webdriver bundle");
   assert.equal(present.if, "(success() || failure()) && steps.build.outcome == 'success'");
   assert.equal(
@@ -679,7 +689,8 @@ test("rust.yml's two-window e2e job tests, builds and drives the webdriver app",
     [clippyAt, pluginAt],
     [pluginAt, buildAt],
     [buildAt, runAt],
-    [runAt, presentAt],
+    [runAt, paintAt],
+    [paintAt, presentAt],
   ])
     assert.ok(before < after, `${job.steps[before].name} before ${job.steps[after].name}`);
   const uploads = job.steps.filter((s) => s.uses?.startsWith("actions/upload-artifact@"));

@@ -1,6 +1,11 @@
 // SPDX-License-Identifier: MIT
-import { afterEach, describe, expect, it } from "vitest";
-import { collectProbeResults, probeSlice, probeViewerProps } from "./e2e-satellite-probe";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  collectProbeResults,
+  markFirstFrame,
+  probeSlice,
+  probeViewerProps,
+} from "./e2e-satellite-probe";
 
 describe("the satellite probe route", () => {
   it("renders a file in panes/ as a pane bound to the sibling content", () => {
@@ -61,6 +66,40 @@ describe("the satellite probe route", () => {
       collectProbeResults()();
       post(frame.contentWindow, { type: "probe:result", key: "read", text: "late" });
       expect(window.__CODESENSE_PROBE_RESULTS__).toEqual({});
+    });
+  });
+
+  describe("first paint", () => {
+    afterEach(() => {
+      document.body.innerHTML = "";
+    });
+
+    it("records the epoch ms of the first animation frame after a frame appears, once", async () => {
+      const results: Record<string, string> = {};
+      const root = document.createElement("div");
+      document.body.append(root);
+      const stop = markFirstFrame(root, results);
+      await Promise.resolve();
+      expect(results.painted).toBeUndefined();
+      const before = Date.now();
+      root.append(document.createElement("iframe"));
+      await vi.waitFor(() => expect(results.painted).toBeDefined());
+      const painted = Number(results.painted);
+      expect(painted).toBeGreaterThanOrEqual(before);
+      root.append(document.createElement("iframe"));
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      expect(Number(results.painted)).toBe(painted);
+      stop();
+    });
+
+    it("marks a frame already there when it starts", async () => {
+      const results: Record<string, string> = {};
+      const root = document.createElement("div");
+      root.append(document.createElement("iframe"));
+      document.body.append(root);
+      const stop = markFirstFrame(root, results);
+      await vi.waitFor(() => expect(results.painted).toBeDefined());
+      stop();
     });
   });
 });

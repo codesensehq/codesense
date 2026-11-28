@@ -997,6 +997,16 @@ jobs:
         run: pnpm build:e2e:windows
       - name: Drive two windows
         run: xvfb-run -a pnpm test:e2e:windows
+      - name: Time first paints over five launches
+        # The first-paint spec alone, in five launches of the app, so each has a cold first window
+        # (tests/windows/artifacts/first-paint-<run>-<launch>.json, uploaded below).
+        if: (success() || failure()) && steps.build.outcome == 'success'
+        env:
+          CODESENSE_WINDOWS_E2E_FIRST_PAINT: "1"
+        run: |
+          for launch in 1 2 3 4 5; do
+            FIRST_PAINT_LAUNCH="$launch" xvfb-run -a pnpm test:e2e:windows
+          done
       - name: Check the absence check sees the webdriver bundle
         # The release check's positive control: every marker it looks for is in this bundle.
         if: (success() || failure()) && steps.build.outcome == 'success'
