@@ -13,8 +13,11 @@ import {
   formatModifiersDisplay,
   hasAnyModifier,
   hasCommandModifier,
+  hasCtrlAndCmd,
   hasMod,
+  isMac,
   keystrokeFromEvent,
+  parseKeystroke,
 } from "@/shared/lib/shortcuts/keystroke";
 import {
   findConflict,
@@ -140,7 +143,12 @@ export function ShortcutRow({ action, humanOnly }: ShortcutRowProps) {
     // user gets feedback that their modifier is registered.
     if (e.key === "Meta" || e.key === "Control" || e.key === "Shift" || e.key === "Alt") {
       setPendingModifiers(
-        formatModifiersDisplay({ cmdOrCtrl: hasMod(e), shift: e.shiftKey, alt: e.altKey }),
+        formatModifiersDisplay({
+          ctrl: hasCtrlAndCmd(e),
+          cmdOrCtrl: hasMod(e),
+          shift: e.shiftKey,
+          alt: e.altKey,
+        }),
       );
       return;
     }
@@ -171,6 +179,11 @@ export function ShortcutRow({ action, humanOnly }: ShortcutRowProps) {
 
     const keystroke = keystrokeFromEvent(e.nativeEvent);
     if (!keystroke) return;
+    // ⌃ held with ⌘ is a macOS chord: elsewhere it would never fire.
+    if (!isMac() && parseKeystroke(keystroke).ctrl) {
+      setError({ detail: "Ctrl with the Meta key works only on macOS — pick another chord" });
+      return;
+    }
     const result = setShortcut(action.id, keystroke);
     if (result.ok) {
       closeEditor();

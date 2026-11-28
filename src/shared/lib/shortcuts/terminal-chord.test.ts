@@ -179,7 +179,7 @@ describe("terminalChord with a ⌃ chord", () => {
     // A command on Ctrl+K still lifts onto Ctrl+Shift+K: the ⌃ built-in doesn't hold it.
     expect(terminalChord("CmdOrCtrl+K", { builtIns }, true)).toBe("CmdOrCtrl+Shift+K");
     expect(terminalChord("CmdOrCtrl+Shift+K", { builtIns }, true)).toBe("CmdOrCtrl+Shift+K");
-    // The same Ctrl chord is still the built-in's.
-    expect(terminalChord("Ctrl+CmdOrCtrl+K", { builtIns }, true)).toBe("");
+    // A Ctrl chord matches nothing off macOS, so no collision rule applies to it.
+    expect(terminalChord("Ctrl+CmdOrCtrl+K", { builtIns }, true)).toBe("Ctrl+CmdOrCtrl+K");
   });
 });

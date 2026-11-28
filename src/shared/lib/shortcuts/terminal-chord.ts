@@ -44,9 +44,11 @@ function tryParse(keystroke: string): KeystrokeParts | null {
   }
 }
 
-/** `parts` with Shift added when it is a bare Ctrl control key; the same object otherwise. */
+/** `parts` with Shift added when it is a bare Ctrl control key; the same object otherwise. A
+ *  `Ctrl` (⌃⌘) chord is never lifted: it matches only on macOS. */
 function lifted(parts: KeystrokeParts): KeystrokeParts {
-  const bareControlKey = parts.cmdOrCtrl && !parts.shift && !parts.alt && isControlKey(parts.key);
+  const bareControlKey =
+    parts.cmdOrCtrl && !parts.ctrl && !parts.shift && !parts.alt && isControlKey(parts.key);
   return bareControlKey ? { ...parts, shift: true } : parts;
 }
 
@@ -95,7 +97,8 @@ export function terminalChord(
 ): string {
   if (!keystroke || isMac()) return keystroke;
   const parts = tryParse(keystroke);
-  if (!parts) return keystroke;
+  // A `Ctrl` (⌃⌘) chord never matches off macOS, so it stays as written.
+  if (!parts || parts.ctrl) return keystroke;
   if (parts.cmdOrCtrl && !parts.shift && !parts.alt && isBracketKey(parts.key)) return "";
   const lift = lifted(parts);
   // A chord that is not lifted stays as written.
