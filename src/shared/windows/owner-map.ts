@@ -11,7 +11,8 @@ import { windowGetSlice } from "@/tauri/commands";
 import { logger } from "@/shared/lib/logger";
 import { canonicalItemKey, parseCanonicalItemKey, TAB_ITEM_KIND, type ItemKey } from "./item-key";
 import { createSliceHolder, type SliceHolder } from "./registry-client";
-import { MAIN_WINDOW_LABEL, type WindowSlice } from "./window-slice";
+import { MAIN_WINDOW_LABEL } from "@/shared/lib/current-window";
+import type { WindowSlice } from "./window-slice";
 
 const EMPTY_TABS: ReadonlyMap<string, ReadonlySet<string>> = new Map();
 

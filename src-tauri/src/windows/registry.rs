@@ -145,7 +145,7 @@ impl State {
 
     /// Bumps `label`'s version and sends it its new slice, while the lock is held so
     /// slices reach each window in version order.
-    fn bump(&mut self, host: &impl WindowHost, label: &str) {
+    fn bump_slice(&mut self, host: &impl WindowHost, label: &str) {
         if let Some(e) = self.entries.get_mut(label) {
             e.version += 1;
         }
@@ -203,7 +203,7 @@ impl WindowRegistry {
             .ok_or_else(|| format!("no window {label:?}"))?;
         if entry.pending {
             entry.pending = false;
-            state.bump(host, label);
+            state.bump_slice(host, label);
         }
         Ok(())
     }
@@ -239,7 +239,7 @@ impl WindowRegistry {
         let entry = state.entries.get_mut(label).expect("checked above");
         if entry.layout_ref != layout_ref {
             entry.layout_ref = layout_ref;
-            state.bump(host, label);
+            state.bump_slice(host, label);
         }
         Ok(SetLayoutOutcome { focused: None })
     }
@@ -280,7 +280,7 @@ impl WindowRegistry {
             .ok_or_else(|| format!("no window {label:?}"))?;
         if entry.pending != pending {
             entry.pending = pending;
-            state.bump(host, label);
+            state.bump_slice(host, label);
         }
         Ok(())
     }
@@ -290,7 +290,7 @@ impl WindowRegistry {
     /// the satellites' slices and before this returns, so an item event a caller sends
     /// afterwards reaches `main` after the map. Returns whether anything changed.
     #[cfg_attr(not(test), allow(dead_code))] // Called by the move; nothing moves an item yet.
-    pub fn transfer(
+    pub fn reassign_item(
         &self,
         host: &impl WindowHost,
         key: &ItemKey,
@@ -324,9 +324,9 @@ impl WindowRegistry {
                 }
             }
         }
-        state.bump(host, MAIN_LABEL);
+        state.bump_slice(host, MAIN_LABEL);
         for label in changed {
-            state.bump(host, &label);
+            state.bump_slice(host, &label);
         }
         Ok(true)
     }
@@ -334,7 +334,7 @@ impl WindowRegistry {
     /// Returns `key` to `main`: it leaves its satellite. Returns whether it was held.
     #[cfg_attr(not(test), allow(dead_code))] // Called by the return path; nothing holds an item yet.
     pub fn return_to_main(&self, host: &impl WindowHost, key: &ItemKey) -> Result<bool, String> {
-        self.transfer(host, key, MAIN_LABEL)
+        self.reassign_item(host, key, MAIN_LABEL)
     }
 
     /// Focuses the satellite that owns `key`; a no-op for a key `main` owns. Returns the
@@ -733,7 +733,7 @@ mod owners {
         let host = Recorder::default();
         let reg = reg(&host, &["sat-1"]);
         assert_eq!(reg.owner(&key("a.md")), MAIN_LABEL);
-        reg.transfer(&host, &key("a.md"), "sat-1").unwrap();
+        reg.reassign_item(&host, &key("a.md"), "sat-1").unwrap();
         assert_eq!(reg.owner(&key("a.md")), "sat-1");
         assert_eq!(reg.owner(&key("A.md")), MAIN_LABEL);
     }
@@ -742,7 +742,7 @@ mod owners {
     fn main_s_slice_carries_the_map_and_satellites_get_none() {
         let host = Recorder::default();
         let reg = reg(&host, &["sat-1"]);
-        reg.transfer(&host, &key("a.md"), "sat-1").unwrap();
+        reg.reassign_item(&host, &key("a.md"), "sat-1").unwrap();
         assert_eq!(
             owners(&reg),
             BTreeMap::from([(key("a.md").canonical(), "sat-1".to_owned())])
@@ -762,10 +762,10 @@ mod owners {
     }
 
     #[test]
-    fn transfer_from_main_bumps_main_first_then_the_satellite() {
+    fn reassign_from_main_bumps_main_first_then_the_satellite() {
         let host = Recorder::default();
         let reg = reg(&host, &["sat-1", "sat-2"]);
-        assert!(reg.transfer(&host, &key("a.md"), "sat-1").unwrap());
+        assert!(reg.reassign_item(&host, &key("a.md"), "sat-1").unwrap());
         assert_eq!(
             host.sent_to(),
             vec![(MAIN_LABEL.into(), 2), ("sat-1".into(), 3)]
@@ -774,13 +774,13 @@ mod owners {
     }
 
     #[test]
-    fn transfer_between_satellites_changes_only_main_s_map_in_main() {
+    fn reassign_between_satellites_changes_only_main_s_map_in_main() {
         let host = Recorder::default();
         let reg = reg(&host, &["sat-1", "sat-2", "sat-3"]);
-        reg.transfer(&host, &key("a.md"), "sat-1").unwrap();
+        reg.reassign_item(&host, &key("a.md"), "sat-1").unwrap();
         let before = reg.get_slice(MAIN_LABEL, MAIN_LABEL).unwrap();
         host.clear();
-        assert!(reg.transfer(&host, &key("a.md"), "sat-2").unwrap());
+        assert!(reg.reassign_item(&host, &key("a.md"), "sat-2").unwrap());
         let after = reg.get_slice(MAIN_LABEL, MAIN_LABEL).unwrap();
         assert_eq!(after.version, before.version + 1);
         assert_eq!(
@@ -799,12 +799,12 @@ mod owners {
     }
 
     #[test]
-    fn transfer_to_main_takes_the_key_out_of_every_satellite() {
+    fn reassign_to_main_takes_the_key_out_of_every_satellite() {
         let host = Recorder::default();
         let reg = reg(&host, &["sat-1", "sat-2"]);
-        reg.transfer(&host, &key("a.md"), "sat-1").unwrap();
+        reg.reassign_item(&host, &key("a.md"), "sat-1").unwrap();
         host.clear();
-        assert!(reg.transfer(&host, &key("a.md"), MAIN_LABEL).unwrap());
+        assert!(reg.reassign_item(&host, &key("a.md"), MAIN_LABEL).unwrap());
         assert_eq!(reg.owner(&key("a.md")), MAIN_LABEL);
         assert!(owners(&reg).is_empty());
         let sent: Vec<String> = host.sent_to().into_iter().map(|(l, _)| l).collect();
@@ -812,22 +812,22 @@ mod owners {
     }
 
     #[test]
-    fn a_transfer_that_changes_nothing_sends_nothing() {
+    fn a_reassign_that_changes_nothing_sends_nothing() {
         let host = Recorder::default();
         let reg = reg(&host, &["sat-1"]);
-        assert!(!reg.transfer(&host, &key("a.md"), MAIN_LABEL).unwrap());
-        reg.transfer(&host, &key("a.md"), "sat-1").unwrap();
+        assert!(!reg.reassign_item(&host, &key("a.md"), MAIN_LABEL).unwrap());
+        reg.reassign_item(&host, &key("a.md"), "sat-1").unwrap();
         host.clear();
-        assert!(!reg.transfer(&host, &key("a.md"), "sat-1").unwrap());
+        assert!(!reg.reassign_item(&host, &key("a.md"), "sat-1").unwrap());
         assert!(host.sent_to().is_empty());
-        assert!(reg.transfer(&host, &key("a.md"), "nope").is_err());
+        assert!(reg.reassign_item(&host, &key("a.md"), "nope").is_err());
     }
 
     #[test]
     fn return_to_main_removes_the_key_from_its_satellite() {
         let host = Recorder::default();
         let reg = reg(&host, &["sat-1", "sat-2"]);
-        reg.transfer(&host, &key("a.md"), "sat-1").unwrap();
+        reg.reassign_item(&host, &key("a.md"), "sat-1").unwrap();
         host.clear();
         assert!(reg.return_to_main(&host, &key("a.md")).unwrap());
         assert_eq!(reg.owner(&key("a.md")), MAIN_LABEL);
@@ -875,9 +875,9 @@ mod owners {
     fn a_stale_hydrate_pull_reply_is_ignored() {
         let host = Recorder::default();
         let reg = reg(&host, &["sat-1"]);
-        // `main` pulls; the reply is still in flight when a transfer pushes a newer map.
+        // `main` pulls; the reply is still in flight when a reassignment pushes a newer map.
         let pulled = reg.get_slice(MAIN_LABEL, MAIN_LABEL).unwrap();
-        reg.transfer(&host, &key("a.md"), "sat-1").unwrap();
+        reg.reassign_item(&host, &key("a.md"), "sat-1").unwrap();
         let pushed = match host.effects.borrow().first() {
             Some(Effect::Sent(slice)) if slice.label == MAIN_LABEL => slice.clone(),
             other => panic!("main's map was not sent first: {other:?}"),
@@ -907,7 +907,7 @@ mod focus {
         let host = Recorder::default();
         let reg = WindowRegistry::new();
         reg.add_satellite(&host, "sat-1").unwrap();
-        reg.transfer(&host, &key("a.md"), "sat-1").unwrap();
+        reg.reassign_item(&host, &key("a.md"), "sat-1").unwrap();
         host.clear();
         assert_eq!(
             reg.focus_owner(&host, &key("a.md")).as_deref(),

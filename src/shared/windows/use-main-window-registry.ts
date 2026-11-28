@@ -6,15 +6,16 @@
  */
 import { useEffect } from "react";
 import { windowGetSlice, windowReady } from "@/tauri/commands";
-import { currentWebviewWindow } from "@/shared/lib/current-window";
+import { currentWebviewWindow, isMainWindow, MAIN_WINDOW_LABEL } from "@/shared/lib/current-window";
 import { logger } from "@/shared/lib/logger";
 import { safeUnlisten } from "@/shared/lib/tauri-listeners";
 import { mainSlice } from "./owner-map";
 import { startRegistryClient } from "./registry-client";
-import { MAIN_WINDOW_LABEL, WINDOW_SLICE_EVENT, type WindowSlice } from "./window-slice";
+import { WINDOW_SLICE_EVENT, type WindowSlice } from "./window-slice";
 
 export function useMainWindowRegistry() {
   useEffect(() => {
+    if (!isMainWindow()) return;
     let stopped = false;
     let unlisten: (() => void) | null = null;
     startRegistryClient(

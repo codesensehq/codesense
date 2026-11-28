@@ -62,6 +62,7 @@ import {
 import { AppThemeProvider } from "@/themes/theme-provider";
 
 import { listenScoped } from "./listen-scoped";
+import { useMainWindowRegistry } from "./use-main-window-registry";
 import { LISTENER_INVENTORY } from "./listener-inventory";
 
 const REPO = "/test/repo";
@@ -116,6 +117,19 @@ describe("a satellite writes nothing a main window owns", () => {
     await pushViewerState({ openTabs: {} });
     expect(invoked.filter((name) => name === "save_app_state")).toEqual([]);
     expect(invoked.filter((name) => name === "push_viewer_state")).toEqual([]);
+  });
+});
+
+describe("a satellite does not run main's registry client", () => {
+  it("makes no window_get_slice or window_ready call, and mounts no window:slice listener", async () => {
+    host.main = false;
+    const { unmount } = renderHook(() => useMainWindowRegistry());
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    unmount();
+    expect(
+      invoked.filter((name) => name === "window_get_slice" || name === "window_ready"),
+    ).toEqual([]);
+    expect(bus.has("window:slice")).toBe(false);
   });
 });
 

@@ -2,9 +2,6 @@
 /** Wire types of the window registry (`src-tauri/src/windows/registry.rs`). */
 import type { ItemKey } from "./item-key";
 
-/** The label of the app's first window, which owns every item no satellite holds. */
-export const MAIN_WINDOW_LABEL = "main";
-
 /** The event a window's new slice arrives on. */
 export const WINDOW_SLICE_EVENT = "window:slice";
 
