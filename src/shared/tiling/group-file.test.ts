@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 
 import { storyIdFromPath } from "../lib/worktree/resolve";
 import { genericWorkspaceId } from "../stores/viewer-store";
-import type { GroupFile, SavedNode } from "./group-file.generated";
+import type { Axis, GroupFile, OwnerKind, SavedNode } from "./group-file.generated";
 import { parseMosaicNode, serializeMosaicNode } from "./mosaic-tree";
 
 // The same file the Rust store's tests read and write, so the two sides share one shape.
@@ -18,6 +18,19 @@ describe("the group file's tree", () => {
     expect(parsed).not.toBeNull();
     const saved: SavedNode | null = serializeMosaicNode(parsed);
     expect(saved).toEqual(fixture.root);
+  });
+});
+
+describe("the Rust-generated unions", () => {
+  // A new Rust variant makes these lists fail to type-check until they name it.
+  const owners: OwnerKind[] = ["workspace", "group", "starter"];
+  const axes: Axis[] = ["row", "column"];
+  const splitAxes = (node: SavedNode | null): Axis[] =>
+    node?.kind === "split" ? [node.axis, ...node.children.flatMap(splitAxes)] : [];
+
+  it("holds every owner and split axis the fixture uses", () => {
+    expect(owners).toContain(fixture.owner);
+    for (const axis of splitAxes(fixture.root)) expect(axes).toContain(axis);
   });
 });
 
