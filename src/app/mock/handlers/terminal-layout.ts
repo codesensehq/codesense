@@ -26,7 +26,7 @@ import {
   leftNavDemoProcesses,
   leftNavDemoTabs,
 } from "./left-nav-demo";
-import { isPerfWorld } from "./perf-worlds";
+import { isPerfWorld, PERF_TILES, perfTileOutput } from "./perf-worlds";
 import type {
   TerminalCloseMode,
   TerminalGridState,
@@ -59,7 +59,8 @@ const REPAINT_DELAY_MS = 150;
 const appended = new Map<string, string>();
 
 const output = (session: string): string =>
-  (OUTPUT[session] ?? "\x1b[32m~\x1b[0m $ ") + (appended.get(session) ?? "");
+  (OUTPUT[session] ?? perfTileOutput(session) ?? "\x1b[32m~\x1b[0m $ ") +
+  (appended.get(session) ?? "");
 
 /** A mock session's canned output as the plain lines an emulator would hold. */
 const textLines = (session: string): string[] =>
@@ -116,6 +117,25 @@ function demoAppState(
   return JSON.stringify(state);
 }
 
+/** The `?perf=tiles12` world's persisted viewer state: only its 12 workspaces, tiled flat on the
+ *  `grid` preset (4 × 3), with the CLI given nearly all of the main area. */
+function perfTilesAppState(): string {
+  const state = JSON.parse(mockAppState) as { viewer: Record<string, unknown> };
+  state.viewer = {
+    ...state.viewer,
+    schemaVersion: 10,
+    workspaces: {
+      [TEAM_KEY]: PERF_TILES.map(({ id, cwd }) => ({ id, kind: "generic", cwd, status: "ready" })),
+    },
+    activeWorkspace: { [TEAM_KEY]: PERF_TILES[0].id },
+    trayMode: { [TEAM_KEY]: "flat" },
+    foregroundLayout: { [TEAM_KEY]: { sizes: [], direction: "row", preset: "grid", root: null } },
+    settings: { ...(state.viewer.settings as object | undefined), openForemanOnStart: false },
+    cliChrome: { visible: true, splitRatio: AGENT_TEAMS_VIEWER_SHARE },
+  };
+  return JSON.stringify(state);
+}
+
 function descriptor(
   displayName: string,
   kind: string,
@@ -167,6 +187,17 @@ export function terminalLayoutHandlers(search: string, events: MockEventBus): Ha
     isPerfWorld(search, "nav5k") ||
     new URLSearchParams(search).get("terminals") === "demo";
   if (demo) seedDemo(host);
+  // The perf baseline's 12-tile world: its own host, one shell per workspace, and no demo.
+  const perfTiles = isPerfWorld(search, "tiles12");
+  if (perfTiles) {
+    for (const tile of PERF_TILES) {
+      host.seed(
+        workspaceKey(TEAM_KEY, { id: tile.id }),
+        descriptor(tile.name, "generic", tile.cwd),
+        { session: tile.session, name: "zsh" },
+      );
+    }
+  }
   // The `?nav=demo` world's story workspaces, each with its agents.
   if (navDemo) {
     for (const tab of leftNavDemoTabs()) {
@@ -254,6 +285,11 @@ export function terminalLayoutHandlers(search: string, events: MockEventBus): Ha
     return target[field];
   };
   return {
+    ...(perfTiles && {
+      load_app_state: perfTilesAppState,
+      check_path_exists: (args: Record<string, unknown>) =>
+        PERF_TILES.some((tile) => tile.cwd === String(args.path)),
+    }),
     ...(demo && {
       load_app_state: () =>
         demoAppState(

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+import { TEAM_CONTENT_PATH } from "../fixtures";
 import type { HandlerRegistry } from "../mock-router";
 import type { DerivedPipelineTree } from "@/shared/lib/pipeline-graph/types";
 
@@ -12,6 +13,33 @@ export type PerfWorld = "tiles12" | "nav5k";
 
 export function isPerfWorld(search: string, world: PerfWorld): boolean {
   return new URLSearchParams(search).get("perf") === world;
+}
+
+/** The 12-tile world's workspaces: generic ones, each running one shell (`terminal-layout.ts`). */
+export const PERF_TILES = Array.from({ length: 12 }, (_, i) => {
+  const n = String(i + 1).padStart(2, "0");
+  const cwd = `${TEAM_CONTENT_PATH}/perf/tile-${n}`;
+  return { id: `generic:${cwd}`, cwd, name: `tile-${n}`, session: `perf-tile-${n}` };
+});
+
+/** Lines of scrollback each tile's shell holds, so the scroll case has history to move through. */
+const TILE_SCROLLBACK_LINES = 2_400;
+const tileOutput = new Map<string, string>();
+
+/** A tile shell's canned output (built once per session), or undefined for any other session. */
+export function perfTileOutput(session: string): string | undefined {
+  const tile = PERF_TILES.find((each) => each.session === session);
+  if (!tile) return undefined;
+  let text = tileOutput.get(session);
+  if (text === undefined) {
+    const lines = Array.from(
+      { length: TILE_SCROLLBACK_LINES },
+      (_, i) => `${tile.name} line ${String(i + 1).padStart(4, "0")}: ok`,
+    );
+    text = `${lines.join("\r\n")}\r\n\x1b[32m~/${tile.name}\x1b[0m $ `;
+    tileOutput.set(session, text);
+  }
+  return text;
 }
 
 /** The nav tree's shape: top folders, the folders inside each, and the files in each of those. */

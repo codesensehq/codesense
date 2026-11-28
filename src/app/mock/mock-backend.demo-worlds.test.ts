@@ -13,7 +13,14 @@ const startState = async (search: string) =>
     String(await createMockBackend(resolveScenario(search), search)("load_app_state")),
   ) as AppState;
 
-it.each(["?agents=team", "?agents=teams", "?terminals=demo", "?nav=demo", "?perf=nav5k"])(
+it.each([
+  "?agents=team",
+  "?agents=teams",
+  "?terminals=demo",
+  "?nav=demo",
+  "?perf=tiles12",
+  "?perf=nav5k",
+])(
   "the %s world starts in its own team, without the Foreman landing that opens the docs team over it",
   async (search) => {
     const state = await startState(search);
