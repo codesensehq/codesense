@@ -927,6 +927,115 @@ jobs:
           retention-days: 7
           if-no-files-found: warn
 
+  windows-e2e-linux:
+    name: Two-window e2e (Linux)
+    # The real app with its WebDriver server (the e2e-webdriver feature), driven by WebdriverIO
+    # under xvfb: tests/windows/ opens satellite windows from main, drives them and checks the
+    # command ACL and a satellite dashboard's bridge. First the driver's own Rust tests and a
+    # clippy pass with the feature, and the plugin's absence from a release build's dependency
+    # graph; after the run, the front-end absence check's positive control on the bundle the build
+    # made. Not a required check: like the Linux app job it runs on every Rust or window-path
+    # change and skips merge groups.
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.rust != 'false' && github.event_name != 'merge_group' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash
+    env:
+      CARGO_INCREMENTAL: "0"
+      RUST_BACKTRACE: "1"
+      CARGO_TERM_COLOR: always
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install system libraries
+        # The shared app list, and a virtual display for the app.
+        run: bash scripts/install-linux-app-libs.sh xvfb xauth
+      - name: Set up pnpm
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: ${{ github.event_name != 'merge_group' && 'pnpm' || '' }}
+      - name: Install dependencies
+        # build.rs runs the docs generators, which import packages.
+        run: pnpm install --frozen-lockfile
+      - name: Set up Rust
+        # Matches ci.yml; rustup's proxies read the channel in rust-toolchain.toml.
+        run: rustup toolchain install stable --profile minimal
+      - name: Cache Rust dependencies
+        # Its own cache: the webdriver feature changes what compiles.
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: rust-linux-e2e
+          save-if: ${{ github.event_name == 'schedule' && github.ref == 'refs/heads/main' }}
+          cache-on-failure: true
+      - name: Fetch bundled binaries
+        # The Linux bundle's pinned git-ai and starship, which tauri-build needs in place.
+        run: bash scripts/fetch-bundled.sh
+      - name: Build sidecars
+        # Once, for both the tests and the app build: the app's build script needs them to exist.
+        run: bash scripts/build-bridge.sh && bash scripts/build-session-server.sh
+      - name: Test the driver's commands, the command ACL and the pending timeout
+        # The ACL's tests with the feature; the Linux app job runs them without it. The pending
+        # timeout's tests pin it to the cold first paints recorded from this job's artifact; no
+        # feature changes them, so they share this build.
+        run: cargo test --locked -p codesense --lib --features e2e-webdriver -- windows::e2e windows::command_acl windows::pending_timeout
+      - name: Lint with the webdriver feature
+        # The webdriver-only module must lint clean; the rest of the tree has lints no job gates,
+        # so `-D warnings` would fail on those first and never reach the module. The script fails
+        # closed: an error in a crate the app needs, or no sign the app crate was checked, fails.
+        run: |
+          cargo clippy --locked -p codesense --features e2e-webdriver --message-format=json > "$RUNNER_TEMP/clippy.json" || true
+          node scripts/clippy-webdriver-module.mjs "$RUNNER_TEMP/clippy.json"
+      - name: Check the WebDriver plugin is absent from a release build
+        # The release feature set's dependency graph holds neither WebDriver plugin.
+        run: bash scripts/verify-wdio-plugin-release-absence.sh
+      - name: Build the webdriver app
+        id: build
+        # A debug app with the e2e-webdriver feature and the webdriver front-end bundle in dist/,
+        # over the sidecars built above (`pnpm build:e2e:windows` builds them too, for a local run).
+        run: pnpm build:e2e:windows:app
+      - name: Drive two windows
+        run: xvfb-run -a pnpm test:e2e:windows
+      - name: Time first paints over five launches
+        # The first-paint spec alone, in five launches of the app, so each has a cold first window
+        # (tests/windows/artifacts/first-paint-<run>-<launch>.json, uploaded below).
+        if: (success() || failure()) && steps.build.outcome == 'success'
+        env:
+          CODESENSE_WINDOWS_E2E_FIRST_PAINT: "1"
+        run: |
+          for launch in 1 2 3 4 5; do
+            FIRST_PAINT_LAUNCH="$launch" xvfb-run -a pnpm test:e2e:windows
+          done
+      - name: Check the absence check sees the webdriver bundle
+        # The release check's positive control: every marker it looks for is in this bundle.
+        if: (success() || failure()) && steps.build.outcome == 'success'
+        run: pnpm exec tsx scripts/verify-webdriver-absence.ts --expect-present dist
+      - name: Upload WebdriverIO logs
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-e2e-logs-${{ github.run_id }}-${{ github.run_attempt }}
+          path: tests/windows/logs/
+          retention-days: 7
+          if-no-files-found: warn
+      - name: Upload e2e artifacts
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-e2e-artifacts-${{ github.run_id }}-${{ github.run_attempt }}
+          path: tests/windows/artifacts/
+          retention-days: 7
+          if-no-files-found: ignore
+
   rust-check-windows:
     name: Rust check (Windows)
     # A compile check of the crates that build on Windows, the session server's among them with its

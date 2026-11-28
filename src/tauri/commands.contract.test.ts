@@ -21,6 +21,8 @@ function extractTypeScriptCommands(): string[] {
     "../shared/lib/local-profile-session.ts",
     // SW-PB-9: the beta update wrappers (the commands are registered under the beta cfg).
     "../features/license/api.ts",
+    // The two-window driver's wrappers (the commands are registered under `e2e-webdriver`).
+    "../app/e2e-windows-control.ts",
   ]
     .map((file) => readFileSync(resolve(__dirname, file), "utf-8"))
     .join("\n");
@@ -1357,8 +1359,10 @@ describe("Tauri IPC Contract", () => {
     // +2 on both sides for windowMoveItem/window_move_item and
     // windowHandOffAck/window_hand_off_ack (moving an item between windows), so 558/577.
     // +1 on both sides for leadDiff/lead_diff (a lead's combined, read-only diff), so 559/578.
-    const EXPECTED_TS_COMMAND_COUNT = 559;
-    const EXPECTED_RUST_COMMAND_COUNT = 578;
+    // +2 on both sides for the two-window driver's seed/e2e_seed and open/e2e_open_window,
+    // so 561/580.
+    const EXPECTED_TS_COMMAND_COUNT = 561;
+    const EXPECTED_RUST_COMMAND_COUNT = 580;
     // The Rust count runs ahead of the TS count by the RUST_ONLY_COMMANDS that have no
     // renderer IPC wrapper (the access revocation and two session watchers plus the WV-B5/C6
     // scope-layer and harvest-norm Tauri commands whose FE wrappers land in later WV stories):

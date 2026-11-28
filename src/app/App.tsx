@@ -143,6 +143,9 @@ if (import.meta.env.MODE === "webdriver") {
   void import("./e2e-terminal-layout-control").then(({ registerTerminalLayoutE2eControl }) =>
     registerTerminalLayoutE2eControl(),
   );
+  void import("./e2e-windows-control").then(({ registerWindowsE2eControl }) =>
+    registerWindowsE2eControl(),
+  );
 }
 
 // SW-FX-75: the loading splash is gated on several async boot flags

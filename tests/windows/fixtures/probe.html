@@ -1,0 +1,48 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: MIT -->
+<html>
+  <head>
+    <title>Satellite probe</title>
+    <meta name="codesense:capabilities" content="files:read" />
+    <meta name="color-scheme" content="light dark" />
+  </head>
+  <body style="font: 13px system-ui; margin: 12px">
+    <h3>Satellite probe</h3>
+    <p>read: <output id="read"></output></p>
+    <p>push: <output id="push"></output></p>
+    <script>
+      // A test fixture for the two-window e2e driver (tests/windows/) and its mock spec
+      // (tests/e2e-mock/tiles/satellite-probe.spec.ts). Rendered in a satellite window by the
+      // probe route, it reports each bridge answer to the satellite's top page as
+      // {type: "probe:result", key, text}, so a spec reads it without entering this frame:
+      //  - read: files.read of probe-read.txt in the team content, or "refused: <reason>";
+      //    read again after each push, so a rewrite of the file shows up here too;
+      //  - push: the paths of the first change the files topic pushes.
+      (() => {
+        const READ = "probe-read.txt";
+        const post = (key, text) => {
+          document.getElementById(key).textContent = text;
+          window.parent.postMessage({ type: "probe:result", key, text }, "*");
+        };
+        const read = () =>
+          codesense.files
+            .read({ path: READ })
+            .then((file) => post("read", file.text ?? ""))
+            .catch((error) => post("read", `refused: ${error?.message ?? error}`));
+        let pushed = false;
+        read();
+        codesense
+          .subscribe("files", {
+            onChange: (_snapshot, delta) => {
+              if (!delta) return;
+              if (!pushed)
+                post("push", delta.upserts.map((row) => row.relativePath ?? row.id).join(","));
+              pushed = true;
+              read();
+            },
+          })
+          .catch((error) => post("push", `refused: ${error?.message ?? error}`));
+      })();
+    </script>
+  </body>
+</html>

@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: MIT
 //! How long a new window may take to show its first paint before its open counts as failed.
 
-/// Cold first paints (ms) recorded for the timeout. Empty until a real two-window build is
-/// measured, so [`PENDING_TIMEOUT_MS`] holds its unmeasured default.
-const COLD_FIRST_PAINTS_MS: &[u64] = &[];
+/// Cold first paints (ms) recorded for the timeout: five launches of the webdriver build on the
+/// Linux e2e job (xvfb), https://github.com/codesensehq/codesense/actions/runs/46133682151.
+/// The slowest, 1,323 ms, puts [`PENDING_TIMEOUT_MS`] at the 5,000 ms floor.
+const COLD_FIRST_PAINTS_MS: &[u64] = &[1312, 1258, 1309, 1323, 1243];
 
 /// The timeout used before any cold first paint is recorded.
 const UNMEASURED_MS: u64 = 10_000;
@@ -58,6 +59,8 @@ mod tests {
     #[test]
     fn the_constant_is_the_formula_over_the_recorded_paints() {
         assert_eq!(PENDING_TIMEOUT_MS, pending_timeout_ms(COLD_FIRST_PAINTS_MS));
+        assert_eq!(COLD_FIRST_PAINTS_MS.len(), 5);
+        assert_eq!(PENDING_TIMEOUT_MS, 5_000);
     }
 
     #[test]

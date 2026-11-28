@@ -68,6 +68,31 @@ fn set_soft(value: u64) -> bool {
     unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &limit) == 0 }
 }
 
+/// The soft limit [`raise`] ends on: `target` when it is accepted, else `original`.
+#[cfg(not(target_os = "macos"))]
+fn settle(original: u64, target: u64) -> u64 {
+    if set_soft(target) {
+        target
+    } else {
+        original
+    }
+}
+
+/// The soft limit [`raise`] ends on: `target`, halved while it stays above `original` until one
+/// is accepted, since some macOS configurations reject a value below the hard limit; else
+/// `original`.
+#[cfg(target_os = "macos")]
+fn settle(original: u64, target: u64) -> u64 {
+    let mut candidate = target;
+    while candidate > original {
+        if set_soft(candidate) {
+            return candidate;
+        }
+        candidate /= 2;
+    }
+    original
+}
+
 /// Raise this process's soft limit toward `wanted` (capped by the hard limit
 /// and, on macOS, by OPEN_MAX), remembering the original for children.
 /// Returns `(original, now)`.
@@ -75,30 +100,14 @@ pub fn raise(wanted: u64) -> Option<(u64, u64)> {
     let limit = soft()?;
     #[allow(clippy::unnecessary_cast)]
     let (original, hard) = (limit.rlim_cur as u64, limit.rlim_max as u64);
-    let mut target = wanted.min(hard);
+    let target = wanted.min(hard);
     #[cfg(target_os = "macos")]
-    {
-        target = target.min(10_240);
-    }
+    let target = target.min(10_240);
     let now = if target <= original {
         original
     } else {
         let _ = ORIGINAL.compare_exchange(0, original, Ordering::AcqRel, Ordering::Acquire);
-        let mut candidate = target;
-        loop {
-            if set_soft(candidate) {
-                break candidate;
-            }
-            #[cfg(target_os = "macos")]
-            {
-                // Some macOS configurations reject a value below the hard limit.
-                candidate /= 2;
-                if candidate > original {
-                    continue;
-                }
-            }
-            break original;
-        }
+        settle(original, target)
     };
     // Startup callers run before logging is initialized; stderr is already open.
     use std::io::Write;

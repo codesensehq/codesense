@@ -159,17 +159,24 @@ const RUST_PATH_FILTER = {
     "rust-check-linux",
     "rust-check-windows",
     "rust-linux-app",
+    "windows-e2e-linux",
   ],
   terms: ["!cancelled()", "needs.changes.outputs.rust != 'false'"],
 };
 // And one more: rust.yml's non-required jobs skip merge groups (they run on push to main and
 // nightly instead): the macOS build and the result job that reports it (the test shards run only
-// after the build), the Windows check, and the Linux app job. Each may put exactly this term right
-// after the path filter's (and the macOS filter's, below); what follows must still begin with
-// OFF_PULL_REQUESTS, so push and schedule always run them.
+// after the build), the Windows check, the Linux app job and the two-window e2e job. Each may put
+// exactly this term right after the path filter's (and the macOS filter's, below); what follows
+// must still begin with OFF_PULL_REQUESTS, so push and schedule always run them.
 const OFF_MERGE_GROUPS = {
   file: "rust.yml",
-  jobs: ["rust-macos-build", "rust-macos", "rust-check-windows", "rust-linux-app"],
+  jobs: [
+    "rust-macos-build",
+    "rust-macos",
+    "rust-check-windows",
+    "rust-linux-app",
+    "windows-e2e-linux",
+  ],
   term: "github.event_name != 'merge_group'",
 };
 // The macOS build and the result job that reports it may also skip a change that only Windows or

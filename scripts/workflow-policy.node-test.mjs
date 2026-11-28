@@ -465,7 +465,13 @@ test("rust.yml skips its test jobs only when the changes job finds nothing Rust-
     /^\s*\*\) printf 'rust=true\\nmacos=true\\n' >> "\$GITHUB_OUTPUT"; exit 0 ;;$/m,
   );
   assert.match(filter.run, /node scripts\/rust-changes\.mjs "\$range" >> "\$GITHUB_OUTPUT"/);
-  for (const name of ["rust-macos-build", "rust-linux", "rust-check-linux", "rust-linux-app"])
+  for (const name of [
+    "rust-macos-build",
+    "rust-linux",
+    "rust-check-linux",
+    "rust-linux-app",
+    "windows-e2e-linux",
+  ])
     assert.equal(workflow.jobs[name].needs, "changes", name);
   assert.deepEqual(workflow.jobs["rust-macos"].needs, [
     "changes",
@@ -608,6 +614,125 @@ test("rust.yml's Linux app job runs the shared suites and the Secret Service tes
   assert.ok(workflow.jobs["flaky-issues"].needs.includes("rust-linux-app"));
 });
 
+// The two-window e2e job drives the real webdriver app under xvfb. Not a required check: it carries
+// the Linux app job's filter, so a window-path change runs it and a merge group skips it. Its
+// cache is its own (the webdriver feature changes what compiles), saved only by the nightly run.
+// The command ACL's tests run here with the feature; the Linux app job runs them without it.
+test("rust.yml's two-window e2e job tests, builds and drives the webdriver app", () => {
+  const workflow = parse(fs.readFileSync(path.join(directory, "rust.yml"), "utf8"));
+  const job = workflow.jobs["windows-e2e-linux"];
+  const app = workflow.jobs["rust-linux-app"];
+  assert.equal(job["runs-on"], "ubuntu-24.04");
+  assert.equal(job.if, `\${{ ${pathFilter} && ${offMergeGroups} }}`);
+  assert.deepEqual(job.permissions, { contents: "read" });
+  assert.equal(job["timeout-minutes"], 45);
+  assert.deepEqual(job.env, app.env);
+  const step = (name) => {
+    const index = job.steps.findIndex((s) => s.name === name);
+    assert.ok(index >= 0, name);
+    return [index, job.steps[index]];
+  };
+  // The Linux app job's setup, before any cargo command.
+  const [, libs] = step("Install system libraries");
+  assert.equal(libs.run, "bash scripts/install-linux-app-libs.sh xvfb xauth");
+  for (const name of ["Set up pnpm", "Set up Node", "Install dependencies", "Set up Rust"])
+    assert.deepEqual(
+      step(name)[1],
+      app.steps.find((s) => s.name === name),
+      name,
+    );
+  const [cacheAt, cache] = step("Cache Rust dependencies");
+  assert.deepEqual(cache.with, {
+    "shared-key": "rust-linux-e2e",
+    "save-if": "${{ github.event_name == 'schedule' && github.ref == 'refs/heads/main' }}",
+    "cache-on-failure": true,
+  });
+  const [fetchAt, fetch] = step("Fetch bundled binaries");
+  assert.equal(fetch.run, "bash scripts/fetch-bundled.sh");
+  // The sidecars are built once, before the tests, and the app build does not build them again.
+  const [sidecarsAt, sidecars] = step("Build sidecars");
+  assert.equal(
+    sidecars.run,
+    "bash scripts/build-bridge.sh && bash scripts/build-session-server.sh",
+  );
+  const [testAt, test] = step(
+    "Test the driver's commands, the command ACL and the pending timeout",
+  );
+  assert.equal(
+    test.run,
+    "cargo test --locked -p codesense --lib --features e2e-webdriver -- windows::e2e windows::command_acl windows::pending_timeout",
+  );
+  const [clippyAt, clippy] = step("Lint with the webdriver feature");
+  assert.equal(
+    clippy.run,
+    [
+      'cargo clippy --locked -p codesense --features e2e-webdriver --message-format=json > "$RUNNER_TEMP/clippy.json" || true',
+      'node scripts/clippy-webdriver-module.mjs "$RUNNER_TEMP/clippy.json"',
+      "",
+    ].join("\n"),
+  );
+  const [pluginAt, plugin] = step("Check the WebDriver plugin is absent from a release build");
+  assert.equal(plugin.run, "bash scripts/verify-wdio-plugin-release-absence.sh");
+  const [buildAt, build] = step("Build the webdriver app");
+  assert.equal(build.run, "pnpm build:e2e:windows:app");
+  const scripts = JSON.parse(
+    fs.readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+  ).scripts;
+  assert.doesNotMatch(scripts["build:e2e:windows:app"], /build-(bridge|session-server)/);
+  assert.equal(
+    job.steps.filter((s) => /build-(bridge|session-server)\.sh/.test(s.run ?? "")).length,
+    1,
+    "the job builds the sidecars in one step",
+  );
+  const [runAt, run] = step("Drive two windows");
+  assert.equal(run.run, "xvfb-run -a pnpm test:e2e:windows");
+  // Five launches of the first-paint spec alone, so each has a cold first window.
+  const [paintAt, paint] = step("Time first paints over five launches");
+  assert.equal(paint.if, "(success() || failure()) && steps.build.outcome == 'success'");
+  assert.deepEqual(paint.env, { CODESENSE_WINDOWS_E2E_FIRST_PAINT: "1" });
+  assert.equal(
+    paint.run,
+    "for launch in 1 2 3 4 5; do\n" +
+      '  FIRST_PAINT_LAUNCH="$launch" xvfb-run -a pnpm test:e2e:windows\n' +
+      "done\n",
+  );
+  const [presentAt, present] = step("Check the absence check sees the webdriver bundle");
+  assert.equal(present.if, "(success() || failure()) && steps.build.outcome == 'success'");
+  assert.equal(
+    present.run,
+    "pnpm exec tsx scripts/verify-webdriver-absence.ts --expect-present dist",
+  );
+  assert.equal(build.id, "build");
+  for (const [before, after] of [
+    [cacheAt, fetchAt],
+    [fetchAt, sidecarsAt],
+    [sidecarsAt, testAt],
+    [testAt, clippyAt],
+    [clippyAt, pluginAt],
+    [pluginAt, buildAt],
+    [buildAt, runAt],
+    [runAt, paintAt],
+    [paintAt, presentAt],
+  ])
+    assert.ok(before < after, `${job.steps[before].name} before ${job.steps[after].name}`);
+  const uploads = job.steps.filter((s) => s.uses?.startsWith("actions/upload-artifact@"));
+  assert.deepEqual(
+    uploads.map((s) => [s.if, s.with.name, s.with.path]),
+    [
+      [
+        "failure()",
+        "windows-e2e-logs-${{ github.run_id }}-${{ github.run_attempt }}",
+        "tests/windows/logs/",
+      ],
+      [
+        "always()",
+        "windows-e2e-artifacts-${{ github.run_id }}-${{ github.run_attempt }}",
+        "tests/windows/artifacts/",
+      ],
+    ],
+  );
+});
+
 // PDF export's renderer tests are ignored without a display: this job runs them, and only them,
 // on a virtual display with a German locale generated for the translation test. They live in the
 // platform crate behind its pdf feature, which this step builds itself.
@@ -734,7 +859,13 @@ test("only rust.yml's non-required jobs may skip merge groups, and still run on 
       ),
       file,
     ).join("\n");
-  for (const job of ["rust-macos-build", "rust-macos", "rust-check-windows", "rust-linux-app"])
+  for (const job of [
+    "rust-macos-build",
+    "rust-macos",
+    "rust-check-windows",
+    "rust-linux-app",
+    "windows-e2e-linux",
+  ])
     for (const condition of [
       `\${{ ${pathFilter} && ${offMergeGroups} && (${macosOptIn}) }}`,
       `\${{ ${pathFilter} && ${offMergeGroups} && (${windowsOptIn}) }}`,

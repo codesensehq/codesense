@@ -1897,6 +1897,11 @@ pub fn run() {
             windows::commands::window_focus_owner,
             windows::moves::window_move_item,
             windows::moves::window_hand_off_ack,
+            // The two-window e2e driver's commands, in webdriver builds only.
+            #[cfg(feature = "e2e-webdriver")]
+            windows::e2e::e2e_open_window,
+            #[cfg(feature = "e2e-webdriver")]
+            windows::e2e::e2e_seed,
         ]))
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

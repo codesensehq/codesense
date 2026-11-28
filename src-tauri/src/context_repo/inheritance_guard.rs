@@ -209,6 +209,8 @@ const OWN_TEAM_BOUNDARIES: &[(&str, usize)] = &[
         "src-tauri/src/session_usage/story_changes/review_rounds.rs",
         1,
     ),
+    // The webdriver-only seed writes its probe files into the team it just created.
+    ("src-tauri/src/windows/e2e.rs", 1),
     ("src/features/home-base/components/team-identity.tsx", 1),
     ("src/shared/lib/pipeline-graph/types.ts", 1),
     ("src/shared/lib/team-content-path.ts", 1),
