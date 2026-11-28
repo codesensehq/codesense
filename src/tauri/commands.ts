@@ -6097,6 +6097,13 @@ export const groupRead = (org: string, file: GroupFileRef) =>
 /** Writes a gesture's kit ops on the rev the window last read. Refused with tiles off. */
 export const groupCommit = (org: string, file: GroupFileRef, baseRev: number, ops: KitOp[]) =>
   invoke<GroupCommitReply>("group_commit", { org, file, baseRev, ops });
+/** Why a window's pins write wrote nothing. */
+export type WindowPinsRefusal = "fourth" | "flag-off" | "no-org";
+/** The pins of the window labelled `label`, from the active org's group folder. */
+export const windowPinsRead = (label: string) => invoke<string[]>("window_pins_read", { label });
+/** Replaces the pins of the window labelled `label` with `keys`, in one write. */
+export const windowPinsWrite = (label: string, keys: string[]) =>
+  invoke<{ ok: true } | { refused: WindowPinsRefusal }>("window_pins_write", { label, keys });
 
 // Platform capabilities
 export interface PlatformCap {

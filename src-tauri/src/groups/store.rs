@@ -29,8 +29,12 @@
 //! - **"Can't be read."** A file that fails to parse, has another version or isn't this shape is
 //!   listed with that reason and never rewritten: every write to it is refused before
 //!   compare-and-set runs.
-//! - **Paths.** An id is `[a-z0-9-]{1,64}`; its file is `config/groups/<id>.json`, checked to stay
-//!   in that folder with no symlink followed on the way.
+//! - **Paths.** An id is `[a-z0-9-]{1,64}`, never `index`; its file is `config/groups/<id>.json`,
+//!   checked to stay in that folder with no symlink followed on the way.
+//! - **Window pins.** `config/groups/index.json` holds each window's pins under
+//!   `windows.<label>.pins`, at most [`PINS_MAX`], read and written only through
+//!   [`GroupStore::window_pins`] and [`GroupStore::set_window_pins`]. An entry for a window that
+//!   isn't open is kept, and every other key in the file is written back as it was.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::{Component, Path, PathBuf};
@@ -39,6 +43,7 @@ use std::sync::Mutex;
 use super::leaf_id::{leaf_ref_problem, Layer};
 use super::ops::{apply, touched_keys, KitOp, OpFailed};
 use super::shape::{GroupFile, OwnerKind, SavedNode, Tombstone, VERSION};
+use super::tile_key::tile_key;
 use crate::context_repo::scratch_space::{self, ScratchOrgSpace};
 use crate::domain::Principal;
 
@@ -56,6 +61,14 @@ const FILE_SUFFIX: &str = ".json";
 
 /// The group folder's lock file, which every app process locks around a write.
 const LOCK_FILE: &str = ".lock";
+/// The group folder's file of window pins, and the id its stem would be.
+const INDEX_FILE: &str = "index.json";
+const INDEX_ID: &str = "index";
+/// The most pins a window holds.
+pub const PINS_MAX: usize = 3;
+/// The longest window label the pins file keys.
+const LABEL_MAX: usize = 128;
+
 /// How many writes per file the store remembers for a rebase.
 const HISTORY_MAX: usize = 64;
 
@@ -106,6 +119,8 @@ pub enum StoreError {
     InvalidOp(String),
     /// No such group.
     NotFound,
+    /// A window already holds [`PINS_MAX`] pins; nothing changed.
+    PinsFull,
     Io(String),
 }
 
@@ -128,6 +143,7 @@ impl std::fmt::Display for StoreError {
             Self::InvalidTree(why) => write!(f, "refused: {why}"),
             Self::InvalidOp(why) => write!(f, "refused: {why}"),
             Self::NotFound => f.write_str("no such group"),
+            Self::PinsFull => write!(f, "a window holds at most {PINS_MAX} pins"),
             Self::Io(why) => f.write_str(why),
         }
     }
@@ -427,6 +443,70 @@ impl GroupStore {
             .ok_or_else(|| StoreError::Io("the write placed nothing".into()))
     }
 
+    /// The pins of the window labelled `label`, oldest first: the one read of `windows.*`. A
+    /// window with no entry has none. Reads only: a key the leaf-id grammar refuses is left out
+    /// here and stays in the file until the window's next write of its pins.
+    ///
+    /// The file is the context repo's, so a person who switches org sees that org's pins for the
+    /// window. One profile-wide record replaces it when the windows' own registry imports it.
+    pub fn window_pins(&self, label: &str) -> Result<Vec<String>, StoreError> {
+        if let Some(why) = label_problem(label) {
+            return Err(StoreError::Refused(why));
+        }
+        let path = self.index_file()?;
+        let index = read_index(&path)?;
+        let mut pins: Vec<String> = vec![];
+        if let Some(entry) = BTreeMap::get(&index.windows, label) {
+            for key in &entry.pins {
+                if Result::is_ok(&tile_key(key, Layer::Private)) {
+                    pins.push(String::clone(key));
+                }
+            }
+        }
+        Ok(pins)
+    }
+
+    /// Replaces the pins of the window labelled `label` with `pins`, in one write: the one write
+    /// of `windows.*`. Refused with the tiles flag off, past [`PINS_MAX`], for a key pinned twice
+    /// or one the leaf-id grammar refuses, and for a pins file that can't be read, which is never
+    /// rewritten. Every other window's entry and every other key stay as they were.
+    pub fn set_window_pins(&self, label: &str, pins: Vec<String>) -> Result<(), StoreError> {
+        if !self.tiles {
+            return Err(StoreError::TilesOff);
+        }
+        if let Some(why) = label_problem(label) {
+            return Err(StoreError::Refused(why));
+        }
+        if pins.len() > PINS_MAX {
+            return Err(StoreError::PinsFull);
+        }
+        for (at, key) in pins.iter().enumerate() {
+            if let Err(why) = tile_key(key, Layer::Private) {
+                return Err(StoreError::InvalidOp(why));
+            }
+            if pins[..at].contains(key) {
+                return Err(StoreError::InvalidOp(format!("{key:?} is pinned twice")));
+            }
+        }
+        let _write = WRITE
+            .lock()
+            .map_err(|_| StoreError::Io("the group store is unavailable".into()))?;
+        read_index(&self.index_file()?)?;
+        scratch_space::open_group_space(&self.home, &self.principal, &self.org, self.tiles)
+            .map_err(|e| StoreError::Io(e.to_string()))?;
+        let _folder = self.lock_folder()?;
+        let path = self.index_file()?;
+        let mut index = read_index(&path)?;
+        let entry = index.windows.entry(String::from(label)).or_default();
+        entry.pins = pins;
+        self.write_json(&path, &index)
+    }
+
+    /// The pins file, its folders and itself checked.
+    fn index_file(&self) -> Result<PathBuf, StoreError> {
+        self.checked_path(self.group_dir().join(INDEX_FILE))
+    }
+
     /// Plans a write from the head under the process lock and, when the plan passes, plans it
     /// again under the folder's lock, which another process takes too, and writes it. The first
     /// plan refuses before the space's folders are made.
@@ -540,6 +620,49 @@ impl GroupStore {
         crate::shared::json_io::write_json_atomic_private(path, value)
             .map_err(|e| StoreError::Io(e.to_string()))
     }
+}
+
+/// The pins file: each window's entry by label, and any other key as it was read.
+#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
+struct Index {
+    #[serde(default)]
+    windows: BTreeMap<String, WindowEntry>,
+    #[serde(flatten)]
+    rest: serde_json::Map<String, serde_json::Value>,
+}
+
+/// One window's entry: its pins, and any other key as it was read.
+#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
+struct WindowEntry {
+    #[serde(default)]
+    pins: Vec<String>,
+    #[serde(flatten)]
+    rest: serde_json::Map<String, serde_json::Value>,
+}
+
+/// The pins file at `path`: empty when there is none, [`StoreError::Unreadable`] when it isn't a
+/// plain file holding that shape. Never follows a symlink.
+fn read_index(path: &Path) -> Result<Index, StoreError> {
+    match std::fs::symlink_metadata(path) {
+        Err(e) if std::io::Error::kind(&e) == std::io::ErrorKind::NotFound => {
+            return Ok(Index::default())
+        }
+        Ok(meta) if meta.is_file() => {}
+        _ => return Err(StoreError::Unreadable),
+    }
+    let bytes = std::fs::read(path).map_err(|_| StoreError::Unreadable)?;
+    serde_json::from_slice::<Index>(&bytes).map_err(|_| StoreError::Unreadable)
+}
+
+/// Why `label` is not a window label (`[A-Za-z0-9-/:_]{1,128}`, as Tauri names a window), or
+/// `None`.
+fn label_problem(label: &str) -> Option<String> {
+    let valid = !str::is_empty(label)
+        && label.len() <= LABEL_MAX
+        && !label
+            .chars()
+            .any(|c| !(c.is_ascii_alphanumeric() || matches!(c, '-' | '/' | ':' | '_')));
+    (!valid).then(|| format!("{label:?} is not a window label"))
 }
 
 /// The `rev` after `head_rev`.
@@ -687,10 +810,11 @@ fn id_problem(id: &str) -> Option<String> {
     let valid = !str::is_empty(id)
         && id.len() <= ID_MAX
         && !is_device_name(id)
+        && id != INDEX_ID
         && !id
             .chars()
             .any(|c| !(c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'));
-    (!valid).then(|| format!("{id:?}: a group id is [a-z0-9-]{{1,64}}"))
+    (!valid).then(|| format!("{id:?}: a group id is [a-z0-9-]{{1,64}}, never {INDEX_ID:?}"))
 }
 
 /// A Windows device name (`con`, `prn`, `aux`, `nul`, `com0`-`com9`, `lpt0`-`lpt9`). Windows maps

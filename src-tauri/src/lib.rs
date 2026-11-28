@@ -1795,6 +1795,8 @@ pub fn run() {
             flags::tiles_enabled,
             groups::commands::group_read,
             groups::commands::group_commit,
+            groups::commands::window_pins_read,
+            groups::commands::window_pins_write,
             // HTTP API
             commands::system::get_http_api_port,
             commands::frames::mint_frame,

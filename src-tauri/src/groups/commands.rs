@@ -3,6 +3,9 @@
 //! `group_commit` sends the kit ops of a gesture, written by the store as the person at that
 //! window, which then publishes the change on the host-only `group` and `groups` topics. Both
 //! refuse with the tiles flag off.
+//!
+//! A window's pins go through `window_pins_read` and `window_pins_write`, over the store's one
+//! pins accessor in the active org's group folder.
 
 use serde::{Deserialize, Serialize};
 
@@ -91,6 +94,83 @@ pub fn commit(
     }
 }
 
+/// What `window_pins_write` did: `{ok: true}`, or `{refused}` with why nothing was written.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(untagged)]
+pub enum PinsReply {
+    Written { ok: bool },
+    Refused { refused: PinsRefusal },
+}
+
+/// Why a pins write was refused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PinsRefusal {
+    /// The window already holds three pins.
+    Fourth,
+    /// The tiles flag is off.
+    FlagOff,
+    /// No org is active, so there is no group folder to hold them.
+    NoOrg,
+}
+
+/// `window_pins_read` on the active org's `store` (`None` with no active org): no pins then.
+pub fn read_pins(
+    tiles: bool,
+    store: Option<&GroupStore>,
+    label: &str,
+) -> Result<Vec<String>, String> {
+    if !tiles {
+        return Err(StoreError::TilesOff.to_string());
+    }
+    match store {
+        None => Ok(vec![]),
+        Some(store) => GroupStore::window_pins(store, label).map_err(|e| e.to_string()),
+    }
+}
+
+/// `window_pins_write` on the active org's `store` (`None` with no active org).
+pub fn write_pins(
+    tiles: bool,
+    store: Option<&GroupStore>,
+    label: &str,
+    keys: Vec<String>,
+) -> Result<PinsReply, String> {
+    if !tiles {
+        return Ok(PinsReply::Refused {
+            refused: PinsRefusal::FlagOff,
+        });
+    }
+    let Some(store) = store else {
+        return Ok(PinsReply::Refused {
+            refused: PinsRefusal::NoOrg,
+        });
+    };
+    match GroupStore::set_window_pins(store, label, keys) {
+        Ok(()) => Ok(PinsReply::Written { ok: true }),
+        Err(StoreError::TilesOff) => Ok(PinsReply::Refused {
+            refused: PinsRefusal::FlagOff,
+        }),
+        Err(StoreError::PinsFull) => Ok(PinsReply::Refused {
+            refused: PinsRefusal::Fourth,
+        }),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+/// The store of the active org, or `None` when no org is active.
+fn active_store<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    tiles: bool,
+) -> Result<Option<GroupStore>, String> {
+    let home = crate::commands::paths::codesense_home_dir()
+        .ok_or_else(|| "the CodeSense folder is unavailable".to_string())?;
+    match crate::context_repo::scratch_space::active_org(&home) {
+        None => Ok(None),
+        Some(org) => store_for(app, tiles, &org).map(Some),
+    }
+}
+
 /// The store of the active profile's private layer for the context repo `org`.
 fn store_for<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
@@ -143,6 +223,30 @@ pub fn group_commit(
         }
     }
     Ok(reply)
+}
+
+/// The pins of the window labelled `label`, from the active org's group folder: none when no
+/// org is active. Refused with tiles off.
+#[tauri::command]
+pub fn window_pins_read(
+    app: tauri::AppHandle,
+    flag: tauri::State<'_, crate::flags::TilesFlag>,
+    label: String,
+) -> Result<Vec<String>, String> {
+    let store = active_store(&app, flag.is_on())?;
+    read_pins(flag.is_on(), store.as_ref(), &label)
+}
+
+/// Replaces the pins of the window labelled `label` with `keys`, in one write.
+#[tauri::command]
+pub fn window_pins_write(
+    app: tauri::AppHandle,
+    flag: tauri::State<'_, crate::flags::TilesFlag>,
+    label: String,
+    keys: Vec<String>,
+) -> Result<PinsReply, String> {
+    let store = active_store(&app, flag.is_on())?;
+    write_pins(flag.is_on(), store.as_ref(), &label, keys)
 }
 
 #[cfg(test)]

@@ -1363,8 +1363,10 @@ describe("Tauri IPC Contract", () => {
     // so 561/580.
     // Group files: +2 on both sides (groupRead/group_read, groupCommit/group_commit), so
     // 563/582.
-    const EXPECTED_TS_COMMAND_COUNT = 563;
-    const EXPECTED_RUST_COMMAND_COUNT = 582;
+    // Window pins: +2 on both sides (windowPinsRead/window_pins_read,
+    // windowPinsWrite/window_pins_write), so 565/584.
+    const EXPECTED_TS_COMMAND_COUNT = 565;
+    const EXPECTED_RUST_COMMAND_COUNT = 584;
     // The Rust count runs ahead of the TS count by the RUST_ONLY_COMMANDS that have no
     // renderer IPC wrapper (the access revocation and two session watchers plus the WV-B5/C6
     // scope-layer and harvest-norm Tauri commands whose FE wrappers land in later WV stories):

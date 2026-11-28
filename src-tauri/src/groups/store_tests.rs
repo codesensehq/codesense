@@ -1266,3 +1266,146 @@ fn a_write_the_store_does_not_run_changes_nothing() {
     );
     assert_eq!(snapshot(home.path()), before);
 }
+
+fn pins_file(home: &Path) -> PathBuf {
+    groups_dir(&scratch_space::org_space_at(home, &me(), ORG).unwrap()).join(INDEX_FILE)
+}
+
+fn keys(list: &[&str]) -> Vec<String> {
+    list.iter().map(|key| String::from(*key)).collect()
+}
+
+/// `windows.<label>.pins` round-trips, and a fourth pin is refused with nothing changed.
+#[test]
+fn window_pins_round_trip_and_a_fourth_is_refused() {
+    let home = tempdir().unwrap();
+    let s = store(home.path(), true);
+    assert_eq!(s.window_pins("main"), Ok(vec![]));
+    let three = keys(&["agent:core/dev", "doc:core/notes/plan.md", "ws-1a2b3c"]);
+    assert_eq!(s.set_window_pins("main", three.clone()), Ok(()));
+    assert_eq!(s.window_pins("main"), Ok(three.clone()));
+    let on_disk: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(pins_file(home.path())).unwrap()).unwrap();
+    assert_eq!(on_disk["windows"]["main"]["pins"], serde_json::json!(three));
+
+    let before = std::fs::read(pins_file(home.path())).unwrap();
+    let mut four = three.clone();
+    four.push(String::from("tab_7F3e"));
+    assert_eq!(s.set_window_pins("main", four), Err(StoreError::PinsFull));
+    assert_eq!(std::fs::read(pins_file(home.path())).unwrap(), before);
+    assert_eq!(s.window_pins("main"), Ok(three));
+
+    // A replace is one write of the whole list, and an empty list is kept as empty.
+    let swapped = keys(&["tab_7F3e", "agent:core/dev"]);
+    assert_eq!(s.set_window_pins("main", swapped.clone()), Ok(()));
+    assert_eq!(s.window_pins("main"), Ok(swapped));
+    assert_eq!(s.set_window_pins("main", vec![]), Ok(()));
+    assert_eq!(s.window_pins("main"), Ok(vec![]));
+}
+
+/// A window closed and reopened under the same label reads its pins back, from a new store.
+#[test]
+fn a_window_reopened_as_main_reads_its_pins_back() {
+    let home = tempdir().unwrap();
+    let pins = keys(&["agent:core/dev", "tab_7F3e"]);
+    {
+        let s = store(home.path(), true);
+        s.set_window_pins("main", pins.clone()).unwrap();
+    }
+    let reopened = store(home.path(), true);
+    assert_eq!(reopened.window_pins("main"), Ok(pins));
+    assert_eq!(reopened.window_pins("viewer-2"), Ok(vec![]));
+}
+
+/// An entry for a label no window uses survives a load and another window's write unchanged,
+/// as does any other key in the file.
+#[test]
+fn an_entry_no_window_uses_survives_unchanged() {
+    let home = tempdir().unwrap();
+    let s = store(home.path(), true);
+    s.set_window_pins("main", keys(&["ws-1a2b3c"])).unwrap();
+    let path = pins_file(home.path());
+    let gone = serde_json::json!({"pins": ["agent:core/dev"], "note": "kept"});
+    let mut file: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    file["windows"]["gone-window"] = gone.clone();
+    file["other"] = serde_json::json!({"kept": true});
+    std::fs::write(&path, serde_json::to_vec(&file).unwrap()).unwrap();
+    let before = std::fs::read(&path).unwrap();
+
+    assert_eq!(s.window_pins("main"), Ok(keys(&["ws-1a2b3c"])));
+    assert_eq!(s.window_pins("gone-window"), Ok(keys(&["agent:core/dev"])));
+    assert_eq!(
+        std::fs::read(&path).unwrap(),
+        before,
+        "a load writes nothing"
+    );
+
+    s.set_window_pins("main", keys(&["tab_7F3e"])).unwrap();
+    let after: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(after["windows"]["gone-window"], gone);
+    assert_eq!(after["other"], serde_json::json!({"kept": true}));
+    assert_eq!(
+        after["windows"]["main"]["pins"],
+        serde_json::json!(["tab_7F3e"])
+    );
+}
+
+/// With the tiles flag off the pins writer is refused and nothing is made on disk.
+#[test]
+fn with_the_flag_off_the_pins_writer_writes_nothing() {
+    let home = tempdir().unwrap();
+    let before = snapshot(home.path());
+    let s = store(home.path(), false);
+    assert_eq!(
+        s.set_window_pins("main", keys(&["ws-1a2b3c"])),
+        Err(StoreError::TilesOff)
+    );
+    assert_eq!(snapshot(home.path()), before);
+}
+
+/// A key pinned twice, a key the leaf-id grammar refuses and a label that isn't one are each
+/// refused, and an unreadable pins file is never rewritten.
+#[test]
+fn a_refused_pin_or_an_unreadable_pins_file_writes_nothing() {
+    let home = tempdir().unwrap();
+    let s = store(home.path(), true);
+    assert!(matches!(
+        s.set_window_pins("main", keys(&["ws-1a2b3c", "ws-1a2b3c"])),
+        Err(StoreError::InvalidOp(_))
+    ));
+    assert!(matches!(
+        s.set_window_pins("main", keys(&["generic:relative/dir"])),
+        Err(StoreError::InvalidOp(_))
+    ));
+    assert!(matches!(
+        s.set_window_pins("../main", keys(&["ws-1a2b3c"])),
+        Err(StoreError::Refused(_))
+    ));
+    assert!(!pins_file(home.path()).exists());
+
+    s.set_window_pins("main", keys(&["ws-1a2b3c"])).unwrap();
+    let path = pins_file(home.path());
+    std::fs::write(&path, b"{\"windows\": [1, 2]}").unwrap();
+    assert_eq!(s.window_pins("main"), Err(StoreError::Unreadable));
+    assert_eq!(
+        s.set_window_pins("main", keys(&["tab_7F3e"])),
+        Err(StoreError::Unreadable)
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), b"{\"windows\": [1, 2]}");
+}
+
+/// The pins file is no group: `index` is not a group id and the list never shows it.
+#[test]
+fn the_pins_file_is_not_listed_as_a_group() {
+    let home = tempdir().unwrap();
+    let s = store(home.path(), true);
+    s.set_window_pins("main", keys(&["ws-1a2b3c"])).unwrap();
+    s.commit("focus", 0, put(leaf("ws-1a2b3c"))).unwrap();
+    let ids: Vec<String> = s.list().unwrap().into_iter().map(|l| l.id).collect();
+    assert_eq!(ids, vec![String::from("focus")]);
+    assert!(matches!(
+        s.commit("index", 0, put(leaf("ws-1a2b3c"))),
+        Err(StoreError::InvalidId(_))
+    ));
+}

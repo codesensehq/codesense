@@ -116,3 +116,48 @@ fn a_malformed_op_or_file_ref_is_refused() {
     )
     .is_err());
 }
+
+fn pins(value: Result<PinsReply, String>) -> serde_json::Value {
+    serde_json::to_value(value.unwrap()).unwrap()
+}
+
+fn keys(list: &[&str]) -> Vec<String> {
+    list.iter().map(|key| String::from(*key)).collect()
+}
+
+/// The pins write's replies on the wire: `{ok: true}`, and `{refused}` for a fourth pin, the
+/// flag off and no active org; the read returns what was written, or none with no org.
+#[test]
+fn the_pins_commands_reply_on_the_wire() {
+    let home = tempdir().unwrap();
+    let s = store(home.path(), true);
+    let three = keys(&["agent:core/dev", "ws-1a2b3c", "tab_7F3e"]);
+    assert_eq!(
+        pins(write_pins(true, Some(&s), "main", three.clone())),
+        json!({"ok": true})
+    );
+    assert_eq!(read_pins(true, Some(&s), "main"), Ok(three.clone()));
+
+    let mut four = three.clone();
+    four.push(String::from("doc:core/notes/plan.md"));
+    assert_eq!(
+        pins(write_pins(true, Some(&s), "main", four)),
+        json!({"refused": "fourth"})
+    );
+    assert_eq!(
+        pins(write_pins(false, Some(&s), "main", keys(&["ws-1a2b3c"]))),
+        json!({"refused": "flag-off"})
+    );
+    let off = store(home.path(), false);
+    assert_eq!(
+        pins(write_pins(true, Some(&off), "main", keys(&["ws-1a2b3c"]))),
+        json!({"refused": "flag-off"})
+    );
+    assert_eq!(
+        pins(write_pins(true, None, "main", keys(&["ws-1a2b3c"]))),
+        json!({"refused": "no-org"})
+    );
+    assert_eq!(read_pins(true, Some(&s), "main"), Ok(three));
+    assert_eq!(read_pins(true, None, "main"), Ok(vec![]));
+    assert!(read_pins(false, Some(&s), "main").is_err());
+}
