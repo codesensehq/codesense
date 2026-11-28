@@ -17,6 +17,7 @@ import { defaultRightPaneLayout } from "../right-pane/right-pane-layout";
 import { usePaneStore } from "../right-pane/panes/pane-store";
 import { revealSlot } from "./reveal-slot";
 
+vi.mock("@/shared/lib/tiles-enabled", () => ({ tilesEnabled: async () => true }));
 vi.mock("@/tauri/commands", async (original) => ({
   ...(await original<typeof import("@/tauri/commands")>()),
   readDashboardProfile: vi.fn(async () => null),

@@ -12,6 +12,7 @@ vi.mock("../lib/verb-dispatch", () => ({
   verbSettle: nativeSettle,
   verbAnswer: vi.fn(),
 }));
+vi.mock("@/shared/lib/tiles-enabled", () => ({ tilesEnabled: async () => true }));
 vi.mock("@/shared/lib/local-profile-session", () => ({ rendererPrincipal: async () => "42" }));
 import { FrameMessageEvent } from "../../../../tests/support/fixtures/frame";
 import { runRenderedDocumentRequest } from "@/shared/hooks/use-rendered-document-bridge";

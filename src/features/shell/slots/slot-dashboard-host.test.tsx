@@ -29,6 +29,7 @@ vi.mock("@/tauri/commands", async (original) => ({
     state.app = next;
   }),
 }));
+vi.mock("@/shared/lib/tiles-enabled", () => ({ tilesEnabled: async () => true }));
 const displayedBody = vi.hoisted(() => vi.fn());
 vi.mock("@/features/dashboard/lib/dashboard-commands", () => ({
   setSlotDisplayedBody: displayedBody,
