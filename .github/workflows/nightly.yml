@@ -68,8 +68,9 @@ jobs:
 
   pane-harness:
     name: Pane harness (WebKit)
+    # About 350 specs on one worker take about 35 minutes on macos-15.
     runs-on: macos-15
-    timeout-minutes: 30
+    timeout-minutes: 60
     permissions:
       contents: read
     steps:
