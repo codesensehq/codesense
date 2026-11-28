@@ -15,8 +15,6 @@ pub mod codesense_docs;
 mod content;
 pub mod context_attachments;
 pub(crate) mod inheritance;
-#[cfg(test)]
-mod inheritance_guard;
 pub mod layout_resolver;
 pub mod migrate_install_tree;
 mod mutate;
