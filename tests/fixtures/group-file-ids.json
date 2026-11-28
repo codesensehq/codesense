@@ -1,0 +1,49 @@
+[
+  {
+    "target": {
+      "kind": "foreground",
+      "teamKey": "acme:app",
+      "railKey": null
+    },
+    "org": "acme",
+    "file": {
+      "owner": "group",
+      "id": "fg-5bcb256aa67dd135f8364f0ce3e59300"
+    }
+  },
+  {
+    "target": {
+      "kind": "foreground",
+      "teamKey": "acme:app",
+      "railKey": ""
+    },
+    "org": "acme",
+    "file": {
+      "owner": "group",
+      "id": "fg-c415901f3dc35af9232ef258736c2519"
+    }
+  },
+  {
+    "target": {
+      "kind": "foreground",
+      "teamKey": "acme:app",
+      "railKey": "_epic/demo"
+    },
+    "org": "acme",
+    "file": {
+      "owner": "group",
+      "id": "fg-6cc81c939c6a98fe11120ae84b6ac55f"
+    }
+  },
+  {
+    "target": {
+      "kind": "tabGrid",
+      "workspaceKey": "acme:app|ws-1"
+    },
+    "org": "acme",
+    "file": {
+      "owner": "workspace",
+      "id": "ws-31a3fab3ebe78814dc713fa0375a592f"
+    }
+  }
+]

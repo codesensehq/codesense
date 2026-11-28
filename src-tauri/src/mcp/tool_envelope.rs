@@ -34,6 +34,29 @@ pub(crate) enum ToolEnvelope<T> {
     },
 }
 
+impl<T> ToolEnvelope<T> {
+    /// A group store refusal as an agent's reply: a write on a stale revision is a `conflict`
+    /// naming the head to re-read, never `deferred`; any other refusal is `validation`.
+    // The agent tools that write a group join in later changes; until then only tests call it.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn from_group_error(error: &crate::groups::store::StoreError) -> Self {
+        use crate::groups::store::StoreError;
+        let current_revision = match error {
+            StoreError::Conflict { current_revision } => *current_revision,
+            StoreError::Collided(collision) => collision.current_revision,
+            other => {
+                return Self::Validation {
+                    message: other.to_string(),
+                }
+            }
+        };
+        Self::Conflict {
+            message: error.to_string(),
+            current_revision: Some(current_revision),
+        }
+    }
+}
+
 /// The `ok` payload of a tool served under an old name: the new tool's payload (an object),
 /// plus `alias: true` and `use`, the name to call instead. Other arms pass through unchanged.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -212,6 +235,60 @@ mod tests {
                 "status": "conflict",
                 "data": { "message": "stale", "current_revision": 4 }
             })
+        );
+    }
+
+    /// An agent's group write on a stale revision: the store refuses it whole, and the reply is
+    /// the `conflict` envelope with the head's revision.
+    #[test]
+    fn an_agent_group_write_on_a_stale_revision_is_a_conflict_envelope() {
+        use crate::groups::ops::parse_op;
+        use crate::groups::shape::OwnerKind;
+        use crate::groups::store::{GroupStore, StoreWrite, Writer};
+        let home = tempfile::tempdir().unwrap();
+        let store = GroupStore::at(
+            home.path(),
+            &crate::domain::Principal::from(42u64),
+            "acme/ctx",
+            true,
+        )
+        .unwrap();
+        let write = |writer: Writer, base_rev: u64, leaf: &str| {
+            store.write(
+                "main",
+                StoreWrite {
+                    writer,
+                    base_rev,
+                    owner: OwnerKind::Group,
+                    ops: vec![
+                        parse_op(&serde_json::json!({"op": "place", "leafId": leaf})).unwrap(),
+                    ],
+                },
+            )
+        };
+        let window = || Writer::Person {
+            window: "main".into(),
+        };
+        write(window(), 0, "ws-a").unwrap();
+        write(window(), 1, "ws-b").unwrap();
+        let refused = write(
+            Writer::Agent {
+                session: "s1".into(),
+            },
+            1,
+            "ws-c",
+        )
+        .unwrap_err();
+        let reply: ToolEnvelope<()> = ToolEnvelope::from_group_error(&refused);
+        let value = serde_json::to_value(&reply).unwrap();
+        assert_eq!(value["status"], "conflict");
+        assert_eq!(value["data"]["current_revision"], 2);
+        let message = serde_json::Value::as_str(&value["data"]["message"]).unwrap();
+        assert!(message.contains("revision 2"), "{message}");
+        let invalid = crate::groups::store::StoreError::InvalidOp("no".into());
+        assert_eq!(
+            serde_json::to_value(ToolEnvelope::<()>::from_group_error(&invalid)).unwrap()["status"],
+            "validation"
         );
     }
 

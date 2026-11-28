@@ -50,6 +50,24 @@ split, and a restart opens them exactly as you left them.
 - A saved arrangement that's damaged, or that a newer CodeSense wrote, is
   listed as **can't be read**. CodeSense leaves that file exactly as it is and
   never saves over it, so a newer version can still open it.
+- Moving, resizing or closing a tile saves on its own; there is no Save. A
+  window saves each change as the step you took (this tile moved there, that
+  split resized), not as a copy of the whole arrangement, so two windows and an
+  agent can change one arrangement at once without losing each other's steps.
+  If another window saved first, yours is applied on top of what it saved. If an
+  agent changed the same tile in the meantime, your window shows the agent's
+  change and you repeat yours.
+- A change another window or an agent saves shows in your open window at once,
+  in that arrangement only: the tiles it didn't touch don't redraw, and an
+  arrangement you don't have on screen changes nothing you see.
+- A window keeps up to three pinned tiles. They're saved with the arrangements
+  of the org you're in, under the window's own name, so a window that reopens
+  under the same name gets its pins back, and the pins of a window that isn't
+  open are kept. For now, pins belong to the org you pinned them in: switch to
+  another org and the window shows that org's pins instead.
+- With the preview on, a window opens each arrangement from its saved file. An
+  arrangement that has no file yet opens as it did before, and gets its file
+  the first time you change it.
 - With the tiles preview off, CodeSense saves no arrangement and changes none,
   and the files you saved stay as they are. Turn the preview back on and they
   open unchanged.

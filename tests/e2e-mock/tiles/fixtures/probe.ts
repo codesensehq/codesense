@@ -8,7 +8,7 @@ import { expect, type Page } from "@playwright/test";
  * must tell a frame that stayed put from one that reloaded or remounted.
  *
  *   const probe = await mountProbe(page);  // the live-hub harness, the probe in a right-pane slot
- *   await probe.counts();                  // { key, inFrame, stored, received }, from the frame
+ *   await probe.counts();                  // { key, inFrame, stored, received, deltas }, from the frame
  *   await probe.hostLoads();               // the probe:load posts the host page counted
  *   await probe.remount();                 // unmount the slot and mount it again: a new frame
  *
@@ -26,6 +26,8 @@ export interface ProbeCounts {
   stored: number;
   /** Every message the probe received, other than its own count requests. */
   received: Array<{ origin: string; data: unknown }>;
+  /** Each hub delta the probe's `sessions` subscription heard, oldest first. */
+  deltas: Array<{ rev: number | null; at: number }>;
 }
 
 type ProbeWindow = Window & { __probeLoads?: Record<string, number> };
@@ -65,8 +67,8 @@ export async function probeCounts(page: Page, id: string): Promise<ProbeCounts> 
           if (event.source !== target || event.data?.type !== "probe:counts") return;
           clearTimeout(timer);
           removeEventListener("message", listener);
-          const { key, inFrame, stored, received } = event.data;
-          resolve({ key, inFrame, stored, received });
+          const { key, inFrame, stored, received, deltas } = event.data;
+          resolve({ key, inFrame, stored, received, deltas });
         };
         addEventListener("message", listener);
         target?.postMessage({ type: "probe:count" }, "*");

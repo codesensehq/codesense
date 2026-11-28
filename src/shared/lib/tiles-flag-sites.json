@@ -5,6 +5,26 @@
     "what": "writes and deletes group files"
   },
   {
+    "file": "src-tauri/src/groups/store.rs",
+    "fn": "GroupStore::write",
+    "what": "runs a writer's kit ops on a group file"
+  },
+  {
+    "file": "src-tauri/src/groups/store.rs",
+    "fn": "GroupStore::set_window_pins",
+    "what": "writes a window's pins to the group folder's index"
+  },
+  {
+    "file": "src-tauri/src/groups/commands.rs",
+    "fn": "read_pins",
+    "what": "reads a window's pins for window_pins_read"
+  },
+  {
+    "file": "src-tauri/src/groups/commands.rs",
+    "fn": "write_pins",
+    "what": "writes a window's pins for window_pins_write"
+  },
+  {
     "file": "src-tauri/src/context_repo/scratch_space.rs",
     "fn": "exclude_group_files",
     "what": "writes the group exclude lines into the scratch repo"
@@ -15,8 +35,20 @@
     "what": "creates the group folder and its .gitignore"
   },
   {
+    "file": "src/features/shell/components/tile-host-mount.tsx",
+    "what": "mounts the tile host over the content area"
+  },
+  {
     "file": "src-tauri/src/live_hub/groups.rs",
     "fn": "project",
     "what": "publishes group changes on the group and groups topics"
+  },
+  {
+    "file": "src/shared/stores/layout-store-client.ts",
+    "what": "reads a layout's group file at launch, writes it through group_commit and keeps app-state's launch roots"
+  },
+  {
+    "file": "src/shared/stores/window-pins.ts",
+    "what": "reads and writes a window's pins through window_pins_read and window_pins_write"
   }
 ]

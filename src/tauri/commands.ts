@@ -6,6 +6,8 @@ import { isMainWindow } from "@/shared/lib/current-window";
 
 import { invoke } from "@tauri-apps/api/core";
 import type { WakeHistoryEntry } from "@/shared/lib/wake-events";
+import type { OwnerKind, SavedNode } from "@/shared/tiling/group-file.generated";
+import type { KitOp } from "@/shared/tiling/kit-op";
 import type { ContextRepoInfo, LoadedOrg } from "@/shared/types";
 import type {
   Attachment,
@@ -6070,6 +6072,39 @@ export const getLogDebugEnabled = () => invoke<boolean>("get_log_debug_enabled")
 // Release flags
 /** The tiles release flag's boot value; read it through `tilesEnabled()` in `@/shared/lib/tiles-enabled`. */
 export const getTilesEnabled = () => invoke<boolean>("tiles_enabled");
+
+// Group files: a window's layouts, written by the group store as kit ops.
+/** Which group file a command names. */
+export interface GroupFileRef {
+  owner: OwnerKind;
+  id: string;
+}
+/** A group file's head: `tree` is null once the file is deleted. */
+export interface GroupHead {
+  rev: number;
+  tree: SavedNode | null;
+}
+/**
+ * A commit's reply. `collided` is set only when an agent's write touched the op's tiles: reload
+ * the head and drop the op. Without it, replay the op on the head.
+ */
+export type GroupCommitReply =
+  | { rev: number }
+  | { conflict: { currentRevision: number; collided?: string[] } };
+/** The group file's head, or null when it never existed. Refused with tiles off. */
+export const groupRead = (org: string, file: GroupFileRef) =>
+  invoke<GroupHead | null>("group_read", { org, file });
+/** Writes a gesture's kit ops on the rev the window last read. Refused with tiles off. */
+export const groupCommit = (org: string, file: GroupFileRef, baseRev: number, ops: KitOp[]) =>
+  invoke<GroupCommitReply>("group_commit", { org, file, baseRev, ops });
+/** Why a window's pins write wrote nothing. */
+export type WindowPinsRefusal = "fourth" | "flag-off" | "no-org";
+/** The calling window's pins, from the active org's group folder. The host keys them by the
+ *  window that calls, never by a label the page passes. */
+export const windowPinsRead = () => invoke<string[]>("window_pins_read");
+/** Replaces the calling window's pins with `keys`, in one write. */
+export const windowPinsWrite = (keys: string[]) =>
+  invoke<{ ok: true } | { refused: WindowPinsRefusal }>("window_pins_write", { keys });
 
 // Platform capabilities
 export interface PlatformCap {

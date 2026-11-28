@@ -132,6 +132,7 @@ vi.mock("@/shared/lib/viewer-perf-config", () => ({
     maxBridgedFrames: 16,
     fileCacheMaxEntries: 25,
     keepAliveMaxViewers: 10,
+    tileKeepAliveMaxHidden: 10,
     // Both flags off in tests — the viewer falls back to the synchronous
     // `<ReactMarkdown>` path (happy-dom has no Worker, and the block
     // path requires the worker to produce `Block[]`). `renderMode` is

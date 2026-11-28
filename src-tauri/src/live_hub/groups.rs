@@ -53,39 +53,44 @@ fn groups_rows(key: &str, listed: Vec<Listed>) -> Vec<(Option<String>, Value)> {
         .collect()
 }
 
-/// Project the group `id` of `store` (the store of the context repo `org`) into the `group` and
-/// `groups` views after a change to it. With `tiles` off, nothing is read or published.
+/// Project the group `id` of `store` into the `group` and `groups` views after a change to it,
+/// keyed by the store's own org. With `tiles` off, nothing is read or published.
 pub fn project(
     registry: &mut TopicRegistry,
     tiles: bool,
     store: &GroupStore,
-    org: &str,
     id: &str,
 ) -> Result<Vec<Delta>, String> {
     if !tiles {
         return Ok(vec![]);
     }
+    let loaded = GroupStore::load(store, id);
+    let listed = GroupStore::list(store);
+    replace_views(registry, GroupStore::org(store), id, loaded, listed)
+}
+
+/// Both views of the group `id` of the context repo `org`, from the file and the list as read.
+/// Each is built before either view changes, so a failed read leaves both as they were.
+fn replace_views(
+    registry: &mut TopicRegistry,
+    org: &str,
+    id: &str,
+    loaded: Result<Loaded, StoreError>,
+    listed: Result<Vec<Listed>, StoreError>,
+) -> Result<Vec<Delta>, String> {
     let key = group_view_key(org, id);
-    let mut deltas =
-        TopicRegistry::replace_view(registry, GROUP, &key, group_rows(&key, id, store.load(id))?)?;
-    let listed = store.list().map_err(|e| e.to_string())?;
-    deltas.extend(TopicRegistry::replace_view(
-        registry,
-        GROUPS,
-        org,
-        groups_rows(org, listed),
-    )?);
+    let group = group_rows(&key, id, loaded)?;
+    let groups = groups_rows(org, listed.map_err(|e| e.to_string())?);
+    let mut deltas = TopicRegistry::replace_view(registry, GROUP, &key, group)?;
+    deltas.extend(TopicRegistry::replace_view(registry, GROUPS, org, groups)?);
     Ok(deltas)
 }
 
 /// Publish a change to the group `id` of `store` to the host's subscribers, when the session's
-/// tiles flag is on.
-// The group writers call it in a later change; until then only the tests do.
-#[cfg_attr(not(test), allow(dead_code))]
+/// tiles flag is on. `group_commit` calls it after each write it places.
 pub(crate) fn publish_change<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     store: &GroupStore,
-    org: &str,
     id: &str,
 ) -> Result<(), String> {
     let tiles = tauri::Manager::try_state::<crate::flags::TilesFlag>(app)
@@ -93,7 +98,7 @@ pub(crate) fn publish_change<R: tauri::Runtime>(
     let hub = tauri::Manager::state::<super::LiveHub>(app);
     let deltas = {
         let mut model = hub.model.lock().map_err(|e| e.to_string())?;
-        project(&mut model.projections, tiles, store, org, id)?
+        project(&mut model.projections, tiles, store, id)?
     };
     super::publish(app, deltas);
     Ok(())
@@ -150,7 +155,7 @@ mod tests {
             .unwrap();
 
         let rev = store.commit("focus", 0, put("agent:core/dev")).unwrap();
-        let deltas = project(&mut registry, true, &store, ORG, "focus").unwrap();
+        let deltas = project(&mut registry, true, &store, "focus").unwrap();
         let sent = registry.deliver(&deltas);
         let to = |id: &str| {
             sent.iter()
@@ -178,12 +183,65 @@ mod tests {
 
         // A delete removes the group from both views.
         store.commit("focus", rev, Change::Delete).unwrap();
-        let deltas = project(&mut registry, true, &store, ORG, "focus").unwrap();
+        let deltas = project(&mut registry, true, &store, "focus").unwrap();
         let sent = registry.deliver(&deltas);
         for id in ["host-group", "host-groups"] {
             let (_, delta) = sent.iter().find(|(sub, _)| sub == id).unwrap();
             assert_eq!(delta.removes, vec!["focus".to_owned()], "{id}");
         }
+    }
+
+    /// A list that fails changes neither view: the group view keeps the file it showed.
+    #[test]
+    fn a_failing_list_updates_no_view() {
+        let home = tempfile::tempdir().unwrap();
+        let store = store(home.path());
+        let rev = store.commit("focus", 0, put("agent:core/dev")).unwrap();
+        let mut registry = TopicRegistry::default();
+        project(&mut registry, true, &store, "focus").unwrap();
+        let key = group_view_key(ORG, "focus");
+        let before = (
+            serde_json::to_value(TopicRegistry::snapshot(&mut registry, GROUP, &key).unwrap())
+                .unwrap(),
+            serde_json::to_value(TopicRegistry::snapshot(&mut registry, GROUPS, ORG).unwrap())
+                .unwrap(),
+        );
+
+        store.commit("focus", rev, put("agent:core/qa")).unwrap();
+        let failed = replace_views(
+            &mut registry,
+            ORG,
+            "focus",
+            GroupStore::load(&store, "focus"),
+            Err(StoreError::Io("the folder can't be listed".into())),
+        );
+        assert!(failed.is_err());
+        let after = (
+            serde_json::to_value(TopicRegistry::snapshot(&mut registry, GROUP, &key).unwrap())
+                .unwrap(),
+            serde_json::to_value(TopicRegistry::snapshot(&mut registry, GROUPS, ORG).unwrap())
+                .unwrap(),
+        );
+        assert_eq!(
+            after, before,
+            "a failed list leaves both views as they were"
+        );
+    }
+
+    /// `project` keys both views by the store's own org.
+    #[test]
+    fn project_keys_by_the_stores_own_org() {
+        let home = tempfile::tempdir().unwrap();
+        let other =
+            GroupStore::at(home.path(), &Principal::from(42u64), "other/repo", true).unwrap();
+        assert_eq!(GroupStore::org(&other), "other/repo");
+        other.commit("focus", 0, put("agent:core/dev")).unwrap();
+        let mut registry = TopicRegistry::default();
+        project(&mut registry, true, &other, "focus").unwrap();
+        assert!(registry.has_view(GROUP, &group_view_key("other/repo", "focus")));
+        assert!(registry.has_view(GROUPS, "other/repo"));
+        assert!(!registry.has_view(GROUP, &group_view_key(ORG, "focus")));
+        assert!(!registry.has_view(GROUPS, ORG));
     }
 
     /// With the tiles flag off nothing is read or published, and no view is made.
@@ -193,7 +251,7 @@ mod tests {
         let store = store(home.path());
         store.commit("focus", 0, put("agent:core/dev")).unwrap();
         let mut registry = TopicRegistry::default();
-        let deltas = project(&mut registry, false, &store, ORG, "focus").unwrap();
+        let deltas = project(&mut registry, false, &store, "focus").unwrap();
         assert!(deltas.is_empty());
         assert!(!registry.has_view(GROUP, &group_view_key(ORG, "focus")));
         assert!(!registry.has_view(GROUPS, ORG));
@@ -212,7 +270,7 @@ mod tests {
                 .unwrap();
             app.manage(LiveHub::default());
             app.manage(crate::flags::TilesFlag::fixed(on));
-            publish_change(app.handle(), &store, ORG, "focus").unwrap();
+            publish_change(app.handle(), &store, "focus").unwrap();
             let hub = app.state::<LiveHub>();
             assert_eq!(hub.has_view(&key, GROUP), on, "flag {on}");
             if on {

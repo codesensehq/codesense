@@ -316,7 +316,7 @@ const SITES: Record<string, { count: number; reason: string }> = {
     reason: "finds the one global CLI host element; a singleton, not per team.",
   },
   "src/main.tsx": {
-    count: 8,
+    count: 9,
     reason:
       "bootstrap: mounts React on the single root element (the app, or one `dev:mock` harness), before any team exists.",
   },
