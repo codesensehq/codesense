@@ -53,6 +53,8 @@ Each team remembers whether its terminal tray is showing. The shortcuts are list
 
 On a Mac the terminal shortcuts use <kbd>⌘</kbd>, never <kbd>⌃</kbd>: Control chords like <kbd>⌃T</kbd>, <kbd>⌃F</kbd> and <kbd>⌃K</kbd> always go to the shell. <kbd>⌘1</kbd>…<kbd>⌘9</kbd> jump between workspaces.
 
+A shortcut you set in **Settings → Shortcuts** can also hold <kbd>⌃</kbd> with <kbd>⌘</kbd>, for example <kbd>⌃⌥⌘→</kbd>. It shows its <kbd>⌃</kbd> there, fires only with both keys held, takes the key ahead of a plain <kbd>⌘</kbd> shortcut on it, and never fires from a terminal. These chords work on a Mac only, so elsewhere Settings won't record one.
+
 ## Over the terminal
 
 Four tools float over the focused terminal tile, so you can look at an agent's work without leaving its terminal. Each one belongs to the tile's active tab. Turn them on with the shortcut or from the tile's **View options** menu.
