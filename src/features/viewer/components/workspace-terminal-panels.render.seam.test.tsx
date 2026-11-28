@@ -79,6 +79,11 @@ vi.mock("@/tauri/commands", async (importOriginal) => ({
     h.server.resize(session, cols, rows),
   ),
 }));
+// The inbox's session list is the one the tests seed: its first read never answers.
+vi.mock("@/features/inbox/api", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/features/inbox/api")>()),
+  loadInboxSessions: () => new Promise(() => {}),
+}));
 vi.mock("./source-editor-inset", () => ({ WorktreeEditorSurface: () => null }));
 vi.mock("@/features/inbox/components/chat-overlay", () => ({ ChatOverlay: () => null }));
 vi.mock("@/features/dashboard/components/markdown-viewer", () => ({ MarkdownViewer: () => null }));
@@ -147,6 +152,9 @@ import {
 import { terminalManager } from "@/shared/terminal/terminal-manager";
 import { rememberTerminalSize } from "@/shared/lib/terminal-open";
 import { useOrgStore } from "@/shared/stores/org-store";
+import { useAgentListProjectionStore } from "@/features/viewer/lib/agent-list-projection";
+import { useInboxSessionsStore } from "@/features/inbox/hooks/use-inbox-sessions";
+import type { AgentSessionRow, SessionListRow } from "@/tauri/commands";
 import { useViewerStore, effectiveMosaicRoot } from "@/shared/stores/viewer-store";
 import { reconcilePresetTree, type MosaicNode } from "@/shared/tiling";
 import { dropWorkspace } from "../lib/tray-reorder-drag";
@@ -168,13 +176,14 @@ const s = () => useViewerStore.getState();
 const flush = () => act(async () => new Promise((r) => setTimeout(r, 20)));
 const sessionOf = (id: string) => `s-${id}`;
 
-/** The frame probe: commits and mounts per frame id since the last `reset`. The counts cover each
- *  frame's own render only, not its descendants': subscriptions below the frame (avatar packs, the
- *  tab captions' inbox counts, the tab bar's reads) can still redraw for an unrelated tile, and a
- *  later change owns them and widens this probe to a `Profiler` around the whole frame. */
+/** The frame probe: commits and mounts per frame id since the last `reset`. `rendered` counts each
+ *  frame's own render only; `committed` counts a `Profiler` around each tile's whole tree, so a
+ *  subscription below the frame (the tab bar's faces, a caption's inbox counts) that redraws for an
+ *  unrelated tile shows there. */
 const probe = (() => {
   const renders = new Map<string, number>();
   const mounts = new Map<string, number>();
+  const trees = new Map<string, number>();
   const api: FrameProbe & {
     reset: () => void;
     renders: Map<string, number>;
@@ -182,18 +191,23 @@ const probe = (() => {
     /** Frame ids that committed a render since the last reset. */
     rendered: (prefix: string) => string[];
     mounted: (prefix: string) => string[];
+    /** Frame ids whose tree (the frame or any descendant) committed since the last reset. */
+    committed: (prefix: string) => string[];
   } = {
     renders,
     mounts,
     render: (id) => void renders.set(id, (renders.get(id) ?? 0) + 1),
     mount: (id) => void mounts.set(id, (mounts.get(id) ?? 0) + 1),
+    descendants: (id) => void trees.set(id, (trees.get(id) ?? 0) + 1),
     reset: () => {
       renders.clear();
       mounts.clear();
+      trees.clear();
       h.changes = {};
     },
     rendered: (prefix) => [...renders.keys()].filter((id) => id.startsWith(prefix)).sort(),
     mounted: (prefix) => [...mounts.keys()].filter((id) => id.startsWith(prefix)).sort(),
+    committed: (prefix) => [...trees.keys()].filter((id) => id.startsWith(prefix)).sort(),
   };
   return api;
 })();
@@ -613,5 +627,114 @@ describe("a team switch (a warm team's tiles stay mounted)", () => {
     await flush();
 
     expect(probe.mounted("tile:")).toEqual([]);
+  });
+});
+
+describe("the tile probe: no descendant of an unrelated tile commits", () => {
+  const handleOf = (id: string) => `${id}#lead`;
+  const agentRow = (id: string, session = sessionOf(id)): AgentSessionRow =>
+    ({
+      handle: handleOf(id),
+      sessionId: session,
+      kind: "dashboard-launched",
+      alive: true,
+      backgrounded: false,
+      startedWith: null,
+      startedAtMs: 1,
+      launcher: null,
+      lastOutputMs: null,
+      displayName: id,
+    }) as AgentSessionRow;
+  const inboxRow = (id: string, unread: number): SessionListRow =>
+    ({
+      id: handleOf(id),
+      handle: handleOf(id),
+      team: { org: "acme", team: "default" },
+      unread,
+      groupUnread: 0,
+    }) as unknown as SessionListRow;
+
+  /** Every tile's tab runs an agent with an inbox row, so each tab bar draws a face and each
+   *  caption reads its counts. */
+  async function renderAgents() {
+    useAgentListProjectionStore.setState({
+      sessions: TILES.filter((id) => id !== "w1").map((id) => agentRow(id)),
+      error: null,
+    });
+    useInboxSessionsStore.setState({ sessions: TILES.map((id) => inboxRow(id, 0)) });
+    renderApp();
+    await flush();
+    probe.reset();
+  }
+
+  const committedOutside = (involved: string[]) =>
+    probe.committed("tile:").filter((id) => !involved.includes(id.slice(5)));
+
+  afterEach(() => {
+    useAgentListProjectionStore.setState({ sessions: null, error: null });
+    useInboxSessionsStore.setState({ sessions: null });
+  });
+
+  it("when a tile is added", async () => {
+    seedNestedMosaic();
+    await renderAgents();
+    act(() => {
+      addWorkspace(TEAM, NEW_TILE);
+      s().placeWorkspaceTile(TEAM, NEW_TILE, {
+        targetWorkspaceId: "w4",
+        axis: "row",
+        side: "after",
+      });
+    });
+    await flush();
+    const root = currentRoot();
+    const touched = [NEW_TILE, ...leavesUnder(root, parentPathOf(root, "w4") ?? [])];
+    expect(TILES.filter((id) => !touched.includes(id)).length).toBeGreaterThan(0);
+    expect(committedOutside(touched)).toEqual([]);
+  });
+
+  it("when one split's sizes commit", async () => {
+    seedNestedMosaic();
+    await renderAgents();
+    const root = currentRoot();
+    const path = parentPathOf(root, "w7")!;
+    const inside = leavesUnder(root, path);
+    const sizes = resizedSizes(root, path);
+    act(() => s().setForegroundNodeSizes(TEAM, path, sizes));
+    await flush();
+    expect((nodeAtPath(currentRoot(), path) as { sizes: number[] }).sizes).toEqual(sizes);
+    expect(committedOutside(inside)).toEqual([]);
+  });
+
+  it("when focus moves", async () => {
+    await renderAgents();
+    act(() => s().switchWorkspace(TEAM, "w5"));
+    await flush();
+    expect(committedOutside(["w1", "w5"])).toEqual([]);
+  });
+
+  it("when another team's agent starts", async () => {
+    addWorkspace(TEAM_B, "x1");
+    await renderAgents();
+    act(() =>
+      useAgentListProjectionStore.setState((st) => ({
+        sessions: [...(st.sessions ?? []), agentRow("x1")],
+      })),
+    );
+    await flush();
+    expect(probe.committed("tile:")).toEqual([]);
+  });
+
+  it("when an inbox row for another tab changes", async () => {
+    await renderAgents();
+    act(() =>
+      useInboxSessionsStore.setState({
+        sessions: TILES.map((id) => inboxRow(id, id === "w5" ? 3 : 0)),
+      }),
+    );
+    await flush();
+    expect(committedOutside(["w5"])).toEqual([]);
+    // The change landed: the tab whose mail it is redrew.
+    expect(probe.committed("tile:")).toEqual(["tile:w5"]);
   });
 });

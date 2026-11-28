@@ -193,6 +193,9 @@ export interface FrameProbe {
   render: (frameId: string, phase: "mount" | "update" | "nested-update") => void;
   /** The frame or cell mounted (a remount counts again). */
   mount: (frameId: string) => void;
+  /** A `React.Profiler` commit anywhere in a tile frame's tree: the frame and every descendant
+   *  (tab bar, captions, panes). Frame ids as for `render`. */
+  descendants?: (frameId: string, phase: "mount" | "update" | "nested-update") => void;
 }
 
 const FrameProbeContext = createContext<FrameProbe | undefined>(undefined);
@@ -938,8 +941,18 @@ function useFocusTile(teamKey: string, workspaceId: string): () => void {
  *  it redraws only for a change to its own view (or to its own subscriptions below). */
 const WorkspaceTileFrame = memo(function WorkspaceTileFrame({ id }: { id: string }) {
   const host = useContext(TileFrameHostContext)!;
+  const probe = useContext(FrameProbeContext);
   const view = useKeyedView(host.store, id);
-  return view ? <TileFrameContent teamKey={host.teamKey} view={view} /> : null;
+  if (!view) return null;
+  const content = <TileFrameContent teamKey={host.teamKey} view={view} />;
+  const descendants = probe?.descendants;
+  return descendants ? (
+    <Profiler id={`tree:${id}`} onRender={(_id, phase) => descendants(`tile:${id}`, phase)}>
+      {content}
+    </Profiler>
+  ) : (
+    content
+  );
 });
 
 const TileFrameContent = memo(function TileFrameContent({ teamKey, view }: TileFrameContentProps) {
