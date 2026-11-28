@@ -187,15 +187,21 @@ function overBudget(budget, measured, key) {
 /**
  * The budget keys whose current p95 is over `budget.p95Ms`: none with no budget block or for a
  * runner other than `budget.runner`. Reads the current samples only, so a key needs no set entry.
+ * With `partial`, a key the measured file leaves out comes back as `{key, missing: true}`.
  */
-export function budgetFailures(baseline, measured, runner) {
+export function budgetFailures(baseline, measured, runner, { partial = false } = {}) {
   const { budget } = baseline;
   if (!budget || budget.runner !== runner) return [];
-  return budget.keys.map((key) => overBudget(budget, measured, key)).filter(Boolean);
+  return budget.keys
+    .map((key) =>
+      partial && !measured.keys[key] ? { key, missing: true } : overBudget(budget, measured, key),
+    )
+    .filter(Boolean);
 }
 
-const budgetLine = ({ key, p95 }, budget) =>
-  `FAIL ${key} p95 ${round1(p95)}ms > budget ${budget.p95Ms}`;
+const p95Text = ({ key, p95 }) => `${key} p95 ${round1(p95)}ms`;
+
+const budgetLine = (over, budget) => `FAIL ${p95Text(over)} > budget ${budget.p95Ms}`;
 
 const signed = (ratio) => `${ratio >= 0 ? "+" : ""}${Math.round(ratio * 100)}%`;
 
@@ -244,7 +250,7 @@ export function compare(baseline, measured, { runner }) {
       )}, limit ${round1(row.limit)}, ${signed(row.change)}, ${row.endState})`,
   );
   const over = budgetFailures(baseline, measured, runner);
-  const overText = over.map(({ key, p95 }) => `${key} p95 ${round1(p95)}ms`).join(", ");
+  const overText = over.map(p95Text).join(", ");
   let verdict = failed.length
     ? `perf compare ${runner}: FAIL ${failed.length}/${rows.length}: ${failed
         .map((row) => `${row.key} ${signed(row.change)}`)
@@ -333,15 +339,10 @@ export function run(argv, io = { log: console.log, error: console.error, env: pr
     }
     const next = upsertSet(baseline, measured, opts.runner);
     // record prints the budget but never gates on it; a partial run may leave a budget key out.
-    const { budget } = baseline;
-    const budgetLines =
-      budget?.runner === opts.runner
-        ? budget.keys.flatMap((key) => {
-            if (!measured.keys[key]) return [`budget ${key}: not measured`];
-            const over = overBudget(budget, measured, key);
-            return over ? [budgetLine(over, budget)] : [];
-          })
-        : [];
+    const budgetLines = budgetFailures(baseline, measured, opts.runner, { partial: true }).map(
+      (each) =>
+        each.missing ? `budget ${each.key}: not measured` : budgetLine(each, baseline.budget),
+    );
     fs.writeFileSync(opts.baseline, formatBaseline(next));
     const floorMs = baseline.compare.floor.ms;
     const { previous, kept, dropped, carried } = recordedKeys(baseline, measured, opts.runner);
