@@ -10,9 +10,12 @@
  * (event fields, test ids), not copy, and are skipped.
  */
 import { join, relative, resolve } from "path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { copyStrings, sourceFiles } from "./__test-utils__/copy-strings";
+
+// The scan reads every source file under src/: seconds locally, longer on a loaded CI runner.
+vi.setConfig({ testTimeout: 20_000 });
 
 const ROOT = resolve(__dirname, "../../..");
 const BANNED =
