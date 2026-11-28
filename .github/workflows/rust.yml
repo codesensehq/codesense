@@ -981,11 +981,13 @@ jobs:
         # The Linux bundle's pinned git-ai and starship, which tauri-build needs in place.
         run: bash scripts/fetch-bundled.sh
       - name: Build sidecars
-        # The app's build script needs the bundled sidecars to exist.
+        # Once, for both the tests and the app build: the app's build script needs them to exist.
         run: bash scripts/build-bridge.sh && bash scripts/build-session-server.sh
-      - name: Test the driver's commands and the command ACL
-        # The ACL's tests with the feature; the Linux app job runs them without it.
-        run: cargo test --locked -p codesense --lib --features e2e-webdriver -- windows::e2e windows::command_acl
+      - name: Test the driver's commands, the command ACL and the pending timeout
+        # The ACL's tests with the feature; the Linux app job runs them without it. The pending
+        # timeout's tests pin it to the cold first paints recorded from this job's artifact; no
+        # feature changes them, so they share this build.
+        run: cargo test --locked -p codesense --lib --features e2e-webdriver -- windows::e2e windows::command_acl windows::pending_timeout
       - name: Lint with the webdriver feature
         run: cargo clippy --locked -p codesense --features e2e-webdriver -- -D warnings
       - name: Check the WebDriver plugin is absent from a release build
@@ -993,8 +995,9 @@ jobs:
         run: bash scripts/verify-wdio-plugin-release-absence.sh
       - name: Build the webdriver app
         id: build
-        # A debug app with the e2e-webdriver feature and the webdriver front-end bundle in dist/.
-        run: pnpm build:e2e:windows
+        # A debug app with the e2e-webdriver feature and the webdriver front-end bundle in dist/,
+        # over the sidecars built above (`pnpm build:e2e:windows` builds them too, for a local run).
+        run: pnpm build:e2e:windows:app
       - name: Drive two windows
         run: xvfb-run -a pnpm test:e2e:windows
       - name: Time first paints over five launches

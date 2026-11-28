@@ -649,10 +649,18 @@ test("rust.yml's two-window e2e job tests, builds and drives the webdriver app",
   });
   const [fetchAt, fetch] = step("Fetch bundled binaries");
   assert.equal(fetch.run, "bash scripts/fetch-bundled.sh");
-  const [testAt, test] = step("Test the driver's commands and the command ACL");
+  // The sidecars are built once, before the tests, and the app build does not build them again.
+  const [sidecarsAt, sidecars] = step("Build sidecars");
+  assert.equal(
+    sidecars.run,
+    "bash scripts/build-bridge.sh && bash scripts/build-session-server.sh",
+  );
+  const [testAt, test] = step(
+    "Test the driver's commands, the command ACL and the pending timeout",
+  );
   assert.equal(
     test.run,
-    "cargo test --locked -p codesense --lib --features e2e-webdriver -- windows::e2e windows::command_acl",
+    "cargo test --locked -p codesense --lib --features e2e-webdriver -- windows::e2e windows::command_acl windows::pending_timeout",
   );
   const [clippyAt, clippy] = step("Lint with the webdriver feature");
   assert.equal(
@@ -662,7 +670,16 @@ test("rust.yml's two-window e2e job tests, builds and drives the webdriver app",
   const [pluginAt, plugin] = step("Check the WebDriver plugin is absent from a release build");
   assert.equal(plugin.run, "bash scripts/verify-wdio-plugin-release-absence.sh");
   const [buildAt, build] = step("Build the webdriver app");
-  assert.equal(build.run, "pnpm build:e2e:windows");
+  assert.equal(build.run, "pnpm build:e2e:windows:app");
+  const scripts = JSON.parse(
+    fs.readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+  ).scripts;
+  assert.doesNotMatch(scripts["build:e2e:windows:app"], /build-(bridge|session-server)/);
+  assert.equal(
+    job.steps.filter((s) => /build-(bridge|session-server)\.sh/.test(s.run ?? "")).length,
+    1,
+    "the job builds the sidecars in one step",
+  );
   const [runAt, run] = step("Drive two windows");
   assert.equal(run.run, "xvfb-run -a pnpm test:e2e:windows");
   // Five launches of the first-paint spec alone, so each has a cold first window.
@@ -684,7 +701,8 @@ test("rust.yml's two-window e2e job tests, builds and drives the webdriver app",
   assert.equal(build.id, "build");
   for (const [before, after] of [
     [cacheAt, fetchAt],
-    [fetchAt, testAt],
+    [fetchAt, sidecarsAt],
+    [sidecarsAt, testAt],
     [testAt, clippyAt],
     [clippyAt, pluginAt],
     [pluginAt, buildAt],
