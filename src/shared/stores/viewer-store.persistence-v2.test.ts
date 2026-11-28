@@ -1706,4 +1706,74 @@ describe("mosaic leaves saved before leaves carried an id", () => {
     expect(byRail[TEAM_KEY].epic.root ?? null).toBeNull();
     expect(viewer.terminalTabGridSizes).toEqual({ [gridKey]: { preset: "grid", root: bothKeys } });
   });
+
+  /** Launches on `legacyViewer`, shows `shown` in each layout as a group file's head does, saves,
+   *  then applies another window's prefs that change only each layout's preset. */
+  async function echoAfterGroupShow(shown: unknown) {
+    resetViewer();
+    seedOrg([SLUG_A]);
+    const workspace = {
+      id: "S-1",
+      kind: "story",
+      cwd: "/wt/S-1",
+      storyFilePath: "/stories/S-1.md",
+      storyId: "S-1",
+      status: "ready",
+    };
+    loadAppStateMock.mockResolvedValue(
+      JSON.stringify({
+        viewer: { schemaVersion: 15, ...legacyViewer, workspaces: { [TEAM_KEY]: [workspace] } },
+      }),
+    );
+    await useViewerStore.getState().loadPersistedState();
+    await flushGroupCommits();
+    useViewerStore.setState((s) => ({
+      foregroundLayout: { [TEAM_KEY]: { ...s.foregroundLayout[TEAM_KEY], root: shown as never } },
+      foregroundLayoutByRail: {
+        [TEAM_KEY]: { epic: { ...s.foregroundLayoutByRail[TEAM_KEY].epic, root: shown as never } },
+      },
+      tabGridLayout: { [gridKey]: { ...s.tabGridLayout[gridKey], root: shown as never } },
+    }));
+    await persisted();
+    const fg = { ...legacyViewer.foregroundLayout[TEAM_KEY], preset: "rows" };
+    applyOwnedViewerPrefs({
+      foregroundLayout: { [TEAM_KEY]: fg },
+      foregroundLayoutByRail: { [TEAM_KEY]: { epic: fg } },
+      terminalTabGridSizes: { [gridKey]: { preset: "grid", root: legacyRoot } },
+    });
+    return useViewerStore.getState();
+  }
+
+  const shown = { kind: "leaf", id: "S-2" };
+
+  it("with the tiles flag on, a prefs echo keeps the roots the group files show", async () => {
+    tiles.on = true;
+    try {
+      const s = await echoAfterGroupShow(shown);
+      expect(s.foregroundLayout[TEAM_KEY]).toMatchObject({ preset: "rows", root: shown });
+      expect(s.foregroundLayoutByRail[TEAM_KEY].epic).toMatchObject({
+        preset: "rows",
+        root: shown,
+      });
+      expect(s.tabGridLayout[gridKey]).toEqual({ preset: "grid", root: shown });
+    } finally {
+      tiles.on = false;
+      resetLayoutClientForTests();
+      applyOwnedViewerPrefs({}, true);
+    }
+  });
+
+  it("with the tiles flag off, a prefs echo restores each layout it carries, root included", async () => {
+    try {
+      const s = await echoAfterGroupShow(shown);
+      expect(s.foregroundLayout[TEAM_KEY]).toMatchObject({ preset: "rows", root: inMemory });
+      expect(s.foregroundLayoutByRail[TEAM_KEY].epic).toMatchObject({
+        preset: "rows",
+        root: inMemory,
+      });
+      expect(s.tabGridLayout[gridKey]).toEqual({ preset: "grid", root: inMemory });
+    } finally {
+      applyOwnedViewerPrefs({}, true);
+    }
+  });
 });

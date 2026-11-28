@@ -202,6 +202,11 @@ export function savedRoot(
   return (launchRoots.get(slotKey(slice, key)) ?? null) as SavedMosaicNode | null;
 }
 
+/** Whether the group files own each layout's root: the flag was on when the layouts hydrated. */
+export function groupFilesOwnRoots(): boolean {
+  return launchRoots !== null;
+}
+
 /** Runs `step` after every step before it, so ops reach a file in the order they were made. */
 function inLane(step: () => Promise<void>): Promise<void> {
   lane = lane.then(step).catch((error) => console.error("group commit failed", error));

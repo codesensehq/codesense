@@ -248,7 +248,12 @@ import {
   type TeamOrderSource,
 } from "@/features/viewer/lib/workspace-order";
 import type { Heading } from "@/features/viewer/lib/note-headings";
-import { hydrateLayouts, savedRoot, saveLayout } from "@/shared/stores/layout-store-client";
+import {
+  groupFilesOwnRoots,
+  hydrateLayouts,
+  savedRoot,
+  saveLayout,
+} from "@/shared/stores/layout-store-client";
 import type { KitOp } from "@/shared/tiling/kit-op";
 import {
   type MosaicNode,
@@ -1873,6 +1878,19 @@ function restoredForegroundLayouts(saved: unknown): Record<string, ForegroundLay
       restoredForegroundLayout(v),
     ]),
   );
+}
+
+/** Layouts a prefs apply restored, each live layout's root kept when the group files own the
+ *  roots (the tiles flag on): app-state then holds launch roots, never the ones shown. */
+function withLiveRoots<T extends { root: MosaicNode | null }>(
+  restored: Record<string, T>,
+  live: Record<string, T>,
+): Record<string, T> {
+  if (!groupFilesOwnRoots()) return restored;
+  const kept = { ...restored };
+  for (const [key, layout] of Object.entries(live))
+    kept[key] = { ...(restored[key] ?? layout), root: layout.root };
+  return kept;
 }
 
 /** Every team's saved per-rail foreground layouts, restored. */
@@ -13327,11 +13345,29 @@ export function applyOwnedViewerPrefs(viewer: Record<string, unknown>, reset = f
         ...Object.keys(focus),
       ]))
         viewerState.applyLayout({ kind: "focused", key: id, session: focus[id] ?? null });
-    } else if (key === "terminalTabGridSizes") patch.tabGridLayout = savedTabGrids(value);
-    else if (key === "foregroundLayout") patch.foregroundLayout = restoredForegroundLayouts(value);
-    else if (key === "foregroundLayoutByRail")
-      patch.foregroundLayoutByRail = restoredForegroundLayoutsByRail(value);
-    else if (key === "workspaces") {
+    } else if (key === "terminalTabGridSizes")
+      patch.tabGridLayout = withLiveRoots(savedTabGrids(value), viewerState.tabGridLayout);
+    else if (key === "foregroundLayout")
+      patch.foregroundLayout = withLiveRoots(
+        restoredForegroundLayouts(value),
+        viewerState.foregroundLayout,
+      );
+    else if (key === "foregroundLayoutByRail") {
+      const restored = restoredForegroundLayoutsByRail(value);
+      patch.foregroundLayoutByRail = groupFilesOwnRoots()
+        ? Object.fromEntries(
+            [
+              ...new Set([
+                ...Object.keys(restored),
+                ...Object.keys(viewerState.foregroundLayoutByRail),
+              ]),
+            ].map((team) => [
+              team,
+              withLiveRoots(restored[team] ?? {}, viewerState.foregroundLayoutByRail[team] ?? {}),
+            ]),
+          )
+        : restored;
+    } else if (key === "workspaces") {
       patch.workspaces = Object.fromEntries(
         [
           ...new Set([...Object.keys(value as object), ...Object.keys(viewerState.workspaces)]),
