@@ -11,11 +11,12 @@
 //!   (`src/app/e2e-satellite-probe.tsx`) on that file.
 //! - `e2e_seed` gives a fresh home a local org and team holding the probe dashboard and the
 //!   file it reads, and returns the dashboard's path. It grants nothing: the dashboard
-//!   declares its own `files:read`. A second call returns the same path.
+//!   declares its own `files:read`. A second call returns the same path. It takes
+//!   [`SeedOptions`], which a spec that needs more seeded extends with fields of its own.
 
 use std::path::{Path, PathBuf};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::{Manager, Runtime};
 
 use super::registry::WindowRegistry;
@@ -89,6 +90,13 @@ pub struct Seeded {
     pub probe_html: PathBuf,
 }
 
+/// What a spec asks `e2e_seed` for beyond the probe org and team. None yet: a spec that needs
+/// more seeded adds an optional field here, so no caller's arguments change. An unknown field
+/// is refused rather than ignored.
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SeedOptions {}
+
 /// Creates the org at `root` and its team, unless `root` already exists, then writes the
 /// probe dashboard and the file it reads into the team's content. Uses the active profile,
 /// which a fresh home already has (the local guest).
@@ -134,7 +142,11 @@ pub(crate) async fn seed_at<R: Runtime>(
 }
 
 #[tauri::command]
-pub async fn e2e_seed(app: tauri::AppHandle) -> Result<Seeded, String> {
+pub async fn e2e_seed(
+    app: tauri::AppHandle,
+    options: Option<SeedOptions>,
+) -> Result<Seeded, String> {
+    let SeedOptions {} = options.unwrap_or_default();
     let home = crate::commands::paths::codesense_home_dir().ok_or("cannot resolve home")?;
     let root = home
         .parent()
@@ -243,6 +255,18 @@ mod tests {
         assert_eq!(teams.len(), 1);
         let second = seed_at(app.handle(), &home, &root).await.unwrap();
         assert_eq!(second, first);
+    }
+
+    #[test]
+    fn the_seed_takes_empty_or_absent_options_and_refuses_an_unknown_one() {
+        let parse = |json| serde_json::from_value::<Option<SeedOptions>>(json);
+        assert!(parse(serde_json::json!(null)).unwrap().is_none());
+        assert!(parse(serde_json::json!({})).unwrap().is_some());
+        let error = parse(serde_json::json!({"teams": 2})).unwrap_err();
+        assert!(
+            error.to_string().contains("unknown field `teams`"),
+            "{error}"
+        );
     }
 
     #[test]

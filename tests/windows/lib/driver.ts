@@ -7,8 +7,11 @@ import { browser } from "@wdio/globals";
 
 export const MAIN = "main";
 
+/** What a spec asks the seed for beyond the probe org and team; none yet (`SeedOptions`). */
+type SeedOptions = Record<string, never>;
+
 interface Door {
-  seed(): Promise<{ probeHtml: string }>;
+  seed(options?: SeedOptions): Promise<{ probeHtml: string }>;
   open(options: { id: string; probe?: string }): Promise<string>;
 }
 
@@ -25,13 +28,16 @@ export function freshId(name: string): string {
 }
 
 /** Waits for `main`'s door, then seeds once (a second seed returns the same path). */
-export async function seed(): Promise<{ probeHtml: string }> {
+export async function seed(options: SeedOptions = {}): Promise<{ probeHtml: string }> {
   await browser.switchToWindow(MAIN);
   await browser.waitUntil(
     () => browser.execute(() => Boolean((window as DriverWindow).__CODESENSE_WINDOWS_E2E__)),
     { timeout: 60_000, timeoutMsg: "main never registered the windows e2e door" },
   );
-  return browser.execute(() => (window as DriverWindow).__CODESENSE_WINDOWS_E2E__!.seed());
+  return browser.execute(
+    (o) => (window as DriverWindow).__CODESENSE_WINDOWS_E2E__!.seed(o),
+    options,
+  );
 }
 
 /** Opens `pane-<id>` from `main` and switches to it once its root has rendered. */

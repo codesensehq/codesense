@@ -25,7 +25,11 @@ describe("the two-window e2e door", () => {
     await expect(window.__CODESENSE_WINDOWS_E2E__!.seed()).resolves.toEqual({
       probeHtml: "/h/c/windows/content/probe.html",
     });
-    expect(invoke).toHaveBeenCalledWith("e2e_seed");
+    await window.__CODESENSE_WINDOWS_E2E__!.seed({});
+    expect(invoke.mock.calls).toEqual([
+      ["e2e_seed", { options: {} }],
+      ["e2e_seed", { options: {} }],
+    ]);
   });
 
   it("opens through e2e_open_window, with or without a probe", async () => {
