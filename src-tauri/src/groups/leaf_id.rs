@@ -147,7 +147,7 @@ fn prefixed_workspace_problem(leaf: &str) -> Option<Option<&'static str>> {
 /// A repo as the viewer names it: `<owner>/<repo>` or `<name>`, each part a local id.
 fn is_repo_slug(slug: &str) -> bool {
     let parts: Vec<&str> = slug.split('/').collect();
-    parts.len() <= 2 && parts.iter().all(|part| is_local_id(part))
+    parts.len() <= 2 && Iterator::all(&mut parts.iter(), |part| is_local_id(part))
 }
 
 /// A team or agent name: `[a-z0-9][a-z0-9._-]{0,63}`.

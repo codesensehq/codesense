@@ -108,13 +108,12 @@ pub fn parse_op(value: &Value) -> Result<KitOp, String> {
         "replace" => (&["from", "to"], &[]),
         other => return Err(format!("{other:?} is not a kit op")),
     };
-    if let Some(key) = object
-        .keys()
-        .find(|k| *k != "op" && !required.contains(&k.as_str()) && !optional.contains(&k.as_str()))
-    {
+    if let Some(key) = Iterator::find(&mut object.keys(), |k| {
+        *k != "op" && !required.contains(&&***k) && !optional.contains(&&***k)
+    }) {
         return Err(format!("a {kind} op has no {key:?}"));
     }
-    if let Some(key) = required.iter().find(|k| !object.contains_key(**k)) {
+    if let Some(key) = Iterator::find(&mut required.iter(), |k| !object.contains_key(**k)) {
         return Err(format!("a {kind} op needs {key:?}"));
     }
     let id = |key: &str| ref_at(object.get(key), key);
@@ -189,7 +188,7 @@ fn target_at(value: Option<&Value>) -> Result<Target, String> {
         .ok_or("\"target\" is an object")?;
     if object
         .keys()
-        .any(|k| !matches!(k.as_str(), "targetWorkspaceId" | "axis" | "side"))
+        .any(|k| !matches!(&**k, "targetWorkspaceId" | "axis" | "side"))
         || object.len() != 3
     {
         return Err("\"target\" holds targetWorkspaceId, axis and side".into());
@@ -346,7 +345,7 @@ fn even_split(n: usize) -> Vec<f64> {
 
 /// The kit's `normalizeSizes`: scaled to sum 100, an even split when they sum to 0.
 fn normalize_sizes(sizes: &[f64]) -> Vec<f64> {
-    if sizes.is_empty() {
+    if <[f64]>::is_empty(sizes) {
         return vec![];
     }
     let sum = sizes.iter().fold(0.0, |a, b| a + b);
@@ -357,18 +356,20 @@ fn normalize_sizes(sizes: &[f64]) -> Vec<f64> {
 }
 
 fn same_sizes(a: &[f64], b: &[f64]) -> bool {
-    a.len() == b.len() && a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-9)
+    a.len() == b.len() && Iterator::all(&mut a.iter().zip(b), |(x, y)| (x - y).abs() < 1e-9)
 }
 
 fn find_leaf_path(node: &SavedNode, id: &str) -> Option<Vec<usize>> {
     match node {
         SavedNode::Leaf { id: at, .. } => (at == id).then(Vec::new),
-        SavedNode::Split { children, .. } => children.iter().enumerate().find_map(|(i, c)| {
-            find_leaf_path(c, id).map(|mut sub| {
-                sub.insert(0, i);
-                sub
+        SavedNode::Split { children, .. } => {
+            Iterator::enumerate(children.iter()).find_map(|(i, c)| {
+                find_leaf_path(c, id).map(|mut sub| {
+                    sub.insert(0, i);
+                    sub
+                })
             })
-        }),
+        }
     }
 }
 
@@ -400,7 +401,7 @@ fn replace_at(node: SavedNode, path: &[usize], next: Option<SavedNode>) -> Optio
     let count = children.len();
     let mut kept = vec![];
     let mut kept_sizes = vec![];
-    for (i, child) in children.into_iter().enumerate() {
+    for (i, child) in Iterator::enumerate(children.into_iter()) {
         let size = sizes.get(i).copied().unwrap_or(100.0 / count as f64);
         let child = if i == head {
             replace_at(child, rest, next.clone())
@@ -478,7 +479,7 @@ fn append_leaf(root: Option<SavedNode>, id: &str) -> SavedNode {
 fn prune_leaf(root: SavedNode, id: &str) -> Option<SavedNode> {
     match find_leaf_path(&root, id) {
         None => Some(root),
-        Some(path) if path.is_empty() => None,
+        Some(path) if Vec::is_empty(&path) => None,
         Some(path) => replace_at(root, &path, None),
     }
 }
@@ -547,7 +548,9 @@ fn same_structure(a: &SavedNode, b: &SavedNode) -> bool {
                 ..
             },
         ) => {
-            ax == bx && ac.len() == bc.len() && ac.iter().zip(bc).all(|(x, y)| same_structure(x, y))
+            ax == bx
+                && ac.len() == bc.len()
+                && Iterator::all(&mut ac.iter().zip(bc), |(x, y)| same_structure(x, y))
         }
         _ => false,
     }
