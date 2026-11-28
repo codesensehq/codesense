@@ -272,7 +272,8 @@ mod tests {
     #[test]
     fn the_probe_fixture_declares_its_own_read_grant() {
         let html = std::str::from_utf8(PROBE_HTML).unwrap();
-        assert!(html.contains(r#"<meta name="codesense:capabilities" content="files:read">"#));
+        // Prettier writes the tag self-closed, so the check stops before its end.
+        assert!(html.contains(r#"<meta name="codesense:capabilities" content="files:read""#));
         assert!(html.contains(READ_FILE));
     }
 }
