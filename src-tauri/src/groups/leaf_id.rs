@@ -8,8 +8,12 @@
 //! - `doc:<team>/<team-relative path>`: portable, valid in any layer. The path is normalized:
 //!   forward slashes only, no empty, `.` or `..` segment, and no absolute or drive-letter path,
 //!   backslash, `~`, NUL, control character or scheme.
-//! - a workspace id or a terminal tab id (`[A-Za-z0-9_-]{1,128}`, no prefix): machine-local,
-//!   valid only in the private layer, which never pushes.
+//! - `generic:<absolute directory>`: the id of a generic workspace, machine-local and valid
+//!   only in the private layer. The directory is absolute (`/…` or a drive letter) and holds no
+//!   control character.
+//! - a workspace id or a terminal tab id (`[A-Za-z0-9._-]{1,128}`, no prefix, not only dots):
+//!   machine-local, valid only in the private layer, which never pushes. A story workspace's id
+//!   is the story's file stem, which holds dots.
 //!
 //! A team and a name are `[a-z0-9][a-z0-9._-]{0,63}`. Any other prefix or shape is refused.
 //! The cases live in one fixture, `tests/fixtures/leaf-keys.json`, which other checks of a
@@ -24,6 +28,8 @@ pub enum Layer {
 
 const AGENT_PREFIX: &str = "agent:";
 const DOC_PREFIX: &str = "doc:";
+const GENERIC_PREFIX: &str = "generic:";
+const GENERIC_PATH_MAX: usize = 4096;
 const LOCAL_ID_MAX: usize = 128;
 const SEGMENT_MAX: usize = 64;
 
@@ -43,17 +49,46 @@ pub fn leaf_ref_problem(leaf: &str, layer: Layer) -> Option<String> {
         };
         return team_problem(leaf, team).or_else(|| doc_path_problem(leaf, path));
     }
+    if let Some(dir) = leaf.strip_prefix(GENERIC_PREFIX) {
+        if let Some(why) = generic_dir_problem(dir) {
+            return Some(format!("{leaf:?}: {why}"));
+        }
+        return machine_local(leaf, layer);
+    }
     if is_local_id(leaf) {
-        return match layer {
-            Layer::Private => None,
-            Layer::Shared => Some(format!(
-                "{leaf:?}: a workspace or terminal tab id is machine-local and stays in the private layer"
-            )),
-        };
+        return machine_local(leaf, layer);
     }
     Some(format!(
-        "{leaf:?}: not a tile ref (agent:, doc:, a workspace or a terminal tab id)"
+        "{leaf:?}: not a tile ref (agent:, doc:, generic:, a workspace or a terminal tab id)"
     ))
+}
+
+/// A machine-local ref is valid in the private layer only.
+fn machine_local(leaf: &str, layer: Layer) -> Option<String> {
+    match layer {
+        Layer::Private => None,
+        Layer::Shared => Some(format!(
+            "{leaf:?}: a workspace or terminal tab id is machine-local and stays in the private layer"
+        )),
+    }
+}
+
+/// The directory of a `generic:` ref: absolute, no control character, bounded.
+fn generic_dir_problem(dir: &str) -> Option<&'static str> {
+    let bytes = dir.as_bytes();
+    let drive = bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && (bytes[2] == b'/' || bytes[2] == b'\\');
+    if !(dir.starts_with('/') || drive) {
+        return Some("a generic workspace ref holds an absolute directory");
+    }
+    if dir.len() > GENERIC_PATH_MAX {
+        return Some("the generic workspace directory is too long");
+    }
+    dir.chars()
+        .any(|c| c.is_control())
+        .then_some("the generic workspace directory holds a control character")
 }
 
 /// A team or agent name: `[a-z0-9][a-z0-9._-]{0,63}`.
@@ -98,13 +133,14 @@ fn doc_path_problem(leaf: &str, path: &str) -> Option<String> {
     None
 }
 
-/// A workspace id or terminal tab id: `[A-Za-z0-9_-]{1,128}`.
+/// A workspace id or terminal tab id: `[A-Za-z0-9._-]{1,128}`, not only dots.
 fn is_local_id(leaf: &str) -> bool {
     !str::is_empty(leaf)
         && leaf.len() <= LOCAL_ID_MAX
+        && leaf.chars().any(|c| c != '.')
         && !leaf
             .chars()
-            .any(|c| !(c.is_ascii_alphanumeric() || c == '_' || c == '-'))
+            .any(|c| !(c.is_ascii_alphanumeric() || "._-".contains(c)))
 }
 
 #[cfg(test)]
@@ -161,7 +197,12 @@ mod tests {
             assert_eq!(leaf_ref_problem(leaf, Layer::Private), None);
             assert_eq!(leaf_ref_problem(leaf, Layer::Shared), None);
         }
-        for leaf in ["ws-1a2b", "tab_9"] {
+        for leaf in [
+            "ws-1a2b",
+            "tab_9",
+            "SV-WF-63-cli-overlay.story",
+            "generic:/Users/me/code",
+        ] {
             assert_eq!(leaf_ref_problem(leaf, Layer::Private), None);
             assert!(leaf_ref_problem(leaf, Layer::Shared).is_some());
         }

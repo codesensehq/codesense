@@ -42,7 +42,9 @@ never show as changes either. Each file holds its tiles and the size of every
 split, and a restart opens them exactly as you left them.
 
 - A tile is saved by what it shows (an agent, a team doc, a workspace or a
-  terminal tab), never by a file path on this Mac. A tile whose doc or agent
+  terminal tab), never by a file path into your team's content. A folder you
+  opened as a plain workspace is saved by its folder, which stays on this Mac
+  and is never shared. A tile whose doc or agent
   isn't here yet, before a sync or in a sparse worktree, is kept, and opens
   once it arrives.
 - A saved arrangement that's damaged, or that a newer CodeSense wrote, is
