@@ -442,6 +442,35 @@ mod tests {
         assert!(!on_main_thread_within(refused, || {}, limit).await);
     }
 
+    /// The Network.framework proxy functions are looked up at run time, never linked,
+    /// so the app still launches on macOS 11-13, which lack them.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_web_view_proxy_functions_are_not_linked() {
+        let exe = std::env::current_exe().unwrap();
+        let out = std::process::Command::new("nm")
+            .arg("-u")
+            .arg(&exe)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "nm -u {}: {:?}", exe.display(), out);
+        let undefined = String::from_utf8_lossy(&out.stdout);
+        let symbols: Vec<&str> = undefined.lines().map(str::trim).collect();
+        assert!(
+            symbols.contains(&"_objc_msgSend"),
+            "nm lists the executable's imports"
+        );
+        let linked: Vec<&&str> = symbols
+            .iter()
+            .filter(|s| {
+                s.starts_with("_nw_proxy_config_")
+                    || **s == "_nw_endpoint_create_host"
+                    || **s == "_nw_release"
+            })
+            .collect();
+        assert!(linked.is_empty(), "hard-linked: {linked:?}");
+    }
+
     #[test]
     fn only_an_os_chosen_port_of_the_sole_instance_is_remembered() {
         assert_eq!(port_to_remember(0, 54129, true), Some(54129));
