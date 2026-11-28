@@ -7,7 +7,7 @@ import { useOrgStore } from "@/shared/stores/org-store";
 import type { DashboardRef, PaneEntry, PaneListing } from "@/tauri/commands";
 
 import { usePaneStore } from "../right-pane/panes/pane-store";
-import { DashboardTileBody } from "./dashboard-tile-body";
+import { DashboardTileBody, InboxTileBody } from "./dashboard-tile-body";
 
 const host = vi.hoisted(() => ({ props: null as any }));
 vi.mock("./slot-dashboard-host", () => ({
@@ -104,5 +104,15 @@ describe("DashboardTileBody", () => {
       "This dashboard isn't listed for alpha.",
     );
     expect(host.props).toBeNull();
+  });
+});
+
+describe("InboxTileBody", () => {
+  it("frames the inbox dashboard the team on screen resolves, under its tile's panel id", async () => {
+    render(<InboxTileBody tileKey="inbox:acme" context={context} />);
+    await waitFor(() => expect(host.props).not.toBeNull());
+    expect(host.props.teamKey).toBe("acme:beta");
+    expect(host.props.entry.dashboardRef).toEqual(betaInbox);
+    expect(host.props.panelId).toBe("tile:inbox:acme");
   });
 });

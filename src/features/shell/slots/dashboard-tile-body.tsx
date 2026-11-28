@@ -18,10 +18,19 @@ import {
 import { buildTeamKey } from "@/shared/lib/team-key";
 import { useOrgStore } from "@/shared/stores/org-store";
 import type { TileBodyContext } from "@/shared/tiling/tile-host";
-import { listPanes, type FrameTeam, type PaneListing } from "@/tauri/commands";
+import {
+  listPanes,
+  type DashboardRef,
+  type FrameTeam,
+  type PaneEntry,
+  type PaneListing,
+} from "@/tauri/commands";
 
 import { paneListingCache, usePaneStore } from "../right-pane/panes/pane-store";
+import { inboxOfListing } from "./reveal-slot";
 import { SlotDashboardHost } from "./slot-dashboard-host";
+
+const INBOX_KEY = /^inbox:(.+)$/;
 
 /** The panel id a dashboard tile's frame registers under. */
 const dashboardTilePanelId = (tileKey: string) => `tile:${tileKey}`;
@@ -49,13 +58,19 @@ export function DashboardTileBody({
   tileKey,
   context,
   storyTeam,
+  dashboard,
+  pick = resolveDashboardTileEntry,
 }: {
   tileKey: string;
   context: TileBodyContext;
   /** The team of the story workspace the tile sits in. */
   storyTeam?: FrameTeam | null;
+  /** The dashboard, for a tile whose key does not name one. Default the key's. */
+  dashboard?: DashboardRef;
+  /** The listed pane that shows it. Default the ref's own, or what replaces a built-in. */
+  pick?: (listing: PaneListing, ref: DashboardRef) => PaneEntry | undefined;
 }) {
-  const ref = dashboardRefOfKey(tileKey);
+  const ref = dashboard ?? dashboardRefOfKey(tileKey);
   const activeOrg = useOrgStore((s) => s.activeOrgSlug);
   const activeTeam = useOrgStore((s) => s.activeTeamName);
   const pageTeam = ref ? dashboardPageTeam(ref, { storyTeam }) : null;
@@ -63,7 +78,7 @@ export function DashboardTileBody({
   const team = pageTeam?.team ?? activeTeam;
   const teamKey = org && team ? buildTeamKey(org, team) : null;
   const listing = useTeamListing(teamKey, org, team);
-  const entry = ref && listing ? resolveDashboardTileEntry(listing, ref) : undefined;
+  const entry = ref && listing ? pick(listing, ref) : undefined;
 
   const panelId = dashboardTilePanelId(tileKey);
   const intent = usePaneStore((s) => s.pendingIntents[panelId]);
@@ -97,6 +112,21 @@ export function DashboardTileBody({
       intent={intent}
       onIntentDelivered={onIntentDelivered}
       headerless
+    />
+  );
+}
+
+/** The org's Inbox as a tile's body: the inbox dashboard the team on screen resolves, as the
+ *  right pane's Inbox does, framed as a dashboard tile. */
+export function InboxTileBody({ tileKey, context }: { tileKey: string; context: TileBodyContext }) {
+  const org = INBOX_KEY.exec(tileKey)?.[1];
+  if (!org) return null;
+  return (
+    <DashboardTileBody
+      tileKey={tileKey}
+      context={context}
+      dashboard={{ scope: "built-in", org, id: "inbox" }}
+      pick={(listing) => inboxOfListing(org, listing.panes)}
     />
   );
 }

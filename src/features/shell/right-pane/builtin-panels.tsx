@@ -110,20 +110,19 @@ function ScratchPanelBody() {
 }
 
 /** Architecture: normal Notes and its failure fallback share the host UI topic. */
-function ScratchSlotBody() {
+/** Notes under `panelId`: the right pane's own, or a tile's. Its reveal intents are that panel's. */
+export function ScratchSlotBody({ panelId = SCRATCH_PANEL_ID }: { panelId?: string }) {
   const slot = useNativeSlot();
-  const intent = usePaneStore((s) => s.pendingIntents[SCRATCH_PANEL_ID]);
+  const intent = usePaneStore((s) => s.pendingIntents[panelId]);
   return slot ? (
     <ScratchPanelBody />
   ) : (
     <NativeSlotProvider
       slotId="right-pane"
-      panelId={SCRATCH_PANEL_ID}
+      panelId={panelId}
       viewKey="all"
       intent={intent}
-      onIntentDelivered={() =>
-        intent && usePaneStore.getState().clearIntent(SCRATCH_PANEL_ID, intent)
-      }
+      onIntentDelivered={() => intent && usePaneStore.getState().clearIntent(panelId, intent)}
     >
       <ScratchPanelBody />
     </NativeSlotProvider>
