@@ -171,6 +171,7 @@ fn terminate_survivors(
     original: &[u32],
     started: Instant,
     ack: u64,
+    still_allowed: &dyn Fn() -> bool,
     ops: &mut RendererOps<'_>,
 ) -> Result<usize, String> {
     let current = (ops.snapshot)();
@@ -197,6 +198,11 @@ fn terminate_survivors(
                 log::warn!(target: "webview-watchdog", "refusing renderer termination pid={pid}: current snapshot/ownership proof missing")
             }
             Action::Terminate => {
+                // A satellite registered since the last signal may own a reused pid: stop.
+                if !still_allowed() {
+                    log::warn!(target: "webview-watchdog", "renderer termination stopped before pid={pid}: a second window is registered");
+                    return Ok(killed);
+                }
                 if let Err(error) = (ops.signal)(pid) {
                     #[cfg(unix)]
                     if error.raw_os_error() == Some(libc::ESRCH) {
@@ -214,7 +220,8 @@ fn terminate_survivors(
 }
 
 /// The kill step of `label`'s recovery: nothing unless [`may_kill`] still holds (a satellite
-/// may have opened since the reload), else [`terminate_survivors`] on `original`.
+/// may have opened since the reload), else [`terminate_survivors`] on `original`, which
+/// rechecks [`kill_allowed`] before each signal.
 fn kill_step(
     registry: &WindowRegistry,
     label: &str,
@@ -227,7 +234,14 @@ fn kill_step(
     if !may_kill(registry, label, ReloadCause::ProcessDeath) {
         return Ok(0);
     }
-    terminate_survivors(liveness, original, started, ack, ops)
+    terminate_survivors(
+        liveness,
+        original,
+        started,
+        ack,
+        &|| kill_allowed(registry),
+        ops,
+    )
 }
 
 fn last_ack_of(app: &tauri::AppHandle, label: &str) -> u64 {
@@ -460,6 +474,50 @@ mod scope {
     #[test]
     fn with_main_alone_a_proven_renderer_is_signalled_once() {
         assert_eq!(signals(&reg(false), "main"), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_satellite_registered_after_the_first_signal_stops_the_rest() {
+        let reg = reg(false);
+        let host = Recorder::default();
+        let mut children: Vec<std::process::Child> = Iterator::collect((0..3).map(|_| {
+            std::process::Command::new("sleep")
+                .arg("5")
+                .spawn()
+                .unwrap()
+        }));
+        let pids: Vec<u32> = Iterator::collect(children.iter().map(std::process::Child::id));
+        let snapshot = || pids.clone();
+        let responsible = |_: u32| Some(std::process::id());
+        let mut sent = 0;
+        let mut signal = |_: u32| -> std::io::Result<()> {
+            sent += 1;
+            if sent == 1 {
+                reg.add_satellite(&host, "sat-1").unwrap();
+            }
+            Ok(())
+        };
+        let liveness = <RendererLiveness as Default>::default();
+        let result = kill_step(
+            &reg,
+            "main",
+            &liveness,
+            &pids,
+            Instant::now(),
+            0,
+            &mut RendererOps {
+                snapshot: &snapshot,
+                responsible: &responsible,
+                signal: &mut signal,
+            },
+        );
+        for child in &mut children {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        assert_eq!(result, Ok(1));
+        assert_eq!(sent, 1);
     }
 
     #[test]
