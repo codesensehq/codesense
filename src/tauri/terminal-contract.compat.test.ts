@@ -3,7 +3,7 @@
  * OC-4 AC6 — the terminal capability compatibility contract.
  *
  * The general IPC contract test (`commands.contract.test.ts`) proves TS⇄Rust
- * parity and pins the *total* command count. This companion pins the *terminal*
+ * parity across every command. This companion pins the *terminal*
  * surface specifically: the command names, the event-channel wire, and the
  * seq-boundary / legacy-rollback DTO fields that OC-9/OC-10 must preserve while
  * they move code behind the OC-4 contract. A rename or removal of any of these is

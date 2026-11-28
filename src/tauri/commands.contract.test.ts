@@ -53,6 +53,11 @@ const handlerPattern =
 // pass through its `commands::foo` substring. No `g` flag: `.test()` with `g` is stateful.
 const handlerEntryPattern = new RegExp(`^(?:${handlerPattern.source})$`);
 
+// A path with `/` separators, as the checks compare them on every platform.
+function toPosix(path: string): string {
+  return path.split("\\").join("/");
+}
+
 function readRepoFile(path: string): string {
   return readFileSync(resolve(REPO_ROOT, path), "utf-8");
 }
@@ -99,7 +104,7 @@ function unmatchedHandlerEntries(entries: string[]): string[] {
 
 /** The source files allowed to call `invoke("…")` directly. */
 const INVOKE_FILES = new Set([
-  ...EXTRACTOR_FILES.map((file) => relative(REPO_ROOT, resolve(__dirname, file))),
+  ...EXTRACTOR_FILES.map((file) => toPosix(relative(REPO_ROOT, resolve(__dirname, file)))),
   "src/tauri/draft-commands.ts",
 ]);
 
@@ -196,32 +201,84 @@ function isRustTestFile(path: string): boolean {
   return /(?:^|\/)tests?(?:\/|\.rs$)|_tests?\.rs$/.test(path);
 }
 
+// A `#[tauri::command]` attribute that starts a line, possibly after other attributes on
+// that line, with or without arguments.
+const commandAttribute = /^[ \t]*(?:#\[[^\]\n]*\][ \t]*)*#\[tauri::command\b/gm;
+// What may sit between the attribute and the fn: whitespace and comments, then
+// qualifiers. Sticky, so each one matches only where the scan stands.
+const gapToken = /\s+|\/\/[^\n]*|\/\*[\s\S]*?\*\//y;
+const fnHead =
+  /(?:pub(?:\s*\([^)]*\))?\s+)?(?:const\s+)?(?:async\s+)?(?:unsafe\s+)?(?:extern\s+"[^"]*"\s+)?fn\s+(\w+)/y;
+
+// The name of the fn an attribute ending at `from` belongs to: further attributes (one
+// line or many), comments and qualifiers are skipped. Null when no fn follows.
+function fnAfter(text: string, from: number): string | null {
+  let i = from;
+  for (;;) {
+    gapToken.lastIndex = i;
+    if (gapToken.exec(text)) {
+      i = gapToken.lastIndex;
+    } else if (text.startsWith("#[", i)) {
+      const close = closingBracket(text, i + 1);
+      if (close === -1) return null;
+      i = close + 1;
+    } else {
+      fnHead.lastIndex = i;
+      return fnHead.exec(text)?.[1] ?? null;
+    }
+  }
+}
+
+/** The `#[tauri::command]` fns in non-test Rust files, test modules cut out. */
+function commandFns(rustFiles: { path: string; text: string }[]): { path: string; name: string }[] {
+  const fns: { path: string; name: string }[] = [];
+  for (const { path, text } of rustFiles) {
+    if (isRustTestFile(path)) continue;
+    const source = withoutTestModules(text.replace(/\r\n?/g, "\n"));
+    for (const match of source.matchAll(commandAttribute)) {
+      const close = closingBracket(source, match.index + match[0].lastIndexOf("#[") + 1);
+      const name = close === -1 ? null : fnAfter(source, close + 1);
+      if (name) fns.push({ path, name });
+    }
+  }
+  return fns;
+}
+
 /**
- * The `#[tauri::command]` fns in non-test Rust files whose name no `generate_handler!`
- * entry ends in, as `path::fn`. Matching is by the fn name, the last segment of an entry.
+ * The command fns whose name no `generate_handler!` entry ends in, as `path::fn`.
+ * Matching is by the fn name, the last segment of an entry.
  */
 function unregisteredCommands(
-  rustFiles: { path: string; text: string }[],
+  fns: { path: string; name: string }[],
   handlerEntries: string[],
 ): string[] {
   const registered = new Set(handlerEntries.map((entry) => entry.split("::").pop()));
-  // The attribute on its own line, then any further attributes or comments, then the fn.
-  const commandFn =
-    /^[ \t]*#\[tauri::command\][ \t]*\n(?:[ \t]*(?:#\[|\/\/)[^\n]*\n)*[ \t]*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+(\w+)/gm;
-  const missing: string[] = [];
-  for (const { path, text } of rustFiles) {
-    if (isRustTestFile(path)) continue;
-    for (const match of withoutTestModules(text).matchAll(commandFn)) {
-      if (!registered.has(match[1])) missing.push(`${path}::${match[1]}`);
-    }
-  }
-  return missing.sort();
+  return fns
+    .filter(({ name }) => !registered.has(name))
+    .map(({ path, name }) => `${path}::${name}`)
+    .sort();
+}
+
+/** The entries whose command no scanned fn carries: a scan that found nothing fails here. */
+function unscannedHandlers(handlerEntries: string[], fns: { name: string }[]): string[] {
+  const scanned = new Set(fns.map(({ name }) => name));
+  return handlerEntries.filter((entry) => !scanned.has(entry.split("::").pop() ?? "")).sort();
+}
+
+/** The command fn names declared more than once, which matching by name can't tell apart. */
+function duplicateCommandFns(fns: { path: string; name: string }[]): string[] {
+  const paths = new Map<string, string[]>();
+  for (const { path, name } of fns) paths.set(name, [...(paths.get(name) ?? []), path]);
+  return [...paths]
+    .filter(([, where]) => where.length > 1)
+    .map(([name, where]) => `${name}: ${where.join(", ")}`)
+    .sort();
 }
 
 // Every file under `dir` (repo-relative) whose name passes `keep`, with its text.
 function walkRepo(dir: string, keep: (path: string) => boolean): { path: string; text: string }[] {
   return readdirSync(resolve(REPO_ROOT, dir), { recursive: true, encoding: "utf-8" })
-    .map((entry) => `${dir}/${entry.split("\\").join("/")}`)
+    .map((entry) => `${dir}/${toPosix(entry)}`)
     .filter(keep)
     .map((path) => ({ path, text: readRepoFile(path) }));
 }
@@ -234,10 +291,8 @@ function extractTypeScriptCommands(): string[] {
   return [...new Set([...source.matchAll(invokePattern)].map((match) => match[1]))].sort();
 }
 
-// Parse Rust handler registrations from lib.rs: the command name ending each entry a
-// listed prefix owns.
-function extractRustHandlers(): string[] {
-  const entries = parseHandlerEntries(readRepoFile("src-tauri/src/lib.rs"));
+// The command name ending each `generate_handler!` entry a listed prefix owns.
+function extractRustHandlers(entries: string[]): string[] {
   return [
     ...new Set(
       entries.flatMap((entry) => [...entry.matchAll(handlerPattern)].map((match) => match[1])),
@@ -321,7 +376,8 @@ const TS_ONLY_COMMANDS = new Set<string>([
 
 describe("Tauri IPC Contract", () => {
   const tsCommands = extractTypeScriptCommands();
-  const rustHandlers = extractRustHandlers();
+  const handlerEntries = parseHandlerEntries(readRepoFile("src-tauri/src/lib.rs"));
+  const rustHandlers = extractRustHandlers(handlerEntries);
   const effectiveRustHandlers = rustHandlers.filter((cmd) => !RUST_ONLY_COMMANDS.has(cmd));
   // Forward-declared TS wrappers whose Rust handler ships in a paired later story are
   // excluded from the symmetry check (the stale-exception check below keeps the list honest).
@@ -357,9 +413,8 @@ describe("Tauri IPC Contract", () => {
 
   // Check (a): every registration is one the parity checks can see.
   it("every generate_handler! entry is under a listed prefix", () => {
-    const entries = parseHandlerEntries(readRepoFile("src-tauri/src/lib.rs"));
-    expect(entries.length).toBeGreaterThanOrEqual(59);
-    expect(unmatchedHandlerEntries(entries)).toEqual([]);
+    expect(handlerEntries.length).toBeGreaterThanOrEqual(59);
+    expect(unmatchedHandlerEntries(handlerEntries)).toEqual([]);
   });
 
   it("reports a handler entry under an unlisted prefix, cfg-gated entries included", () => {
@@ -420,14 +475,23 @@ describe("Tauri IPC Contract", () => {
   });
 
   // Check (d): a command fn dropped from lib.rs and commands.ts together leaves both
-  // parity checks green, so the fn itself is checked against the registrations.
+  // parity checks green, so the fn itself is checked against the registrations. The
+  // reverse holds too, so a scan that finds nothing can't pass.
+  const commandFnsInTree = commandFns(walkRepo("src-tauri/src", (path) => path.endsWith(".rs")));
+
   it("every #[tauri::command] fn outside tests is registered in generate_handler!", () => {
-    const entries = parseHandlerEntries(readRepoFile("src-tauri/src/lib.rs"));
-    const rustFiles = walkRepo("src-tauri/src", (path) => path.endsWith(".rs"));
-    expect(unregisteredCommands(rustFiles, entries)).toEqual([]);
+    expect(unregisteredCommands(commandFnsInTree, handlerEntries)).toEqual([]);
   });
 
-  it("reports an annotated fn with no entry, skipping test modules and test files", () => {
+  it("every generate_handler! entry names a scanned #[tauri::command] fn", () => {
+    expect(unscannedHandlers(handlerEntries, commandFnsInTree)).toEqual([]);
+  });
+
+  it("no two #[tauri::command] fns outside tests share a name", () => {
+    expect(duplicateCommandFns(commandFnsInTree)).toEqual([]);
+  });
+
+  it("finds a command fn in every attribute form, skipping comments, test modules and test files", () => {
     const text = [
       "#[tauri::command]",
       "pub async fn registered() {}",
@@ -436,7 +500,26 @@ describe("Tauri IPC Contract", () => {
       "#[allow(clippy::too_many_arguments)] // a trailing note",
       "pub(crate) fn dropped() {}",
       "",
-      "// `#[tauri::command]` in a comment is not a command: fn not_a_command",
+      '#[tauri::command(rename_all = "snake_case")]',
+      "pub async fn with_args() {}",
+      "",
+      "#[tauri::command] pub fn same_line() {}",
+      "",
+      "#[allow(dead_code)] #[tauri::command]",
+      "fn after_another_attribute() {}",
+      "",
+      "#[tauri::command]",
+      "#[cfg_attr(",
+      '    feature = "x",',
+      "    allow(dead_code)",
+      ")]",
+      "// a note",
+      "/* a block */",
+      "pub(in crate::commands) fn after_a_multi_line_attribute() {}",
+      "",
+      "// #[tauri::command] in a comment is not a command",
+      "/// #[tauri::command]",
+      "fn not_a_command() {}",
       "",
       "#[cfg(test)]",
       "mod tests {",
@@ -450,14 +533,43 @@ describe("Tauri IPC Contract", () => {
       "#[tauri::command]",
       "fn after_tests() {}",
     ].join("\n");
-    expect(
-      unregisteredCommands(
-        [
-          { path: "src-tauri/src/commands/x.rs", text },
-          { path: "src-tauri/src/commands/x/tests.rs", text: "#[tauri::command]\nfn t() {}" },
-        ],
-        ["commands::x::registered"],
-      ),
-    ).toEqual(["src-tauri/src/commands/x.rs::after_tests", "src-tauri/src/commands/x.rs::dropped"]);
+    const fns = commandFns([
+      { path: "src-tauri/src/commands/x.rs", text },
+      { path: "src-tauri/src/commands/crlf.rs", text: "#[tauri::command]\r\npub fn crlf() {}\r\n" },
+      { path: "src-tauri/src/commands/x/tests.rs", text: "#[tauri::command]\nfn t() {}" },
+    ]);
+    expect(fns.map(({ name }) => name)).toEqual([
+      "registered",
+      "dropped",
+      "with_args",
+      "same_line",
+      "after_another_attribute",
+      "after_a_multi_line_attribute",
+      "after_tests",
+      "crlf",
+    ]);
+    expect(unregisteredCommands(fns, ["commands::x::registered", "commands::crlf::crlf"])).toEqual([
+      "src-tauri/src/commands/x.rs::after_a_multi_line_attribute",
+      "src-tauri/src/commands/x.rs::after_another_attribute",
+      "src-tauri/src/commands/x.rs::after_tests",
+      "src-tauri/src/commands/x.rs::dropped",
+      "src-tauri/src/commands/x.rs::same_line",
+      "src-tauri/src/commands/x.rs::with_args",
+    ]);
+  });
+
+  it("reports an entry no scanned fn carries and a command fn name declared twice", () => {
+    const fns = [
+      { path: "src-tauri/src/commands/a.rs", name: "shared" },
+      { path: "src-tauri/src/commands/b.rs", name: "shared" },
+      { path: "src-tauri/src/commands/a.rs", name: "kept" },
+    ];
+    expect(unscannedHandlers(["commands::a::kept", "commands::c::ghost"], fns)).toEqual([
+      "commands::c::ghost",
+    ]);
+    expect(unscannedHandlers(["commands::a::kept"], [])).toEqual(["commands::a::kept"]);
+    expect(duplicateCommandFns(fns)).toEqual([
+      "shared: src-tauri/src/commands/a.rs, src-tauri/src/commands/b.rs",
+    ]);
   });
 });
