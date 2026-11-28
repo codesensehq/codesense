@@ -360,30 +360,40 @@ fn id_problem(id: &str) -> Option<String> {
     (!valid).then(|| format!("{id:?}: a group id is [a-z0-9-]{{1,64}}"))
 }
 
+/// Why a saved leaf is refused: its `id` and `workspaceId` differ, or the ref isn't valid in the
+/// private layer. The one leaf rule, shared by the write check and the load repair.
+fn leaf_problem(id: &str, workspace_id: &str) -> Option<String> {
+    if id != workspace_id {
+        return Some(format!(
+            "a leaf's id {id:?} and workspaceId {workspace_id:?} differ"
+        ));
+    }
+    leaf_ref_problem(id, Layer::Private)
+}
+
+/// Why a split's shape is refused: fewer than two children, not one size per child, or a size
+/// that is not a finite number of 0 or more. The one split rule, shared as `leaf_problem` is.
+fn split_problem(children: usize, sizes: &[f64]) -> Option<String> {
+    if children < 2 {
+        return Some("a split has two or more children".into());
+    }
+    if sizes.len() != children {
+        return Some("a split has one size per child".into());
+    }
+    sizes
+        .iter()
+        .any(|s| !s.is_finite() || *s < 0.0)
+        .then(|| "a size is a finite number, 0 or more".into())
+}
+
 /// Why the store refuses `node`, or `None`.
 fn tree_problem(node: &SavedNode) -> Option<String> {
     match node {
-        SavedNode::Leaf { id, workspace_id } => {
-            if id != workspace_id {
-                return Some(format!(
-                    "a leaf's id {id:?} and workspaceId {workspace_id:?} differ"
-                ));
-            }
-            leaf_ref_problem(id, Layer::Private)
-        }
+        SavedNode::Leaf { id, workspace_id } => leaf_problem(id, workspace_id),
         SavedNode::Split {
             children, sizes, ..
         } => {
-            if children.len() < 2 {
-                return Some("a split has two or more children".into());
-            }
-            if sizes.len() != children.len() {
-                return Some("a split has one size per child".into());
-            }
-            if sizes.iter().any(|s| !s.is_finite() || *s < 0.0) {
-                return Some("a size is a finite number, 0 or more".into());
-            }
-            children.iter().find_map(tree_problem)
+            split_problem(children.len(), sizes).or_else(|| children.iter().find_map(tree_problem))
         }
     }
 }
@@ -453,9 +463,7 @@ fn repair(node: &serde_json::Value, dropped: &mut Vec<String>) -> Option<Option<
                 .get("workspaceId")
                 .and_then(serde_json::Value::as_str);
             match (id, workspace_id) {
-                (Some(id), Some(workspace_id))
-                    if id == workspace_id && leaf_ref_problem(id, Layer::Private).is_none() =>
-                {
+                (Some(id), Some(workspace_id)) if leaf_problem(id, workspace_id).is_none() => {
                     Some(Some(SavedNode::Leaf {
                         id: id.to_string(),
                         workspace_id: workspace_id.to_string(),
@@ -477,12 +485,15 @@ fn repair(node: &serde_json::Value, dropped: &mut Vec<String>) -> Option<Option<
             let axis = Result::ok(serde_json::from_value(object.get("axis")?.clone()))?;
             let children = object.get("children")?.as_array()?;
             let sizes = object.get("sizes")?.as_array()?;
-            if children.len() < 2 || sizes.len() != children.len() {
+            let numbers: Vec<f64> = sizes
+                .iter()
+                .map(serde_json::Value::as_f64)
+                .collect::<Option<_>>()?;
+            if split_problem(children.len(), &numbers).is_some() {
                 return None;
             }
             let mut kept = vec![];
-            for (child, size) in children.iter().zip(sizes) {
-                let size = size.as_f64().filter(|s| s.is_finite() && *s >= 0.0)?;
+            for (child, size) in children.iter().zip(numbers) {
                 if let Some(child) = repair(child, dropped)? {
                     kept.push((child, size));
                 }
