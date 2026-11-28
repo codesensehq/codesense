@@ -1,0 +1,2560 @@
+{
+  "about": "The kit ops' table: each op's shape, valid or not, and what each op does to a tree (or that it fails there). Read by the Vitest of apply-kit-op.ts and the cargo test of groups/ops.rs, so a window and the group store agree.",
+  "shapes": [
+    {
+      "name": "place",
+      "op": {
+        "op": "place",
+        "leafId": "ws-a"
+      },
+      "valid": true
+    },
+    {
+      "name": "splitAt",
+      "op": {
+        "op": "splitAt",
+        "targetLeafId": "ws-a",
+        "axis": "column",
+        "side": "before",
+        "leafId": "ws-b"
+      },
+      "valid": true
+    },
+    {
+      "name": "move",
+      "op": {
+        "op": "move",
+        "leafId": "ws-a",
+        "target": {
+          "targetWorkspaceId": "ws-b",
+          "axis": "row",
+          "side": "after"
+        }
+      },
+      "valid": true
+    },
+    {
+      "name": "close",
+      "op": {
+        "op": "close",
+        "leafId": "ws-a"
+      },
+      "valid": true
+    },
+    {
+      "name": "resize the root",
+      "op": {
+        "op": "resize",
+        "path": [],
+        "sizes": [
+          30,
+          70
+        ]
+      },
+      "valid": true
+    },
+    {
+      "name": "resize a nested split",
+      "op": {
+        "op": "resize",
+        "path": [
+          0,
+          2
+        ],
+        "sizes": [
+          0,
+          1,
+          2
+        ]
+      },
+      "valid": true
+    },
+    {
+      "name": "swap",
+      "op": {
+        "op": "swap",
+        "a": "ws-a",
+        "b": "ws-b"
+      },
+      "valid": true
+    },
+    {
+      "name": "evenOut every split",
+      "op": {
+        "op": "evenOut"
+      },
+      "valid": true
+    },
+    {
+      "name": "evenOut one split",
+      "op": {
+        "op": "evenOut",
+        "path": [
+          1
+        ]
+      },
+      "valid": true
+    },
+    {
+      "name": "replace",
+      "op": {
+        "op": "replace",
+        "from": "ws-a",
+        "to": "ws-b"
+      },
+      "valid": true
+    },
+    {
+      "name": "pin",
+      "op": {
+        "op": "pin",
+        "leafId": "agent:core/dev"
+      },
+      "valid": true
+    },
+    {
+      "name": "unpin",
+      "op": {
+        "op": "unpin",
+        "leafId": "agent:core/dev"
+      },
+      "valid": true
+    },
+    {
+      "name": "the largest index",
+      "op": {
+        "op": "resize",
+        "path": [
+          4096
+        ],
+        "sizes": [
+          1,
+          1
+        ]
+      },
+      "valid": true
+    },
+    {
+      "name": "a path of 64 indexes",
+      "op": {
+        "op": "evenOut",
+        "path": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "valid": true
+    },
+    {
+      "name": "not an object",
+      "op": "place",
+      "valid": false
+    },
+    {
+      "name": "a list",
+      "op": [
+        {
+          "op": "place",
+          "leafId": "ws-a"
+        }
+      ],
+      "valid": false
+    },
+    {
+      "name": "null",
+      "op": null,
+      "valid": false
+    },
+    {
+      "name": "no kind",
+      "op": {
+        "leafId": "ws-a"
+      },
+      "valid": false
+    },
+    {
+      "name": "a kind that is not a string",
+      "op": {
+        "op": 1,
+        "leafId": "ws-a"
+      },
+      "valid": false
+    },
+    {
+      "name": "an unknown kind",
+      "op": {
+        "op": "open",
+        "leafId": "ws-a"
+      },
+      "valid": false
+    },
+    {
+      "name": "an extra key",
+      "op": {
+        "op": "place",
+        "leafId": "ws-a",
+        "at": 0
+      },
+      "valid": false
+    },
+    {
+      "name": "a missing key",
+      "op": {
+        "op": "splitAt",
+        "targetLeafId": "ws-a",
+        "axis": "row",
+        "leafId": "ws-b"
+      },
+      "valid": false
+    },
+    {
+      "name": "an empty ref",
+      "op": {
+        "op": "close",
+        "leafId": ""
+      },
+      "valid": false
+    },
+    {
+      "name": "a ref that is not a string",
+      "op": {
+        "op": "close",
+        "leafId": 7
+      },
+      "valid": false
+    },
+    {
+      "name": "an empty swap ref",
+      "op": {
+        "op": "swap",
+        "a": "ws-a",
+        "b": ""
+      },
+      "valid": false
+    },
+    {
+      "name": "a bad axis",
+      "op": {
+        "op": "splitAt",
+        "targetLeafId": "ws-a",
+        "axis": "diagonal",
+        "side": "before",
+        "leafId": "ws-b"
+      },
+      "valid": false
+    },
+    {
+      "name": "a bad side",
+      "op": {
+        "op": "splitAt",
+        "targetLeafId": "ws-a",
+        "axis": "row",
+        "side": "left",
+        "leafId": "ws-b"
+      },
+      "valid": false
+    },
+    {
+      "name": "a target that is not an object",
+      "op": {
+        "op": "move",
+        "leafId": "ws-a",
+        "target": "ws-b"
+      },
+      "valid": false
+    },
+    {
+      "name": "a target missing its side",
+      "op": {
+        "op": "move",
+        "leafId": "ws-a",
+        "target": {
+          "targetWorkspaceId": "ws-b",
+          "axis": "row"
+        }
+      },
+      "valid": false
+    },
+    {
+      "name": "a target with an extra key",
+      "op": {
+        "op": "move",
+        "leafId": "ws-a",
+        "target": {
+          "targetWorkspaceId": "ws-b",
+          "axis": "row",
+          "side": "after",
+          "path": []
+        }
+      },
+      "valid": false
+    },
+    {
+      "name": "a target with an empty ref",
+      "op": {
+        "op": "move",
+        "leafId": "ws-a",
+        "target": {
+          "targetWorkspaceId": "",
+          "axis": "row",
+          "side": "after"
+        }
+      },
+      "valid": false
+    },
+    {
+      "name": "a target with a bad axis",
+      "op": {
+        "op": "move",
+        "leafId": "ws-a",
+        "target": {
+          "targetWorkspaceId": "ws-b",
+          "axis": "up",
+          "side": "after"
+        }
+      },
+      "valid": false
+    },
+    {
+      "name": "a negative index",
+      "op": {
+        "op": "resize",
+        "path": [
+          -1
+        ],
+        "sizes": [
+          1,
+          1
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "a fractional index",
+      "op": {
+        "op": "resize",
+        "path": [
+          0.5
+        ],
+        "sizes": [
+          1,
+          1
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "an index past the bound",
+      "op": {
+        "op": "resize",
+        "path": [
+          4097
+        ],
+        "sizes": [
+          1,
+          1
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "a path of 65 indexes",
+      "op": {
+        "op": "evenOut",
+        "path": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "a path that is not a list",
+      "op": {
+        "op": "evenOut",
+        "path": 0
+      },
+      "valid": false
+    },
+    {
+      "name": "a null path",
+      "op": {
+        "op": "evenOut",
+        "path": null
+      },
+      "valid": false
+    },
+    {
+      "name": "one size",
+      "op": {
+        "op": "resize",
+        "path": [],
+        "sizes": [
+          100
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "a negative size",
+      "op": {
+        "op": "resize",
+        "path": [],
+        "sizes": [
+          -1,
+          101
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "a size that is not a number",
+      "op": {
+        "op": "resize",
+        "path": [],
+        "sizes": [
+          "50",
+          50
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "a resize with no path",
+      "op": {
+        "op": "resize",
+        "sizes": [
+          50,
+          50
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "a pin with a target",
+      "op": {
+        "op": "pin",
+        "leafId": "ws-a",
+        "target": {
+          "targetWorkspaceId": "ws-b",
+          "axis": "row",
+          "side": "after"
+        }
+      },
+      "valid": false
+    }
+  ],
+  "apply": [
+    {
+      "name": "place on an empty tree",
+      "before": null,
+      "op": {
+        "op": "place",
+        "leafId": "ws-a"
+      },
+      "after": {
+        "kind": "leaf",
+        "id": "ws-a",
+        "workspaceId": "ws-a"
+      }
+    },
+    {
+      "name": "place beside one leaf",
+      "before": {
+        "kind": "leaf",
+        "id": "ws-a",
+        "workspaceId": "ws-a"
+      },
+      "op": {
+        "op": "place",
+        "leafId": "ws-b"
+      },
+      "after": {
+        "kind": "split",
+        "axis": "row",
+        "children": [
+          {
+            "kind": "leaf",
+            "id": "ws-a",
+            "workspaceId": "ws-a"
+          },
+          {
+            "kind": "leaf",
+            "id": "ws-b",
+            "workspaceId": "ws-b"
+          }
+        ],
+        "sizes": [
+          50,
+          50
+        ]
+      }
+    },
+    {
+      "name": "place a leaf already there",
+      "before": {
+        "kind": "split",
+        "axis": "row",
+        "children": [
+          {
+            "kind": "leaf",
+            "id": "ws-a",
+            "workspaceId": "ws-a"
+          },
+          {
+            "kind": "leaf",
+            "id": "ws-b",
+            "workspaceId": "ws-b"
+          }
+        ],
+        "sizes": [
+          50,
+          50
+        ]
+      },
+      "op": {
+        "op": "place",
+        "leafId": "ws-a"
+      },
+      "after": {
+        "kind": "split",
+        "axis": "row",
+        "children": [
+          {
+            "kind": "leaf",
+            "id": "ws-a",
+            "workspaceId": "ws-a"
+          },
+          {
+            "kind": "leaf",
+            "id": "ws-b",
+            "workspaceId": "ws-b"
+          }
+        ],
+        "sizes": [
+          50,
+          50
+        ]
+      }
+    },
+    {
+      "name": "place into a split",
+      "before": {
+        "kind": "split",
+        "axis": "row",
+        "children": [
+          {
+            "kind": "leaf",
+            "id": "ws-a",
+            "workspaceId": "ws-a"
+          },
+          {
+            "kind": "split",
+            "axis": "column",
+            "children": [
+              {
+                "kind": "leaf",
+                "id": "ws-b",
+                "workspaceId": "ws-b"
+              },
+              {
+                "kind": "leaf",
+                "id": "ws-c",
+                "workspaceId": "ws-c"
+              }
+            ],
+            "sizes": [
+              30,
+              70
+            ]
+          }
+        ],
+        "sizes": [
+          40,
+          60
+        ]
+      },
+      "op": {
+        "op": "place",
+        "leafId": "ws-d"
+      },
+      "after": {
+        "kind": "split",
+        "axis": "row",
+        "children": [
+          {
+            "kind": "leaf",
+            "id": "ws-a",
+            "workspaceId": "ws-a"
+          },
+          {
+            "kind": "split",
+            "axis": "column",
+            "children": [
+              {
+                "kind": "leaf",
+                "id": "ws-b",
+                "workspaceId": "ws-b"
+              },
+              {
+                "kind": "leaf",
+                "id": "ws-c",
+                "workspaceId": "ws-c"
+              }
+            ],
+            "sizes": [
+              30,
+              70
+            ]
+          },
+          {
+            "kind": "leaf",
+            "id": "ws-d",
+            "workspaceId": "ws-d"
+          }
+        ],
+        "sizes": [
+          33.333333333333336,
+          33.333333333333336,
+          33.333333333333336
+        ]
+      }
+    },
+    {
+      "name": "split across the axis",
+      "before": {
+        "kind": "split",
+        "axis": "row",
+        "children": [
+          {
+            "kind": "leaf",
+            "id": "ws-a",
+            "workspaceId": "ws-a"
+          },
+          {
+            "kind": "leaf",
+            "id": "ws-b",
+            "workspaceId": "ws-b"
+          }
+        ],
+        "sizes": [
+          50,
+          50
+        ]
+      },
+      "op": {
+        "op": "splitAt",
+        "targetLeafId": "ws-b",
+        "axis": "column",
+        "side": "after",
+        "leafId": "ws-d"
+      },
+      "after": {
+        "kind": "split",
+        "axis": "row",
+        "children": [
+          {
+            "kind": "leaf",
+            "id": "ws-a",
+            "workspaceId": "ws-a"
+          },
+          {
+            "kind": "split",
+            "axis": "column",
+            "children": [
+              {
+                "kind": "leaf",
+                "id": "ws-b",
+                "workspaceId": "ws-b"
+              },
+              {
+                "kind": "leaf",
+                "id": "ws-d",
+                "workspaceId": "ws-d"
+              }
+            ],
+            "sizes": [
+              50,
+              50
+            ]
+          }
+        ],
+        "sizes": [
+          50,
+          50
+        ]
+      }
+    },
+    {
+      "name": "split along the axis",
+      "before": {
+        "kind": "split",
+        "axis": "row",
+        "children": [
+          {
+            "kind": "leaf",
+            "id": "ws-a",
+            "workspaceId": "ws-a"
+          },
+          {
+            "kind": "leaf",
+            "id": "ws-b",
+            "workspaceId": "ws-b"
+          }
+        ],
+        "sizes": [
+          50,
+          50
+        ]
+      },
+      "op": {
+        "op": "splitAt",
+        "targetLeafId": "ws-b",
+        "axis": "row",
+        "side": "before",
+        "leafId": "ws-d"
+      },
+      "after": {
+        "kind": "split",
+        "axis": "row",
+        "children": [
+          {
+            "kind": "leaf",
+            "id": "ws-a",
+            "workspaceId": "ws-a"
+          },
+          {
+            "kind": "leaf",
+            "id": "ws-d",
+            "workspaceId": "ws-d"
+          },
+          {
+            "kind": "leaf",
+            "id": "ws-b",
+            "workspaceId": "ws-b"
+          }
+        ],
+        "sizes": [
+          50,
+          25,
+          25
+        ]
+      }
+    },
+    {
+      "name": "split a nested leaf",
+      "before": {
+        "kind": "split",
+        "axis": "row",
+        "children": [
+          {
+            "kind": "leaf",
+            "id": "ws-a",
+            "workspaceId": "ws-a"
+          },
+          {
+            "kind": "split",
+            "axis": "column",
+            "children": [
+              {
+                "kind": "leaf",
+                "id": "ws-b",
+                "workspaceId": "ws-b"
+              },
+              {
+                "kind": "leaf",
+                "id": "ws-c",
+                "workspaceId": "ws-c"
+              }
+            ],
+            "sizes": [
+              30,
+              70
+            ]
+          }
+        ],
+        "sizes": [
+          40,
+          60
+        ]
+      },
+      "op": {
+        "op": "splitAt",
+        "targetLeafId": "ws-c",
+        "axis": "column",
+        "side": "before",
+        "leafId": "ws-d"
+      },
+      "after": {
+        "kind": "split",
+        "axis": "row",
+        "children": [
+          {
+            "kind": "leaf",
+            "id": "ws-a",
+            "workspaceId": "ws-a"
+          },
+          {
+            "kind": "split",
+            "axis": "column",
+            "children": [
+              {
+                "kind": "leaf",
+                "id": "ws-b",
+                "workspaceId": "ws-b"
+              },
+              {
+                "kind": "leaf",
+                "id": "ws-d",
+                "workspaceId": "ws-d"
+              },
+              {
+                "kind": "leaf",
+                "id": "ws-c",
+                "workspaceId": "ws-c"
+              }
+            ],
+            "sizes": [
+              30,
+              35,
+              35
+            ]
+          }
+        ],
+        "sizes": [
+          40,
+          60
+        ]
+      }
+    },
+    {
+      "name": "split a gone target",
+      "before": {
+        "kind": "split",
+        "axis": "row",
+        "children": [
+          {
+            "kind": "leaf",
+            "id": "ws-a",
+            "workspaceId": "ws-a"
+          },
+          {
+            "kind": "leaf",
+            "id": "ws-b",
+            "workspaceId": "ws-b"
+          }
+        ],
+        "sizes": [
+          50,
+          50
+        ]
+      },
+      "op": {
+        "op": "splitAt",
+        "targetLeafId": "ws-x",
+        "axis": "row",
+        "side": "after",
+        "leafId": "ws-d"
+      },
+      "fails": true
+    },
+    {
+      "name": "split in a leaf already placed",
+      "before": {
+        "kind": "split",
+        "axis": "row",
+        "children": [
+          {
+            "kind": "leaf",
+            "id": "ws-a",
+            "workspaceId": "ws-a"
+          },
+          {
+            "kind": "leaf",
+            "id": "ws-b",
+            "workspaceId": "ws-b"
+          }
+        ],
+        "sizes": [
+          50,
+          50
+        ]
+      },
+      "op": {
+        "op": "splitAt",
+        "targetLeafId": "ws-a",
+        "axis": "row",
+        "side": "after",
+        "leafId": "ws-b"
+      },
+      "fails": true
+    },
+    {
+      "name": "move a leaf",
+      "before": {
+        "kind": "split",
+        "axis": "row",
+        "children": [
+          {
+            "kind": "leaf",
+            "id": "ws-a",
+            "workspaceId": "ws-a"
+          },
+          {
+            "kind": "split",
+            "axis": "column",
+            "children": [
+              {
+                "kind": "leaf",
+                "id": "ws-b",
+                "workspaceId": "ws-b"
+              },
+              {
+                "kind": "leaf",
+                "id": "ws-c",
+                "workspaceId": "ws-c"
+              }
+            ],
+            "sizes": [
+              30,
+              70
+            ]
+          }
+        ],
+        "sizes": [
+          40,
+          60
+        ]
+      },
+      "op": {
+        "op": "move",
+        "leafId": "ws-a",
+        "target": {
+          "targetWorkspaceId": "ws-c",
+          "axis": "row",
+          "side": "after"
+        }
+      },
+      "after": {
+        "kind": "split",
+        "axis": "column",
+        "children": [
+          {
+            "kind": "leaf",
+            "id": "ws-b",
+            "workspaceId": "ws-b"
+          },
+          {
+            "kind": "split",
+            "axis": "row",
+            "children": [
+              {
+                "kind": "leaf",
+                "id": "ws-c",
+                "workspaceId": "ws-c"
+              },
+              {
+                "kind": "leaf",
+                "id": "ws-a",
+                "workspaceId": "ws-a"
+              }
+            ],
+            "sizes": [
+              50,
+              50
+            ]
+          }
+        ],
+        "sizes": [
+          30,
+          70
+        ]
+      }
+    },
+    {
+      "name": "move onto itself",
+      "before": {
+        "kind": "split",
+        "axis": "row",
+        "children": [
+          {
+            "kind": "leaf",
+            "id": "ws-a",
+            "workspaceId": "ws-a"
+          },
+          {
+            "kind": "split",
+            "axis": "column",
+            "children": [
+              {
+                "kind": "leaf",
+                "id": "ws-b",
+                "workspaceId": "ws-b"
+              },
+              {
+                "kind": "leaf",
+                "id": "ws-c",
+                "workspaceId": "ws-c"
+              }
+            ],
+            "sizes": [
+              30,
+              70
+            ]
+          }
+        ],
+        "sizes": [
+          40,
+          60
+        ]
+      },
+      "op": {
+        "op": "move",
+        "leafId": "ws-a",
+        "target": {
+          "targetWorkspaceId": "ws-a",
+          "axis": "row",
+          "side": "after"
+        }
+      },
+      "after": {
+        "kind": "split",
+        "axis": "row",
+        "children": [
+          {
+            "kind": "leaf",
+            "id": "ws-a",
+            "workspaceId": "ws-a"
+          },
+          {
+            "kind": "split",
+            "axis": "column",
+            "children": [
+              {
+                "kind": "leaf",
+                "id": "ws-b",
+                "workspaceId": "ws-b"
+              },
+              {
+                "kind": "leaf",
+                "id": "ws-c",
+                "workspaceId": "ws-c"
+              }
+            ],
+            "sizes": [
+              30,
+              70
+            ]
+          }
+        ],
+        "sizes": [
+          40,
+          60
+        ]
+      }
+    },
+    {
+      "name": "move to the edge it holds",
+      "before": {
+        "kind": "split",
+        "axis": "row",
+        "children": [
+          {
+            "kind": "leaf",
+            "id": "ws-a",
+            "workspaceId": "ws-a"
+          },
+          {
+            "kind": "leaf",
+            "id": "ws-b",
+            "workspaceId": "ws-b"
+          }
+        ],
+        "sizes": [
+          50,
+          50
+        ]
+      },
+      "op": {
+        "op": "move",
+        "leafId": "ws-a",
+        "target": {
+          "targetWorkspaceId": "ws-b",
+          "axis": "row",
+          "side": "before"
+        }
+      },
+      "after": {
+        "kind": "split",
+        "axis": "row",
+        "children": [
+          {
+            "kind": "leaf",
+            "id": "ws-a",
+            "workspaceId": "ws-a"
+          },
+          {
+            "kind": "leaf",
+            "id": "ws-b",
+            "workspaceId": "ws-b"
+          }
+        ],
+        "sizes": [
+          50,
+          50
+        ]
+      }
+    },
+    {
+      "name": "move a gone leaf",
+      "before": {
+        "kind": "split",
+        "axis": "row",
+        "children": [
+          {
+            "kind": "leaf",
+            "id": "ws-a",
+            "workspaceId": "ws-a"
+          },
+          {
+            "kind": "split",
+            "axis": "column",
+            "children": [
+              {
+                "kind": "leaf",
+                "id": "ws-b",
+                "workspaceId": "ws-b"
+              },
+              {
+                "kind": "leaf",
+                "id": "ws-c",
+                "workspaceId": "ws-c"
+              }
+            ],
+            "sizes": [
+              30,
+              70
+            ]
+          }
+        ],
+        "sizes": [
+          40,
+          60
+        ]
+      },
+      "op": {
+        "op": "move",
+        "leafId": "ws-x",
+        "target": {
+          "targetWorkspaceId": "ws-c",
+          "axis": "row",
+          "side": "after"
+        }
+      },
+      "fails": true
+    },
+    {
+      "name": "move to a gone target",
+      "before": {
+        "kind": "split",
+        "axis": "row",
+        "children": [
+          {
+            "kind": "leaf",
+            "id": "ws-a",
+            "workspaceId": "ws-a"
+          },
+          {
+            "kind": "split",
+            "axis": "column",
+            "children": [
+              {
+                "kind": "leaf",
+                "id": "ws-b",
+                "workspaceId": "ws-b"
+              },
+              {
+                "kind": "leaf",
+                "id": "ws-c",
+                "workspaceId": "ws-c"
+              }
+            ],
+            "sizes": [
+              30,
+              70
+            ]
+          }
+        ],
+        "sizes": [
+          40,
+          60
+        ]
+      },
+      "op": {
+        "op": "move",
+        "leafId": "ws-a",
+        "target": {
+          "targetWorkspaceId": "ws-x",
+          "axis": "row",
+          "side": "after"
+        }
+      },
+      "fails": true
+    },
+    {
+      "name": "close a nested leaf",
+      "before": {
+        "kind": "split",
+        "axis": "row",
+        "children": [
+          {
+            "kind": "leaf",
+            "id": "ws-a",
+            "workspaceId": "ws-a"
+          },
+          {
+            "kind": "split",
+            "axis": "column",
+            "children": [
+              {
+                "kind": "leaf",
+                "id": "ws-b",
+                "workspaceId": "ws-b"
+              },
+              {
+                "kind": "leaf",
+                "id": "ws-c",
+                "workspaceId": "ws-c"
+              }
+            ],
+            "sizes": [
+              30,
+              70
+            ]
+          }
+        ],
+        "sizes": [
+          40,
+          60
+        ]
+      },
+      "op": {
+        "op": "close",
+        "leafId": "ws-b"
+      },
+      "after": {
+        "kind": "split",
+        "axis": "row",
+        "children": [
+          {
+            "kind": "leaf",
+            "id": "ws-a",
+            "workspaceId": "ws-a"
+          },
+          {
+            "kind": "leaf",
+            "id": "ws-c",
+            "workspaceId": "ws-c"
+          }
+        ],
+        "sizes": [
+          40,
+          60
+        ]
+      }
+    },
+    {
+      "name": "close a gone leaf",
+      "before": {
+        "kind": "split",
+        "axis": "row",
+        "children": [
+          {
+            "kind": "leaf",
+            "id": "ws-a",
+            "workspaceId": "ws-a"
+          },
+          {
+            "kind": "split",
+            "axis": "column",
+            "children": [
+              {
+                "kind": "leaf",
+                "id": "ws-b",
+                "workspaceId": "ws-b"
+              },
+              {
+                "kind": "leaf",
+                "id": "ws-c",
+                "workspaceId": "ws-c"
+              }
+            ],
+            "sizes": [
+              30,
+              70
+            ]
+          }
+        ],
+        "sizes": [
+          40,
+          60
+        ]
+      },
+      "op": {
+        "op": "close",
+        "leafId": "ws-x"
+      },
+      "after": {
+        "kind": "split",
+        "axis": "row",
+        "children": [
+          {
+            "kind": "leaf",
+            "id": "ws-a",
+            "workspaceId": "ws-a"
+          },
+          {
+            "kind": "split",
+            "axis": "column",
+            "children": [
+              {
+                "kind": "leaf",
+                "id": "ws-b",
+                "workspaceId": "ws-b"
+              },
+              {
+                "kind": "leaf",
+                "id": "ws-c",
+                "workspaceId": "ws-c"
+              }
+            ],
+            "sizes": [
+              30,
+              70
+            ]
+          }
+        ],
+        "sizes": [
+          40,
+          60
+        ]
+      }
+    },
+    {
+      "name": "close the last leaf",
+      "before": {
+        "kind": "leaf",
+        "id": "ws-a",
+        "workspaceId": "ws-a"
+      },
+      "op": {
+        "op": "close",
+        "leafId": "ws-a"
+      },
+      "after": null
+    },
+    {
+      "name": "close on an empty tree",
+      "before": null,
+      "op": {
+        "op": "close",
+        "leafId": "ws-a"
+      },
+      "after": null
+    },
+    {
+      "name": "resize the root",
+      "before": {
+        "kind": "split",
+        "axis": "row",
+        "children": [
+          {
+            "kind": "leaf",
+            "id": "ws-a",
+            "workspaceId": "ws-a"
+          },
+          {
+            "kind": "split",
+            "axis": "column",
+            "children": [
+              {
+                "kind": "leaf",
+                "id": "ws-b",
+                "workspaceId": "ws-b"
+              },
+              {
+                "kind": "leaf",
+                "id": "ws-c",
+                "workspaceId": "ws-c"
+              }
+            ],
+            "sizes": [
+              30,
+              70
+            ]
+          }
+        ],
+        "sizes": [
+          40,
+          60
+        ]
+      },
+      "op": {
+        "op": "resize",
+        "path": [],
+        "sizes": [
+          25,
+          75
+        ]
+      },
+      "after": {
+        "kind": "split",
+        "axis": "row",
+        "children": [
+          {
+            "kind": "leaf",
+            "id": "ws-a",
+            "workspaceId": "ws-a"
+          },
+          {
+            "kind": "split",
+            "axis": "column",
+            "children": [
+              {
+                "kind": "leaf",
+                "id": "ws-b",
+                "workspaceId": "ws-b"
+              },
+              {
+                "kind": "leaf",
+                "id": "ws-c",
+                "workspaceId": "ws-c"
+              }
+            ],
+            "sizes": [
+              30,
+              70
+            ]
+          }
+        ],
+        "sizes": [
+          25,
+          75
+        ]
+      }
+    },
+    {
+      "name": "resize a nested split",
+      "before": {
+        "kind": "split",
+        "axis": "row",
+        "children": [
+          {
+            "kind": "leaf",
+            "id": "ws-a",
+            "workspaceId": "ws-a"
+          },
+          {
+            "kind": "split",
+            "axis": "column",
+            "children": [
+              {
+                "kind": "leaf",
+                "id": "ws-b",
+                "workspaceId": "ws-b"
+              },
+              {
+                "kind": "leaf",
+                "id": "ws-c",
+                "workspaceId": "ws-c"
+              }
+            ],
+            "sizes": [
+              30,
+              70
+            ]
+          }
+        ],
+        "sizes": [
+          40,
+          60
+        ]
+      },
+      "op": {
+        "op": "resize",
+        "path": [
+          1
+        ],
+        "sizes": [
+          1,
+          3
+        ]
+      },
+      "after": {
+        "kind": "split",
+        "axis": "row",
+        "children": [
+          {
+            "kind": "leaf",
+            "id": "ws-a",
+            "workspaceId": "ws-a"
+          },
+          {
+            "kind": "split",
+            "axis": "column",
+            "children": [
+              {
+                "kind": "leaf",
+                "id": "ws-b",
+                "workspaceId": "ws-b"
+              },
+              {
+                "kind": "leaf",
+                "id": "ws-c",
+                "workspaceId": "ws-c"
+              }
+            ],
+            "sizes": [
+              25,
+              75
+            ]
+          }
+        ],
+        "sizes": [
+          40,
+          60
+        ]
+      }
+    },
+    {
+      "name": "resize to the same sizes",
+      "before": {
+        "kind": "split",
+        "axis": "row",
+        "children": [
+          {
+            "kind": "leaf",
+            "id": "ws-a",
+            "workspaceId": "ws-a"
+          },
+          {
+            "kind": "leaf",
+            "id": "ws-b",
+            "workspaceId": "ws-b"
+          }
+        ],
+        "sizes": [
+          50,
+          50
+        ]
+      },
+      "op": {
+        "op": "resize",
+        "path": [],
+        "sizes": [
+          1,
+          1
+        ]
+      },
+      "after": {
+        "kind": "split",
+        "axis": "row",
+        "children": [
+          {
+            "kind": "leaf",
+            "id": "ws-a",
+            "workspaceId": "ws-a"
+          },
+          {
+            "kind": "leaf",
+            "id": "ws-b",
+            "workspaceId": "ws-b"
+          }
+        ],
+        "sizes": [
+          50,
+          50
+        ]
+      }
+    },
+    {
+      "name": "resize with the wrong count",
+      "before": {
+        "kind": "split",
+        "axis": "row",
+        "children": [
+          {
+            "kind": "leaf",
+            "id": "ws-a",
+            "workspaceId": "ws-a"
+          },
+          {
+            "kind": "split",
+            "axis": "column",
+            "children": [
+              {
+                "kind": "leaf",
+                "id": "ws-b",
+                "workspaceId": "ws-b"
+              },
+              {
+                "kind": "leaf",
+                "id": "ws-c",
+                "workspaceId": "ws-c"
+              }
+            ],
+            "sizes": [
+              30,
+              70
+            ]
+          }
+        ],
+        "sizes": [
+          40,
+          60
+        ]
+      },
+      "op": {
+        "op": "resize",
+        "path": [],
+        "sizes": [
+          20,
+          30,
+          50
+        ]
+      },
+      "fails": true
+    },
+    {
+      "name": "resize a leaf",
+      "before": {
+        "kind": "split",
+        "axis": "row",
+        "children": [
+          {
+            "kind": "leaf",
+            "id": "ws-a",
+            "workspaceId": "ws-a"
+          },
+          {
+            "kind": "split",
+            "axis": "column",
+            "children": [
+              {
+                "kind": "leaf",
+                "id": "ws-b",
+                "workspaceId": "ws-b"
+              },
+              {
+                "kind": "leaf",
+                "id": "ws-c",
+                "workspaceId": "ws-c"
+              }
+            ],
+            "sizes": [
+              30,
+              70
+            ]
+          }
+        ],
+        "sizes": [
+          40,
+          60
+        ]
+      },
+      "op": {
+        "op": "resize",
+        "path": [
+          0
+        ],
+        "sizes": [
+          50,
+          50
+        ]
+      },
+      "fails": true
+    },
+    {
+      "name": "resize a gone path",
+      "before": {
+        "kind": "split",
+        "axis": "row",
+        "children": [
+          {
+            "kind": "leaf",
+            "id": "ws-a",
+            "workspaceId": "ws-a"
+          },
+          {
+            "kind": "split",
+            "axis": "column",
+            "children": [
+              {
+                "kind": "leaf",
+                "id": "ws-b",
+                "workspaceId": "ws-b"
+              },
+              {
+                "kind": "leaf",
+                "id": "ws-c",
+                "workspaceId": "ws-c"
+              }
+            ],
+            "sizes": [
+              30,
+              70
+            ]
+          }
+        ],
+        "sizes": [
+          40,
+          60
+        ]
+      },
+      "op": {
+        "op": "resize",
+        "path": [
+          5
+        ],
+        "sizes": [
+          50,
+          50
+        ]
+      },
+      "fails": true
+    },
+    {
+      "name": "swap two leaves",
+      "before": {
+        "kind": "split",
+        "axis": "row",
+        "children": [
+          {
+            "kind": "leaf",
+            "id": "ws-a",
+            "workspaceId": "ws-a"
+          },
+          {
+            "kind": "split",
+            "axis": "column",
+            "children": [
+              {
+                "kind": "leaf",
+                "id": "ws-b",
+                "workspaceId": "ws-b"
+              },
+              {
+                "kind": "leaf",
+                "id": "ws-c",
+                "workspaceId": "ws-c"
+              }
+            ],
+            "sizes": [
+              30,
+              70
+            ]
+          }
+        ],
+        "sizes": [
+          40,
+          60
+        ]
+      },
+      "op": {
+        "op": "swap",
+        "a": "ws-a",
+        "b": "ws-c"
+      },
+      "after": {
+        "kind": "split",
+        "axis": "row",
+        "children": [
+          {
+            "kind": "leaf",
+            "id": "ws-c",
+            "workspaceId": "ws-c"
+          },
+          {
+            "kind": "split",
+            "axis": "column",
+            "children": [
+              {
+                "kind": "leaf",
+                "id": "ws-b",
+                "workspaceId": "ws-b"
+              },
+              {
+                "kind": "leaf",
+                "id": "ws-a",
+                "workspaceId": "ws-a"
+              }
+            ],
+            "sizes": [
+              30,
+              70
+            ]
+          }
+        ],
+        "sizes": [
+          40,
+          60
+        ]
+      }
+    },
+    {
+      "name": "swap a leaf with itself",
+      "before": {
+        "kind": "split",
+        "axis": "row",
+        "children": [
+          {
+            "kind": "leaf",
+            "id": "ws-a",
+            "workspaceId": "ws-a"
+          },
+          {
+            "kind": "split",
+            "axis": "column",
+            "children": [
+              {
+                "kind": "leaf",
+                "id": "ws-b",
+                "workspaceId": "ws-b"
+              },
+              {
+                "kind": "leaf",
+                "id": "ws-c",
+                "workspaceId": "ws-c"
+              }
+            ],
+            "sizes": [
+              30,
+              70
+            ]
+          }
+        ],
+        "sizes": [
+          40,
+          60
+        ]
+      },
+      "op": {
+        "op": "swap",
+        "a": "ws-a",
+        "b": "ws-a"
+      },
+      "after": {
+        "kind": "split",
+        "axis": "row",
+        "children": [
+          {
+            "kind": "leaf",
+            "id": "ws-a",
+            "workspaceId": "ws-a"
+          },
+          {
+            "kind": "split",
+            "axis": "column",
+            "children": [
+              {
+                "kind": "leaf",
+                "id": "ws-b",
+                "workspaceId": "ws-b"
+              },
+              {
+                "kind": "leaf",
+                "id": "ws-c",
+                "workspaceId": "ws-c"
+              }
+            ],
+            "sizes": [
+              30,
+              70
+            ]
+          }
+        ],
+        "sizes": [
+          40,
+          60
+        ]
+      }
+    },
+    {
+      "name": "swap a gone leaf",
+      "before": {
+        "kind": "split",
+        "axis": "row",
+        "children": [
+          {
+            "kind": "leaf",
+            "id": "ws-a",
+            "workspaceId": "ws-a"
+          },
+          {
+            "kind": "split",
+            "axis": "column",
+            "children": [
+              {
+                "kind": "leaf",
+                "id": "ws-b",
+                "workspaceId": "ws-b"
+              },
+              {
+                "kind": "leaf",
+                "id": "ws-c",
+                "workspaceId": "ws-c"
+              }
+            ],
+            "sizes": [
+              30,
+              70
+            ]
+          }
+        ],
+        "sizes": [
+          40,
+          60
+        ]
+      },
+      "op": {
+        "op": "swap",
+        "a": "ws-a",
+        "b": "ws-x"
+      },
+      "fails": true
+    },
+    {
+      "name": "even out every split",
+      "before": {
+        "kind": "split",
+        "axis": "row",
+        "children": [
+          {
+            "kind": "leaf",
+            "id": "ws-a",
+            "workspaceId": "ws-a"
+          },
+          {
+            "kind": "split",
+            "axis": "column",
+            "children": [
+              {
+                "kind": "leaf",
+                "id": "ws-b",
+                "workspaceId": "ws-b"
+              },
+              {
+                "kind": "leaf",
+                "id": "ws-c",
+                "workspaceId": "ws-c"
+              }
+            ],
+            "sizes": [
+              30,
+              70
+            ]
+          }
+        ],
+        "sizes": [
+          40,
+          60
+        ]
+      },
+      "op": {
+        "op": "evenOut"
+      },
+      "after": {
+        "kind": "split",
+        "axis": "row",
+        "children": [
+          {
+            "kind": "leaf",
+            "id": "ws-a",
+            "workspaceId": "ws-a"
+          },
+          {
+            "kind": "split",
+            "axis": "column",
+            "children": [
+              {
+                "kind": "leaf",
+                "id": "ws-b",
+                "workspaceId": "ws-b"
+              },
+              {
+                "kind": "leaf",
+                "id": "ws-c",
+                "workspaceId": "ws-c"
+              }
+            ],
+            "sizes": [
+              50,
+              50
+            ]
+          }
+        ],
+        "sizes": [
+          50,
+          50
+        ]
+      }
+    },
+    {
+      "name": "even out one split",
+      "before": {
+        "kind": "split",
+        "axis": "row",
+        "children": [
+          {
+            "kind": "leaf",
+            "id": "ws-a",
+            "workspaceId": "ws-a"
+          },
+          {
+            "kind": "split",
+            "axis": "column",
+            "children": [
+              {
+                "kind": "leaf",
+                "id": "ws-b",
+                "workspaceId": "ws-b"
+              },
+              {
+                "kind": "leaf",
+                "id": "ws-c",
+                "workspaceId": "ws-c"
+              }
+            ],
+            "sizes": [
+              30,
+              70
+            ]
+          }
+        ],
+        "sizes": [
+          40,
+          60
+        ]
+      },
+      "op": {
+        "op": "evenOut",
+        "path": [
+          1
+        ]
+      },
+      "after": {
+        "kind": "split",
+        "axis": "row",
+        "children": [
+          {
+            "kind": "leaf",
+            "id": "ws-a",
+            "workspaceId": "ws-a"
+          },
+          {
+            "kind": "split",
+            "axis": "column",
+            "children": [
+              {
+                "kind": "leaf",
+                "id": "ws-b",
+                "workspaceId": "ws-b"
+              },
+              {
+                "kind": "leaf",
+                "id": "ws-c",
+                "workspaceId": "ws-c"
+              }
+            ],
+            "sizes": [
+              50,
+              50
+            ]
+          }
+        ],
+        "sizes": [
+          40,
+          60
+        ]
+      }
+    },
+    {
+      "name": "even out a leaf",
+      "before": {
+        "kind": "split",
+        "axis": "row",
+        "children": [
+          {
+            "kind": "leaf",
+            "id": "ws-a",
+            "workspaceId": "ws-a"
+          },
+          {
+            "kind": "split",
+            "axis": "column",
+            "children": [
+              {
+                "kind": "leaf",
+                "id": "ws-b",
+                "workspaceId": "ws-b"
+              },
+              {
+                "kind": "leaf",
+                "id": "ws-c",
+                "workspaceId": "ws-c"
+              }
+            ],
+            "sizes": [
+              30,
+              70
+            ]
+          }
+        ],
+        "sizes": [
+          40,
+          60
+        ]
+      },
+      "op": {
+        "op": "evenOut",
+        "path": [
+          0
+        ]
+      },
+      "fails": true
+    },
+    {
+      "name": "even out an empty tree",
+      "before": null,
+      "op": {
+        "op": "evenOut"
+      },
+      "after": null
+    },
+    {
+      "name": "replace a leaf",
+      "before": {
+        "kind": "split",
+        "axis": "row",
+        "children": [
+          {
+            "kind": "leaf",
+            "id": "ws-a",
+            "workspaceId": "ws-a"
+          },
+          {
+            "kind": "split",
+            "axis": "column",
+            "children": [
+              {
+                "kind": "leaf",
+                "id": "ws-b",
+                "workspaceId": "ws-b"
+              },
+              {
+                "kind": "leaf",
+                "id": "ws-c",
+                "workspaceId": "ws-c"
+              }
+            ],
+            "sizes": [
+              30,
+              70
+            ]
+          }
+        ],
+        "sizes": [
+          40,
+          60
+        ]
+      },
+      "op": {
+        "op": "replace",
+        "from": "ws-b",
+        "to": "ws-d"
+      },
+      "after": {
+        "kind": "split",
+        "axis": "row",
+        "children": [
+          {
+            "kind": "leaf",
+            "id": "ws-a",
+            "workspaceId": "ws-a"
+          },
+          {
+            "kind": "split",
+            "axis": "column",
+            "children": [
+              {
+                "kind": "leaf",
+                "id": "ws-d",
+                "workspaceId": "ws-d"
+              },
+              {
+                "kind": "leaf",
+                "id": "ws-c",
+                "workspaceId": "ws-c"
+              }
+            ],
+            "sizes": [
+              30,
+              70
+            ]
+          }
+        ],
+        "sizes": [
+          40,
+          60
+        ]
+      }
+    },
+    {
+      "name": "replace a leaf by itself",
+      "before": {
+        "kind": "split",
+        "axis": "row",
+        "children": [
+          {
+            "kind": "leaf",
+            "id": "ws-a",
+            "workspaceId": "ws-a"
+          },
+          {
+            "kind": "split",
+            "axis": "column",
+            "children": [
+              {
+                "kind": "leaf",
+                "id": "ws-b",
+                "workspaceId": "ws-b"
+              },
+              {
+                "kind": "leaf",
+                "id": "ws-c",
+                "workspaceId": "ws-c"
+              }
+            ],
+            "sizes": [
+              30,
+              70
+            ]
+          }
+        ],
+        "sizes": [
+          40,
+          60
+        ]
+      },
+      "op": {
+        "op": "replace",
+        "from": "ws-b",
+        "to": "ws-b"
+      },
+      "after": {
+        "kind": "split",
+        "axis": "row",
+        "children": [
+          {
+            "kind": "leaf",
+            "id": "ws-a",
+            "workspaceId": "ws-a"
+          },
+          {
+            "kind": "split",
+            "axis": "column",
+            "children": [
+              {
+                "kind": "leaf",
+                "id": "ws-b",
+                "workspaceId": "ws-b"
+              },
+              {
+                "kind": "leaf",
+                "id": "ws-c",
+                "workspaceId": "ws-c"
+              }
+            ],
+            "sizes": [
+              30,
+              70
+            ]
+          }
+        ],
+        "sizes": [
+          40,
+          60
+        ]
+      }
+    },
+    {
+      "name": "replace with a leaf already placed",
+      "before": {
+        "kind": "split",
+        "axis": "row",
+        "children": [
+          {
+            "kind": "leaf",
+            "id": "ws-a",
+            "workspaceId": "ws-a"
+          },
+          {
+            "kind": "split",
+            "axis": "column",
+            "children": [
+              {
+                "kind": "leaf",
+                "id": "ws-b",
+                "workspaceId": "ws-b"
+              },
+              {
+                "kind": "leaf",
+                "id": "ws-c",
+                "workspaceId": "ws-c"
+              }
+            ],
+            "sizes": [
+              30,
+              70
+            ]
+          }
+        ],
+        "sizes": [
+          40,
+          60
+        ]
+      },
+      "op": {
+        "op": "replace",
+        "from": "ws-b",
+        "to": "ws-a"
+      },
+      "fails": true
+    },
+    {
+      "name": "replace a gone leaf",
+      "before": {
+        "kind": "split",
+        "axis": "row",
+        "children": [
+          {
+            "kind": "leaf",
+            "id": "ws-a",
+            "workspaceId": "ws-a"
+          },
+          {
+            "kind": "split",
+            "axis": "column",
+            "children": [
+              {
+                "kind": "leaf",
+                "id": "ws-b",
+                "workspaceId": "ws-b"
+              },
+              {
+                "kind": "leaf",
+                "id": "ws-c",
+                "workspaceId": "ws-c"
+              }
+            ],
+            "sizes": [
+              30,
+              70
+            ]
+          }
+        ],
+        "sizes": [
+          40,
+          60
+        ]
+      },
+      "op": {
+        "op": "replace",
+        "from": "ws-x",
+        "to": "ws-d"
+      },
+      "fails": true
+    },
+    {
+      "name": "a pin is no tree op",
+      "before": {
+        "kind": "split",
+        "axis": "row",
+        "children": [
+          {
+            "kind": "leaf",
+            "id": "ws-a",
+            "workspaceId": "ws-a"
+          },
+          {
+            "kind": "leaf",
+            "id": "ws-b",
+            "workspaceId": "ws-b"
+          }
+        ],
+        "sizes": [
+          50,
+          50
+        ]
+      },
+      "op": {
+        "op": "pin",
+        "leafId": "ws-a"
+      },
+      "fails": true
+    },
+    {
+      "name": "an unpin is no tree op",
+      "before": {
+        "kind": "split",
+        "axis": "row",
+        "children": [
+          {
+            "kind": "leaf",
+            "id": "ws-a",
+            "workspaceId": "ws-a"
+          },
+          {
+            "kind": "leaf",
+            "id": "ws-b",
+            "workspaceId": "ws-b"
+          }
+        ],
+        "sizes": [
+          50,
+          50
+        ]
+      },
+      "op": {
+        "op": "unpin",
+        "leafId": "ws-a"
+      },
+      "fails": true
+    }
+  ]
+}

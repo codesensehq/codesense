@@ -571,6 +571,7 @@ fn a_symlinked_folder_or_file_is_refused_and_written_through_never() {
     // The group folder is a symlink.
     std::fs::remove_file(dir.join("main.json")).unwrap();
     std::fs::remove_file(dir.join(".gitignore")).unwrap();
+    let _ = std::fs::remove_file(dir.join(".lock"));
     std::fs::remove_dir(&dir).unwrap();
     std::os::unix::fs::symlink(outside.path(), &dir).unwrap();
     assert!(matches!(
@@ -965,4 +966,446 @@ fn a_layout_written_with_the_flag_on_survives_a_flag_off_launch() {
     let on = store(tmp.path(), true).load("main").unwrap();
     assert_eq!(on.file, fixture);
     assert!(on.dropped.is_empty());
+}
+
+// The write entry (INV-3, AH-T2): kit ops from a person, an agent or the app, rebased for a
+// person on a stale base.
+
+fn op(value: serde_json::Value) -> KitOp {
+    crate::groups::ops::parse_op(&value).unwrap()
+}
+
+fn place(id: &str) -> KitOp {
+    op(serde_json::json!({"op": "place", "leafId": id}))
+}
+
+fn window(label: &str) -> Writer {
+    Writer::Person {
+        window: label.into(),
+    }
+}
+
+fn agent(session: &str) -> Writer {
+    Writer::Agent {
+        session: session.into(),
+    }
+}
+
+fn by(writer: Writer, base_rev: u64, ops: Vec<KitOp>) -> StoreWrite {
+    StoreWrite {
+        writer,
+        base_rev,
+        owner: OwnerKind::Group,
+        ops,
+    }
+}
+
+/// The leaf ids of the saved group `id`, in order.
+fn leaves_of(s: &GroupStore, id: &str) -> Vec<String> {
+    fn walk(node: &SavedNode, out: &mut Vec<String>) {
+        match node {
+            SavedNode::Leaf { id, .. } => out.push(id.clone()),
+            SavedNode::Split { children, .. } => {
+                for child in children {
+                    walk(child, out);
+                }
+            }
+        }
+    }
+    let mut out = vec![];
+    if let Some(root) = &s.load(id).unwrap().file.root {
+        walk(root, &mut out);
+    }
+    out
+}
+
+/// The window's write and an agent's, each made on the rev both last saw, in both orders: every
+/// rev is one write, the window's op is rebased and applies, the agent's stale write is refused
+/// and applies once retried on the head, and both leaves end up placed.
+#[test]
+fn a_window_and_an_agent_interleaved_keep_both_writes() {
+    for window_first in [true, false] {
+        let home = tempdir().unwrap();
+        let s = store(home.path(), true);
+        s.write("main", by(window("main"), 0, vec![place("ws-a")]))
+            .unwrap();
+        let from_window = by(window("main"), 1, vec![place("ws-w")]);
+        let from_agent = by(agent("s1"), 1, vec![place("ws-g")]);
+        let mut placed = vec![];
+        if window_first {
+            placed.push(s.write("main", from_window).unwrap());
+            assert_eq!(
+                s.write("main", from_agent.clone()),
+                Err(StoreError::Conflict {
+                    current_revision: 2
+                })
+            );
+            placed.push(
+                s.write(
+                    "main",
+                    StoreWrite {
+                        base_rev: 2,
+                        ..from_agent
+                    },
+                )
+                .unwrap(),
+            );
+        } else {
+            placed.push(s.write("main", from_agent).unwrap());
+            placed.push(s.write("main", from_window).unwrap());
+        }
+        assert_eq!(placed.iter().map(|p| p.rev).collect::<Vec<_>>(), [2, 3]);
+        let mut leaves = leaves_of(&s, "main");
+        leaves.sort();
+        assert_eq!(
+            leaves,
+            ["ws-a", "ws-g", "ws-w"],
+            "window first: {window_first}"
+        );
+        assert_eq!(s.load("main").unwrap().file.rev, 3);
+    }
+}
+
+/// Two windows writing at once from threads, each on the rev it last read: the store takes them
+/// one at a time, a stale one is rebased, and every write lands under its own rev.
+#[test]
+fn concurrent_window_writes_are_linearized_by_rev() {
+    let home = tempdir().unwrap();
+    let s = std::sync::Arc::new(store(home.path(), true));
+    s.write("main", by(window("main"), 0, vec![place("ws-0")]))
+        .unwrap();
+    let threads: Vec<_> = ["a", "b"]
+        .into_iter()
+        .map(|label| {
+            let s = std::sync::Arc::clone(&s);
+            std::thread::spawn(move || {
+                let mut revs = vec![];
+                for n in 0..20 {
+                    let base_rev = s.load("main").unwrap().file.rev;
+                    let leaf = format!("ws-{label}-{n}");
+                    let placed = s
+                        .write("main", by(window(label), base_rev, vec![place(&leaf)]))
+                        .unwrap();
+                    assert_eq!(placed.by, window(label));
+                    revs.push(placed.rev);
+                }
+                revs
+            })
+        })
+        .collect();
+    let mut revs: Vec<u64> = threads
+        .into_iter()
+        .flat_map(|t| t.join().unwrap())
+        .collect();
+    revs.sort_unstable();
+    assert_eq!(revs, (2..=41).collect::<Vec<u64>>());
+    assert_eq!(s.load("main").unwrap().file.rev, 41);
+    assert_eq!(leaves_of(&s, "main").len(), 41);
+}
+
+/// A person's write on a stale base is rebased onto the head; `placed.by` is its writer and
+/// `placed.keys` the tile keys its ops touched.
+#[test]
+fn a_stale_window_write_is_rebased_onto_the_head() {
+    let home = tempdir().unwrap();
+    let s = store(home.path(), true);
+    s.write(
+        "main",
+        by(window("main"), 0, vec![place("ws-a"), place("ws-b")]),
+    )
+    .unwrap();
+    s.write("main", by(agent("s1"), 1, vec![place("ws-c")]))
+        .unwrap();
+    let swap = op(serde_json::json!({"op": "swap", "a": "ws-a", "b": "ws-b"}));
+    let placed = s.write("main", by(window("main"), 1, vec![swap])).unwrap();
+    assert_eq!(
+        placed,
+        Placed {
+            rev: 3,
+            by: window("main"),
+            keys: vec!["ws-a".into(), "ws-b".into()],
+        }
+    );
+    assert_eq!(leaves_of(&s, "main"), ["ws-b", "ws-a", "ws-c"]);
+}
+
+/// A rebased op that can't run because an agent's write since its base touched the same tile
+/// key: the hook hears it once, the write returns the keys, and nothing changes, so the agent's
+/// write stays.
+#[test]
+fn a_rebased_op_that_meets_an_agent_write_is_collided() {
+    let home = tempdir().unwrap();
+    let heard = std::sync::Arc::new(Mutex::new(vec![]));
+    let hook: CollisionHook = {
+        let heard = std::sync::Arc::clone(&heard);
+        std::sync::Arc::new(move |collision: &Collision| {
+            heard.lock().unwrap().push(collision.clone());
+        })
+    };
+    let s = store(home.path(), true).with_collision_hook(hook);
+    s.write(
+        "main",
+        by(window("main"), 0, vec![place("ws-a"), place("ws-b")]),
+    )
+    .unwrap();
+    let close = op(serde_json::json!({"op": "close", "leafId": "ws-b"}));
+    s.write("main", by(agent("s1"), 1, vec![close])).unwrap();
+    let before = snapshot(home.path());
+
+    let swap = op(serde_json::json!({"op": "swap", "a": "ws-a", "b": "ws-b"}));
+    let collision = Collision {
+        current_revision: 2,
+        base_rev: 1,
+        keys: vec!["ws-b".into()],
+        agents: vec![agent("s1")],
+    };
+    assert_eq!(
+        s.write("main", by(window("main"), 1, vec![swap])),
+        Err(StoreError::Collided(collision.clone()))
+    );
+    assert_eq!(*heard.lock().unwrap(), [collision]);
+    assert_eq!(snapshot(home.path()), before);
+    assert_eq!(leaves_of(&s, "main"), ["ws-a"]);
+}
+
+/// A rebased op that can't run because another window changed the tree is a plain conflict:
+/// no collided keys, nothing written, and the window replays on the head.
+#[test]
+fn a_rebase_that_fails_against_another_window_is_a_plain_conflict() {
+    let home = tempdir().unwrap();
+    let s = store(home.path(), true);
+    s.write(
+        "main",
+        by(window("main"), 0, vec![place("ws-a"), place("ws-b")]),
+    )
+    .unwrap();
+    let close = op(serde_json::json!({"op": "close", "leafId": "ws-b"}));
+    s.write("main", by(window("second"), 1, vec![close]))
+        .unwrap();
+    let before = snapshot(home.path());
+    let swap = op(serde_json::json!({"op": "swap", "a": "ws-a", "b": "ws-b"}));
+    assert_eq!(
+        s.write("main", by(window("main"), 1, vec![swap])),
+        Err(StoreError::Conflict {
+            current_revision: 2
+        })
+    );
+    assert_eq!(snapshot(home.path()), before);
+}
+
+/// An agent's or the app's write on a stale base is refused whole, never rebased.
+#[test]
+fn an_agent_or_system_write_on_a_stale_base_is_a_conflict() {
+    let home = tempdir().unwrap();
+    let s = store(home.path(), true);
+    s.write("main", by(window("main"), 0, vec![place("ws-a")]))
+        .unwrap();
+    s.write("main", by(window("main"), 1, vec![place("ws-b")]))
+        .unwrap();
+    let before = snapshot(home.path());
+    let system = Writer::System {
+        kind: "migration".into(),
+    };
+    for writer in [agent("s1"), system] {
+        assert_eq!(
+            s.write("main", by(writer, 1, vec![place("ws-c")])),
+            Err(StoreError::Conflict {
+                current_revision: 2
+            })
+        );
+    }
+    assert_eq!(snapshot(home.path()), before);
+}
+
+/// A write the store holds no record of (a whole-file commit, another process's write or one
+/// from before a restart) leaves a gap no rebase crosses.
+#[test]
+fn a_rebase_never_crosses_a_write_it_has_no_record_of() {
+    let home = tempdir().unwrap();
+    let s = store(home.path(), true);
+    s.write("main", by(window("main"), 0, vec![place("ws-a")]))
+        .unwrap();
+    s.commit("main", 1, put(leaf("ws-a"))).unwrap();
+    assert_eq!(
+        s.write("main", by(window("main"), 1, vec![place("ws-b")])),
+        Err(StoreError::Conflict {
+            current_revision: 2
+        })
+    );
+    assert_eq!(
+        s.write("main", by(window("main"), 2, vec![place("ws-b")]))
+            .map(|p| p.rev),
+        Ok(3)
+    );
+}
+
+/// An op that can't run on the head it was sent for, a pin, an empty write, an id the store
+/// refuses and a write with the flag off change nothing.
+#[test]
+fn a_write_the_store_does_not_run_changes_nothing() {
+    let home = tempdir().unwrap();
+    let s = store(home.path(), true);
+    s.write("main", by(window("main"), 0, vec![place("ws-a")]))
+        .unwrap();
+    let before = snapshot(home.path());
+    let swap = op(serde_json::json!({"op": "swap", "a": "ws-a", "b": "ws-x"}));
+    let pin = op(serde_json::json!({"op": "pin", "leafId": "ws-a"}));
+    for ops in [vec![swap], vec![pin], vec![]] {
+        assert!(matches!(
+            s.write("main", by(window("main"), 1, ops)),
+            Err(StoreError::InvalidOp(_))
+        ));
+    }
+    assert!(matches!(
+        s.write("Main", by(window("main"), 1, vec![place("ws-b")])),
+        Err(StoreError::InvalidId(_))
+    ));
+    assert_eq!(
+        store(home.path(), false).write("main", by(window("main"), 1, vec![place("ws-b")])),
+        Err(StoreError::TilesOff)
+    );
+    assert_eq!(snapshot(home.path()), before);
+}
+
+fn pins_file(home: &Path) -> PathBuf {
+    groups_dir(&scratch_space::org_space_at(home, &me(), ORG).unwrap()).join(INDEX_FILE)
+}
+
+fn keys(list: &[&str]) -> Vec<String> {
+    list.iter().map(|key| String::from(*key)).collect()
+}
+
+/// `windows.<label>.pins` round-trips, and a fourth pin is refused with nothing changed.
+#[test]
+fn window_pins_round_trip_and_a_fourth_is_refused() {
+    let home = tempdir().unwrap();
+    let s = store(home.path(), true);
+    assert_eq!(s.window_pins("main"), Ok(vec![]));
+    let three = keys(&["agent:core/dev", "doc:core/notes/plan.md", "ws-1a2b3c"]);
+    assert_eq!(s.set_window_pins("main", three.clone()), Ok(()));
+    assert_eq!(s.window_pins("main"), Ok(three.clone()));
+    let on_disk: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(pins_file(home.path())).unwrap()).unwrap();
+    assert_eq!(on_disk["windows"]["main"]["pins"], serde_json::json!(three));
+
+    let before = std::fs::read(pins_file(home.path())).unwrap();
+    let mut four = three.clone();
+    four.push(String::from("tab_7F3e"));
+    assert_eq!(s.set_window_pins("main", four), Err(StoreError::PinsFull));
+    assert_eq!(std::fs::read(pins_file(home.path())).unwrap(), before);
+    assert_eq!(s.window_pins("main"), Ok(three));
+
+    // A replace is one write of the whole list, and an empty list is kept as empty.
+    let swapped = keys(&["tab_7F3e", "agent:core/dev"]);
+    assert_eq!(s.set_window_pins("main", swapped.clone()), Ok(()));
+    assert_eq!(s.window_pins("main"), Ok(swapped));
+    assert_eq!(s.set_window_pins("main", vec![]), Ok(()));
+    assert_eq!(s.window_pins("main"), Ok(vec![]));
+}
+
+/// A window closed and reopened under the same label reads its pins back, from a new store.
+#[test]
+fn a_window_reopened_as_main_reads_its_pins_back() {
+    let home = tempdir().unwrap();
+    let pins = keys(&["agent:core/dev", "tab_7F3e"]);
+    {
+        let s = store(home.path(), true);
+        s.set_window_pins("main", pins.clone()).unwrap();
+    }
+    let reopened = store(home.path(), true);
+    assert_eq!(reopened.window_pins("main"), Ok(pins));
+    assert_eq!(reopened.window_pins("viewer-2"), Ok(vec![]));
+}
+
+/// An entry for a label no window uses survives a load and another window's write unchanged,
+/// as does any other key in the file.
+#[test]
+fn an_entry_no_window_uses_survives_unchanged() {
+    let home = tempdir().unwrap();
+    let s = store(home.path(), true);
+    s.set_window_pins("main", keys(&["ws-1a2b3c"])).unwrap();
+    let path = pins_file(home.path());
+    let gone = serde_json::json!({"pins": ["agent:core/dev"], "note": "kept"});
+    let mut file: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    file["windows"]["gone-window"] = gone.clone();
+    file["other"] = serde_json::json!({"kept": true});
+    std::fs::write(&path, serde_json::to_vec(&file).unwrap()).unwrap();
+    let before = std::fs::read(&path).unwrap();
+
+    assert_eq!(s.window_pins("main"), Ok(keys(&["ws-1a2b3c"])));
+    assert_eq!(s.window_pins("gone-window"), Ok(keys(&["agent:core/dev"])));
+    assert_eq!(
+        std::fs::read(&path).unwrap(),
+        before,
+        "a load writes nothing"
+    );
+
+    s.set_window_pins("main", keys(&["tab_7F3e"])).unwrap();
+    let after: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(after["windows"]["gone-window"], gone);
+    assert_eq!(after["other"], serde_json::json!({"kept": true}));
+    assert_eq!(
+        after["windows"]["main"]["pins"],
+        serde_json::json!(["tab_7F3e"])
+    );
+}
+
+/// With the tiles flag off the pins writer is refused and nothing is made on disk.
+#[test]
+fn with_the_flag_off_the_pins_writer_writes_nothing() {
+    let home = tempdir().unwrap();
+    let before = snapshot(home.path());
+    let s = store(home.path(), false);
+    assert_eq!(
+        s.set_window_pins("main", keys(&["ws-1a2b3c"])),
+        Err(StoreError::TilesOff)
+    );
+    assert_eq!(snapshot(home.path()), before);
+}
+
+/// A key pinned twice, a key the leaf-id grammar refuses and a label that isn't one are each
+/// refused, and an unreadable pins file is never rewritten.
+#[test]
+fn a_refused_pin_or_an_unreadable_pins_file_writes_nothing() {
+    let home = tempdir().unwrap();
+    let s = store(home.path(), true);
+    assert!(matches!(
+        s.set_window_pins("main", keys(&["ws-1a2b3c", "ws-1a2b3c"])),
+        Err(StoreError::InvalidOp(_))
+    ));
+    assert!(matches!(
+        s.set_window_pins("main", keys(&["generic:relative/dir"])),
+        Err(StoreError::InvalidOp(_))
+    ));
+    assert!(matches!(
+        s.set_window_pins("../main", keys(&["ws-1a2b3c"])),
+        Err(StoreError::Refused(_))
+    ));
+    assert!(!pins_file(home.path()).exists());
+
+    s.set_window_pins("main", keys(&["ws-1a2b3c"])).unwrap();
+    let path = pins_file(home.path());
+    std::fs::write(&path, b"{\"windows\": [1, 2]}").unwrap();
+    assert_eq!(s.window_pins("main"), Err(StoreError::Unreadable));
+    assert_eq!(
+        s.set_window_pins("main", keys(&["tab_7F3e"])),
+        Err(StoreError::Unreadable)
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), b"{\"windows\": [1, 2]}");
+}
+
+/// The pins file is no group: `index` is not a group id and the list never shows it.
+#[test]
+fn the_pins_file_is_not_listed_as_a_group() {
+    let home = tempdir().unwrap();
+    let s = store(home.path(), true);
+    s.set_window_pins("main", keys(&["ws-1a2b3c"])).unwrap();
+    s.commit("focus", 0, put(leaf("ws-1a2b3c"))).unwrap();
+    let ids: Vec<String> = s.list().unwrap().into_iter().map(|l| l.id).collect();
+    assert_eq!(ids, vec![String::from("focus")]);
+    assert!(matches!(
+        s.commit("index", 0, put(leaf("ws-1a2b3c"))),
+        Err(StoreError::InvalidId(_))
+    ));
 }

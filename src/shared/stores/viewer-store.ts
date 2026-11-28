@@ -249,11 +249,17 @@ import {
 } from "@/features/viewer/lib/workspace-order";
 import type { Heading } from "@/features/viewer/lib/note-headings";
 import {
+  groupFilesOwnRoots,
+  hydrateLayouts,
+  savedRoot,
+  saveLayout,
+} from "@/shared/stores/layout-store-client";
+import type { KitOp } from "@/shared/tiling/kit-op";
+import {
   type MosaicNode,
   type SavedPresetTree,
   type TilePlacementTarget,
   parseMosaicNode,
-  serializeMosaicNode,
   type SavedMosaicNode,
   seedTreeFromFlat,
   buildBalancedGrid,
@@ -901,6 +907,7 @@ function withoutTabGridCell(
   if (!saved || !leafWorkspaceIds(saved.root).includes(tabId)) return s.tabGridLayout;
   const { [key]: _pruned, ...rest } = s.tabGridLayout;
   const root = pruneLeaf(saved.root, tabId);
+  saveLayout({ kind: "tabGrid", workspaceKey: key }, root, { op: "close", leafId: tabId });
   return root?.kind === "split" ? { ...rest, [key]: { preset: saved.preset, root } } : rest;
 }
 
@@ -1249,6 +1256,8 @@ function moveWorkspaceTerminals(
       const { [fromKey]: _moved, ...rest } = st.tabGridLayout;
       return { tabGridLayout: { ...rest, [toKey]: gridSizes } };
     });
+    // The new key's group file holds the grid from now on (the tiles flag on).
+    saveLayout({ kind: "tabGrid", workspaceKey: toKey }, gridSizes.root);
   }
   for (const member of Object.values(s.terminalLayout.members)) {
     if (member.target.member.machineId !== "local") continue;
@@ -1871,6 +1880,22 @@ function restoredForegroundLayouts(saved: unknown): Record<string, ForegroundLay
   );
 }
 
+/** Layouts a prefs apply restored, each one's live root kept when the group files own the roots
+ *  (the tiles flag on): app-state then holds launch roots, never the ones shown. A layout the
+ *  prefs no longer hold stays gone. */
+function withLiveRoots<T extends { root: MosaicNode | null }>(
+  restored: Record<string, T>,
+  live: Record<string, T>,
+): Record<string, T> {
+  if (!groupFilesOwnRoots()) return restored;
+  return Object.fromEntries(
+    Object.entries(restored).map(([key, layout]) => [
+      key,
+      Object.hasOwn(live, key) ? { ...layout, root: live[key].root } : layout,
+    ]),
+  );
+}
+
 /** Every team's saved per-rail foreground layouts, restored. */
 function restoredForegroundLayoutsByRail(
   saved: unknown,
@@ -1883,30 +1908,27 @@ function restoredForegroundLayoutsByRail(
   );
 }
 
-/** The saved form of foreground layouts: every root's leaves carry both keys. */
-function savedForegroundLayouts(
-  layouts: Record<string, ForegroundLayout>,
-): Record<string, Omit<ForegroundLayout, "root"> & { root: SavedMosaicNode | null }> {
+/** Layouts in their saved form, foreground and tab-grid alike: every root's
+ *  leaves carry both keys, and a root of none saves as `null`. With the tiles
+ *  flag on, each root is the one `app-state.json` held at launch (`savedRoot`). */
+function savedLayouts<T extends { root: MosaicNode | null }>(
+  layouts: Record<string, T>,
+  slice: string,
+): Record<string, Omit<T, "root"> & { root: SavedMosaicNode | null }> {
   return Object.fromEntries(
-    Object.entries(layouts).map(([k, v]) => [k, { ...v, root: serializeMosaicNode(v.root) }]),
+    Object.entries(layouts).map(([k, v]) => [k, { ...v, root: savedRoot(slice, k, v.root) }]),
   );
 }
 
 /** Every team's per-rail foreground layouts, in their saved form. */
 function savedForegroundLayoutsByRail(
   byTeam: Record<string, Record<string, ForegroundLayout>>,
-): Record<string, ReturnType<typeof savedForegroundLayouts>> {
+): Record<string, ReturnType<typeof savedLayouts<ForegroundLayout>>> {
   return Object.fromEntries(
-    Object.entries(byTeam).map(([tk, byRail]) => [tk, savedForegroundLayouts(byRail)]),
-  );
-}
-
-/** The tab-grid layouts in their saved form: every leaf carries both keys. */
-function savedTabGridLayouts(
-  grids: Record<string, SavedPresetTree>,
-): Record<string, Omit<SavedPresetTree, "root"> & { root: SavedMosaicNode | null }> {
-  return Object.fromEntries(
-    Object.entries(grids).map(([k, v]) => [k, { ...v, root: serializeMosaicNode(v.root) }]),
+    Object.entries(byTeam).map(([tk, byRail]) => [
+      tk,
+      savedLayouts(byRail, `foregroundLayoutByRail\n${tk}`),
+    ]),
   );
 }
 
@@ -2106,6 +2128,30 @@ function foregroundSlotForRail(
  *  every foreground setter routes through. */
 export function activeForegroundSlot(state: ForegroundSlotState, teamKey: string): ForegroundSlot {
   return foregroundSlotForRail(state, teamKey, activeRailKey(state, teamKey));
+}
+
+/** Saves the arrangement `teamKey`'s active foreground shows to its group file, made by
+ *  `gesture` (the tiles flag on; `layout-store-client.ts`). */
+function saveActiveForeground(state: ForegroundSlotState, teamKey: string, gesture?: KitOp) {
+  const slot = activeForegroundSlot(state, teamKey);
+  saveLayout(
+    { kind: "foreground", teamKey, railKey: activeRailKey(state, teamKey) },
+    effectiveMosaicRoot(defaultForegroundLayout(slot.layout), slot.tileIds),
+    gesture,
+  );
+}
+
+/** Saves each foreground slot `teamKey` holds, flat and per rail, to its group file. */
+function saveForegroundSlots(state: ForegroundSlotState, teamKey: string) {
+  const rails = Object.keys(state.foregroundLayoutByRail[teamKey] ?? {});
+  const held = state.foregroundLayout[teamKey] === undefined ? rails : [null, ...rails];
+  for (const railKey of held) {
+    const slot = foregroundSlotForRail(state, teamKey, railKey);
+    saveLayout(
+      { kind: "foreground", teamKey, railKey },
+      effectiveMosaicRoot(defaultForegroundLayout(slot.layout), slot.tileIds),
+    );
+  }
 }
 
 /** SW-EW-40: rebuild the per-team rail-key index from the SAME grouping the tray
@@ -6164,7 +6210,7 @@ function serializedViewerPrefs(state: ViewerState): Record<string, unknown> {
     agentsPaneHiddenTeams,
     agentsWorkspaceFilter,
     // Saved with both leaf keys, so a build that reads only `workspaceId` still opens it.
-    foregroundLayout: savedForegroundLayouts(foregroundLayout),
+    foregroundLayout: savedLayouts(foregroundLayout, "foregroundLayout"),
     // SW-EW-40: persist the per-rail foreground arrangement (railKeyByWorkspaceId
     // is runtime-only — a pure tree derivation — so it is NOT serialized here,
     // like selectedEpicDirName).
@@ -6206,7 +6252,7 @@ function serializedViewerPrefs(state: ViewerState): Record<string, unknown> {
     // Remote tab focus belongs to this viewer; local focus comes from its host.
     terminalViewerFocus: state.terminalLayout.focus ?? {},
     // The sizes each workspace's tab grid was dragged to (this viewer's own).
-    terminalTabGridSizes: savedTabGridLayouts(state.tabGridLayout),
+    terminalTabGridSizes: savedLayouts(state.tabGridLayout, "tabGridLayout"),
     statusNavExpandedPaths,
     settings,
     pipelineScope,
@@ -7914,6 +7960,7 @@ const viewerStore: StateCreator<ViewerState> = (set, get) => ({
       return slot.write({ ...base, root: sized });
     });
     get().persistState();
+    saveActiveForeground(get(), teamKey, { op: "resize", path, sizes });
   },
 
   placeWorkspaceTile: (teamKey, workspaceId, target, opts) => {
@@ -7923,6 +7970,7 @@ const viewerStore: StateCreator<ViewerState> = (set, get) => ({
       get().switchWorkspace(teamKey, workspaceId);
       return;
     }
+    let gesture: KitOp | undefined;
     set((s) => {
       // SW-EW-40: operate on the active foreground slot (flat, or the selected
       // rail's slot in grouped mode) over its mode-aware tile set.
@@ -7937,6 +7985,23 @@ const viewerStore: StateCreator<ViewerState> = (set, get) => ({
       const nextRoot = onScreen
         ? moveLeaf(current, workspaceId, target)
         : splitAt(current, target.targetWorkspaceId, target.axis, target.side, workspaceId);
+      gesture = onScreen
+        ? {
+            op: "move",
+            leafId: workspaceId,
+            target: {
+              targetWorkspaceId: target.targetWorkspaceId,
+              axis: target.axis,
+              side: target.side,
+            },
+          }
+        : {
+            op: "splitAt",
+            targetLeafId: target.targetWorkspaceId,
+            axis: target.axis,
+            side: target.side,
+            leafId: workspaceId,
+          };
       // No structural change (e.g. a tile dropped on its OWN edge) → don't flip
       // the preset to `custom` or leave expanded for a no-op (the pure tree ops
       // return the same reference unchanged).
@@ -7949,6 +8014,7 @@ const viewerStore: StateCreator<ViewerState> = (set, get) => ({
       };
     });
     get().persistState();
+    if (gesture) saveActiveForeground(get(), teamKey, gesture);
   },
 
   replaceFocusedLeafWorkspace: (teamKey, incomingWorkspaceId, opts) => {
@@ -8021,6 +8087,8 @@ const viewerStore: StateCreator<ViewerState> = (set, get) => ({
         ...slot.write({ ...base, root: nextRoot, preset: "custom" }),
       };
     });
+
+    saveActiveForeground(get(), teamKey, { op: "replace", from: F, to: incomingWorkspaceId });
 
     // Watcher lifecycle: release F's surface watch, (re)open incoming's — mirrors
     // the close + reopen paths. F's terminals keep running.
@@ -8230,16 +8298,11 @@ const viewerStore: StateCreator<ViewerState> = (set, get) => ({
 
   setTabGridSizes: (teamKey, workspaceId, preset, root, path, sizes) => {
     if (teamKey === getActiveTeamKey()) beginContextNavigation();
-    set((s) => ({
-      tabGridLayout: {
-        ...s.tabGridLayout,
-        [selectWorkspaceKey(s, teamKey, workspaceId)]: {
-          preset,
-          root: setNodeSizes(root, path, sizes),
-        },
-      },
-    }));
+    const key = selectWorkspaceKey(get(), teamKey, workspaceId);
+    const sized = setNodeSizes(root, path, sizes);
+    set((s) => ({ tabGridLayout: { ...s.tabGridLayout, [key]: { preset, root: sized } } }));
     get().persistState();
+    saveLayout({ kind: "tabGrid", workspaceKey: key }, sized, { op: "resize", path, sizes });
   },
 
   setCliExpanded: (expanded) => {
@@ -8282,6 +8345,7 @@ const viewerStore: StateCreator<ViewerState> = (set, get) => ({
       };
     });
     get().persistState();
+    saveActiveForeground(get(), teamKey);
   },
 
   setEpicReposOpen: (workspaceId, open) => {
@@ -10293,6 +10357,9 @@ const viewerStore: StateCreator<ViewerState> = (set, get) => ({
         // to the new key — no bespoke rewrite needed (was four per-scalar rewrites).
       };
     });
+    // The team's foreground group files are keyed by team, so each slot is saved under the new key
+    // (the tiles flag on).
+    saveForegroundSlots(get(), newKey);
     // Decisive state (like closeTeam) — don't leave the re-key to the debounce.
     get().flushPersist();
   },
@@ -12937,6 +13004,8 @@ const viewerStore: StateCreator<ViewerState> = (set, get) => ({
         });
         // Tab-grid sizes only for workspaces that came back, open or minimized.
         set((st) => ({ tabGridLayout: tabGridsOfLiveWorkspaces(st) }));
+        // With the tiles flag on, each layout's group file wins over what was restored.
+        void hydrateLayouts(get(), set, data.viewer);
 
         // SW-WL-3 T1.3 / F-7: rebuild the (runtime-only) open-set from the
         // restored surfaces. Story workspaces were explicit user surfaces, so
@@ -13279,11 +13348,22 @@ export function applyOwnedViewerPrefs(viewer: Record<string, unknown>, reset = f
         ...Object.keys(focus),
       ]))
         viewerState.applyLayout({ kind: "focused", key: id, session: focus[id] ?? null });
-    } else if (key === "terminalTabGridSizes") patch.tabGridLayout = savedTabGrids(value);
-    else if (key === "foregroundLayout") patch.foregroundLayout = restoredForegroundLayouts(value);
-    else if (key === "foregroundLayoutByRail")
-      patch.foregroundLayoutByRail = restoredForegroundLayoutsByRail(value);
-    else if (key === "workspaces") {
+    } else if (key === "terminalTabGridSizes")
+      patch.tabGridLayout = withLiveRoots(savedTabGrids(value), viewerState.tabGridLayout);
+    else if (key === "foregroundLayout")
+      patch.foregroundLayout = withLiveRoots(
+        restoredForegroundLayouts(value),
+        viewerState.foregroundLayout,
+      );
+    else if (key === "foregroundLayoutByRail") {
+      const restored = restoredForegroundLayoutsByRail(value);
+      patch.foregroundLayoutByRail = Object.fromEntries(
+        Object.entries(restored).map(([team, rails]) => [
+          team,
+          withLiveRoots(rails, viewerState.foregroundLayoutByRail[team] ?? {}),
+        ]),
+      );
+    } else if (key === "workspaces") {
       patch.workspaces = Object.fromEntries(
         [
           ...new Set([...Object.keys(value as object), ...Object.keys(viewerState.workspaces)]),
