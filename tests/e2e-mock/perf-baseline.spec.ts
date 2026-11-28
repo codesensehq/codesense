@@ -519,28 +519,40 @@ const firstTile = (page: Page) =>
 
 const MIB = { B: 1 / 1024 ** 2, KB: 1 / 1024, MB: 1, GB: 1024 } as const;
 
-/**
- * Playwright WebKit's WebContent process: the largest by RSS of the WebContent binaries under its
- * `ms-playwright/webkit-*` cache (a spare or closed context's may run beside it), with `footprint`
- * read on it. Null when this isn't macOS; zero matches on macOS is a fault.
- */
-function webContentMemory() {
-  if (process.platform !== "darwin") return null;
-  const matches = execFileSync("ps", ["-axo", "pid=,rss=,command="], { encoding: "utf8" })
+/** The pids and RSS (KiB) of Playwright WebKit's WebContent processes, under its
+ *  `ms-playwright/webkit-*` cache. Empty when this isn't macOS. */
+function webContentProcesses() {
+  if (process.platform !== "darwin") return [];
+  return execFileSync("ps", ["-axo", "pid=,rss=,command="], { encoding: "utf8" })
     .split("\n")
     .map((line) => /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(line))
     .filter((m): m is RegExpExecArray => !!m)
     .filter((m) => /\/ms-playwright\/webkit-[^/]+\/.*com\.apple\.WebKit\.WebContent/.test(m[3]))
     .map((m) => ({ pid: m[1], rssKiB: Number(m[2]) }));
-  if (!matches.length) throw new Error("no WebContent process");
-  const top = matches.reduce((a, b) => (b.rssKiB > a.rssKiB ? b : a));
-  const text = execFileSync("footprint", [top.pid], { encoding: "utf8" });
+}
+
+/**
+ * The WebContent process of the page just opened: the one WebKit pid that is new since `known`,
+ * the pids listed before its browser context opened, with `footprint` read on it. Null when this
+ * isn't macOS; no new process, or more than one, is a fault, so another session's page on the
+ * same machine is never read as this one.
+ */
+function webContentMemory(known: Set<string>) {
+  if (process.platform !== "darwin") return null;
+  const fresh = webContentProcesses().filter((each) => !known.has(each.pid));
+  if (fresh.length !== 1) {
+    throw new Error(
+      `${fresh.length ? "ambiguous" : "no"} WebContent process: ${fresh.length} new since the context opened`,
+    );
+  }
+  const [only] = fresh;
+  const text = execFileSync("footprint", [only.pid], { encoding: "utf8" });
   const found = /Footprint:\s*([\d.]+)\s*(B|KB|MB|GB)\b/.exec(text);
-  if (!found) throw new Error(`footprint ${top.pid}: no Footprint line`);
+  if (!found) throw new Error(`footprint ${only.pid}: no Footprint line`);
   return {
-    rssMiB: top.rssKiB / 1024,
+    rssMiB: only.rssKiB / 1024,
     footprintMiB: Number(found[1]) * MIB[found[2] as keyof typeof MIB],
-    endState: `playwright-webkit-webcontent mock webcontent:${matches.length}`,
+    endState: "playwright-webkit-webcontent mock webcontent:1",
   };
 }
 
@@ -551,6 +563,7 @@ test.describe("perf baseline: 12 tiles and a 5,000-file nav (measurement)", () =
   test("tiles_12", async ({ browser }) => {
     test.setTimeout(30_000 + RUNS * 120_000);
     for (let run = 0; run < RUNS; run++) {
+      const known = new Set(webContentProcesses().map((each) => each.pid));
       const { context, page } = await freshPage(browser, "/?perf=tiles12", tilesReady);
       try {
         // Guard: the mosaic holds exactly the world's 12 tiles, each terminal drawn.
@@ -624,7 +637,7 @@ test.describe("perf baseline: 12 tiles and a 5,000-file nav (measurement)", () =
         const ends = (f: Frames) =>
           `frames:${f.frames} worst:${f.worst.toFixed(1)}ms idle:${idle.toFixed(1)}`;
         // Read before recording, so a memory fault records nothing for this run.
-        const memory = webContentMemory();
+        const memory = webContentMemory(known);
         record("fps_12_tiles_resize", "fps", fpsOf(resize), ends(resize));
         record("fps_12_tiles_scroll", "fps", fpsOf(scroll), ends(scroll));
         if (memory) {
