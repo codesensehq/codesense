@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 /** `main` opens a returned item in its origin team, without changing the active team. */
 import "@/test/prefs-state-fixture";
+import { toast } from "sonner";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/tauri/commands", () => ({
@@ -12,6 +13,7 @@ vi.mock("@/tauri/commands", () => ({
   windowFocusOwner: vi.fn().mockResolvedValue("sat-1"),
 }));
 
+import { logger } from "@/shared/lib/logger";
 import { getActiveTeamKey } from "@/shared/lib/team-key";
 import { useOrgStore } from "@/shared/stores/org-store";
 import { useViewerStore } from "@/shared/stores/viewer-store";
@@ -29,7 +31,12 @@ const team = (name: string) => ({ name, source_repos: [] });
 const tabs = (teamKey: string) =>
   (useViewerStore.getState().openTabs[teamKey] ?? []).map((t) => t.path);
 
+const notices = vi.spyOn(toast, "info").mockImplementation(() => "");
+const warns = vi.spyOn(logger, "warn").mockImplementation(() => {});
+
 beforeEach(() => {
+  notices.mockClear();
+  warns.mockClear();
   resetOwnerMapForTests();
   resetWaitingItemsForTests();
   useOrgStore.setState({
@@ -80,7 +87,7 @@ describe("items returned to main", () => {
     expect(tabs(ORIGIN)).toEqual([DOC]);
   });
 
-  it("skips an item whose kind is not a tab", () => {
+  it("skips a known item kind that is not a tab, with no notice", () => {
     openReturnedItems({ items: [{ kind: "tile", team: ORIGIN, id: "t-1" }], reason: "move" });
     expect(tabs(ORIGIN)).toEqual([]);
   });
@@ -109,6 +116,7 @@ describe("items returned to main", () => {
     openReturnedItems({ items: [KEY], reason: "move" });
     useOrgStore.setState({ orgs: [], discoveryComplete: true });
     expect(tabs(ORIGIN)).toEqual([]);
+    expect(notices.mock.calls).toEqual([["Closed 1 item of docs: the team was removed"]]);
     useOrgStore.setState({ orgs: ready, discoveryComplete: true });
     expect(tabs(ORIGIN)).toEqual([]);
   });
@@ -121,5 +129,76 @@ describe("items returned to main", () => {
     expect(tabs(ORIGIN)).toEqual([]);
     useOrgStore.setState({ orgs: ready, discoveryComplete: true });
     expect(tabs(ORIGIN)).toEqual([]);
+  });
+});
+
+const DOCS_B = itemKeyForTab(ORIGIN, { path: "/acme/teams/docs/b.md" });
+const GENERAL = itemKeyForTab(ACTIVE, { path: "/acme/teams/general/c.md" });
+const NEWER = { kind: "hologram", team: ORIGIN, id: "h-1" };
+
+describe("items returned by kind", () => {
+  it("opens no item of an unknown kind and posts one notice for all of them", () => {
+    openReturnedItems({
+      items: [NEWER, { ...NEWER, id: "h-2" }, KEY],
+      reason: "close",
+    });
+    expect(tabs(ORIGIN)).toEqual([DOC]);
+    expect(notices.mock.calls).toEqual([["Couldn't reopen 2 items from a newer version"]]);
+  });
+
+  it("posts no notice for an unknown kind a move brings back, and opens nothing", () => {
+    openReturnedItems({ items: [NEWER], reason: "move" });
+    expect(tabs(ORIGIN)).toEqual([]);
+    expect(notices).not.toHaveBeenCalled();
+  });
+
+  it("opens a tab for every reason a window goes away", () => {
+    for (const reason of ["close", "crash", "boot", "failed_restore", "profile_switch"] as const) {
+      useViewerStore.setState({ openTabs: {}, activeTab: {} });
+      openReturnedItems({ items: [KEY], reason });
+      expect(tabs(ORIGIN), reason).toEqual([DOC]);
+    }
+    expect(notices).not.toHaveBeenCalled();
+  });
+});
+
+describe("items of a removed team", () => {
+  it("opens nothing and posts one notice for the team", () => {
+    openReturnedItems({
+      items: [KEY, DOCS_B, { kind: "workspace", team: ORIGIN, id: "ws-1" }],
+      reason: "removed_team",
+    });
+    expect(tabs(ORIGIN)).toEqual([]);
+    expect(notices.mock.calls).toEqual([["Closed 3 items of docs: the team was removed"]]);
+  });
+
+  it("posts one notice per team, each with its own count", () => {
+    openReturnedItems({ items: [KEY, GENERAL, DOCS_B], reason: "removed_team" });
+    expect(tabs(ORIGIN)).toEqual([]);
+    expect(tabs(ACTIVE)).toEqual(["/acme/a.md"]);
+    expect(notices.mock.calls).toEqual([
+      ["Closed 2 items of docs: the team was removed"],
+      ["Closed 1 item of general: the team was removed"],
+    ]);
+  });
+
+  it.each(["boot", "failed_restore"] as const)(
+    "a %s return of an unavailable team opens nothing and posts one notice, with no warn-only drop",
+    (reason) => {
+      const [org] = useOrgStore.getState().orgs;
+      useOrgStore.setState({ orgs: [{ ...org!, teams: [team("general")] }] });
+      openReturnedItems({ items: [KEY, DOCS_B], reason });
+      expect(tabs(ORIGIN)).toEqual([]);
+      expect(notices.mock.calls).toEqual([["Closed 2 items of docs: the team was removed"]]);
+      expect(warns).not.toHaveBeenCalled();
+    },
+  );
+
+  it("a boot return to an org with no teams opens nothing and posts one notice", () => {
+    const [org] = useOrgStore.getState().orgs;
+    useOrgStore.setState({ orgs: [{ ...org!, teams: [] }] });
+    openReturnedItems({ items: [KEY], reason: "boot" });
+    expect(tabs(ORIGIN)).toEqual([]);
+    expect(notices.mock.calls).toEqual([["Closed 1 item of docs: the team was removed"]]);
   });
 });

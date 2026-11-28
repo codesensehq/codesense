@@ -73,9 +73,21 @@ export interface MoveAborted {
   reason: AbortReason;
 }
 
+/** Why items came back to `main`: a window going away (`returns.rs` `ReturnReason`), or a
+ *  move that brought one back (`move`). */
+type ReturnReason =
+  | "close"
+  | "crash"
+  | "boot"
+  | "failed_restore"
+  | "profile_switch"
+  | "removed_team"
+  | "repo_removed"
+  | "move";
+
 export interface ItemsReturned {
   items: ItemKey[];
-  reason: string;
+  reason: ReturnReason;
 }
 
 export interface HandOffAck {
