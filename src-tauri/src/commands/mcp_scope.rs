@@ -1787,12 +1787,21 @@ pub(crate) fn with_bridge_server(
     let mut entry = scope.bridge_entry.render(bridge, session_id);
     if let (Some(key), Some(session)) = (scope.bridge_entry.explicit_environment_key(), session_id)
     {
-        entry[key] = serde_json::json!({
-            "CODESENSE_MCP_SOCK": crate::mcp::mcp_socket_path(),
-            "CODESENSE_TAB_SESSION_ID": session,
-        });
+        entry[key] = bridge_environment(crate::mcp::mcp_socket_path().as_deref(), session);
     }
     servers.insert(scope.bridge_id.clone(), entry);
+}
+
+/// The variables a bridge entry names explicitly: the calling tab's session, and the
+/// MCP socket that routes it to this instance, which is left out where there is none
+/// (the MCP bridge is off on this OS).
+fn bridge_environment(socket: Option<&Path>, session: &str) -> Value {
+    let mut environment = serde_json::Map::new();
+    if let Some(socket) = socket {
+        environment.insert("CODESENSE_MCP_SOCK".into(), serde_json::json!(socket));
+    }
+    environment.insert(TAB_SESSION_ENV.into(), serde_json::json!(session));
+    Value::Object(environment)
 }
 
 /// The variable the bridge reads the calling tab's session from (`codesense-bridge`).
@@ -1927,8 +1936,7 @@ fn sweep_configs_in(
         let relay = path.join("local-relay.json");
         if relay.exists() {
             match codesense_host_proto::scoped_mcp::read_descriptor(&relay) {
-                Ok(descriptor)
-                    if std::os::unix::net::UnixStream::connect(&descriptor.socket).is_err() => {}
+                Ok(descriptor) if !crate::shared::local_endpoint::answers(&descriptor.socket) => {}
                 _ => continue,
             }
         }
@@ -1983,6 +1991,26 @@ mod tests {
     use super::*;
     use codesense_pty_core::agent_cli::ConfigFragmentFormat;
     use serde_json::json;
+
+    /// An agent's config routes its bridge to this instance's MCP socket only where
+    /// there is one: with the MCP bridge off, no `CODESENSE_MCP_SOCK` is written.
+    #[test]
+    fn the_bridge_environment_names_the_mcp_socket_only_where_there_is_one() {
+        let socket = Path::new("/home/me/.codesense/mcp.sock");
+        assert_eq!(
+            bridge_environment(Some(socket), "tab-1"),
+            json!({"CODESENSE_MCP_SOCK": socket, "CODESENSE_TAB_SESSION_ID": "tab-1"})
+        );
+        assert_eq!(
+            bridge_environment(None, "tab-1"),
+            json!({"CODESENSE_TAB_SESSION_ID": "tab-1"})
+        );
+        let live = bridge_environment(crate::mcp::mcp_socket_path().as_deref(), "tab-1");
+        assert_eq!(
+            live.get("CODESENSE_MCP_SOCK").is_some(),
+            cfg!(cap_mcp_bridge)
+        );
+    }
 
     /// The bridge (a separate binary crate) reads the tab session from its own copy of
     /// the variable name; a rename on either side would silently drop Codex's
@@ -3563,6 +3591,54 @@ mod tests {
             Some(Default::default())
         });
         assert!(root.join("live").exists());
+    }
+
+    /// A dead session's scope whose relay still answers belongs to another app's
+    /// live grant: the sweep leaves it. One whose relay is gone is reaped.
+    #[test]
+    fn the_startup_sweep_keeps_a_scope_whose_relay_still_answers() {
+        use codesense_host_proto::scoped_mcp::{self as wire, Descriptor};
+        let mut home = crate::routines::test_support::TempHome::new();
+        home.isolate_tmpdir();
+        let root = scope_root().unwrap();
+        // A short directory: macOS socket paths are short.
+        let sockets = tempfile::Builder::new()
+            .prefix("csr-")
+            .tempdir_in("/tmp")
+            .unwrap();
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let mut listeners = Vec::new();
+        for (session, live) in [("relay-live", true), ("relay-gone", false)] {
+            let path = write_scope_config(session, &canonical(), &[], &claude_scope()).unwrap();
+            let endpoint = codesense_platform::ipc::Endpoint::Ephemeral {
+                dir: sockets.path().to_path_buf(),
+                name: session.to_string(),
+            };
+            if live {
+                let _entered = runtime.enter();
+                listeners.push(codesense_platform::ipc::LocalListener::bind(&endpoint).unwrap());
+            }
+            let descriptor = Descriptor {
+                version: wire::VERSION,
+                socket: PathBuf::from(endpoint.to_wire().unwrap()),
+                capability: "a".repeat(64),
+            };
+            wire::write_descriptor(
+                &path.parent().unwrap().join("local-relay.json"),
+                &descriptor,
+            )
+            .unwrap();
+        }
+        let later = SystemTime::now() + Duration::from_secs(2 * 3600);
+        // Neither session is live: only the relay decides.
+        sweep_configs_in(&root, later, STALE_AGE, |_| Some(Default::default()));
+        assert!(
+            root.join("relay-live").exists(),
+            "a live relay's scope is kept"
+        );
+        assert!(!root.join("relay-gone").exists());
+        drop(listeners);
+        remove_scope_config("relay-live");
     }
 
     #[test]

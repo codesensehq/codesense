@@ -109,6 +109,17 @@ pub(super) fn is_alive(pid: u32) -> bool {
 
 /// SIGTERM to the one process `pid`.
 pub(super) fn terminate_pid(pid: u32) -> io::Result<()> {
+    signal_pid(pid, libc::SIGTERM)
+}
+
+pub(super) fn kill_pid(pid: u32) -> io::Result<()> {
+    signal_pid(pid, libc::SIGKILL)
+}
+
+/// Send `signal` to the one process `pid`. A pid above `i32::MAX` is refused:
+/// cast to `pid_t` it would be negative and name a group, or with -1 every
+/// process this user may signal.
+fn signal_pid(pid: u32, signal: libc::c_int) -> io::Result<()> {
     if pid > i32::MAX as u32 {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -116,11 +127,17 @@ pub(super) fn terminate_pid(pid: u32) -> io::Result<()> {
         ));
     }
     // SAFETY: kill only sends a signal; a positive pid names one process.
-    if unsafe { libc::kill(pid as i32, libc::SIGTERM) } == 0 {
+    if unsafe { libc::kill(pid as i32, signal) } == 0 {
         Ok(())
     } else {
         Err(io::Error::last_os_error())
     }
+}
+
+pub(super) fn is_job_control_stop(code: i64) -> bool {
+    [libc::SIGSTOP, libc::SIGTSTP, libc::SIGTTIN, libc::SIGTTOU]
+        .into_iter()
+        .any(|signal| code == i64::from(128 + signal))
 }
 
 pub(super) fn exited_unreaped(child: &Child) -> io::Result<bool> {

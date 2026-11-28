@@ -2047,10 +2047,11 @@ fn graceful_exit_cleanup() {
     attribution::facade::shutdown(&platform_caps::Caps::live());
     // SS-FU-17 AC-3: exit cleans ONLY codesense's own runtime artifacts — never materialized
     // files, exclude blocks, or lockfiles. See [`app_exit_cleanup`].
-    let mcp_socket = mcp::mcp_socket_path();
+    // No MCP socket where the bridge is off: nothing to remove.
+    let mcp_socket = mcp::mcp_socket_path()
+        .filter(|socket| mcp::mcp_socket_bound_here(socket));
     app_exit_cleanup(
-        &mcp_socket,
-        mcp::mcp_socket_bound_here(&mcp_socket),
+        mcp_socket.as_deref(),
         &http::http_port_file_path(),
         std::env::var("CODESENSE_DISABLE_HTTP").is_err(),
     );
@@ -2108,16 +2109,15 @@ fn backstop_kill(app: &tauri::AppHandle) {
 /// inside) so the guard test can exercise the file-cleanup paths without
 /// touching the real HTTP registry or mutating process-global env.
 ///
-/// `mcp_socket` is removed only when `mcp_socket_ours`: an instance that found
-/// another's socket live never bound it, and removing it would cut every agent
-/// off from the instance still running.
+/// `mcp_socket_ours` is the MCP socket only when this process bound it: an
+/// instance that found another's socket live never bound it, and removing it
+/// would cut every agent off from the instance still running.
 fn app_exit_cleanup(
-    mcp_socket: &std::path::Path,
-    mcp_socket_ours: bool,
+    mcp_socket_ours: Option<&std::path::Path>,
     http_port_file: &std::path::Path,
     http_enabled: bool,
 ) {
-    if mcp_socket_ours && mcp_socket.exists() {
+    if let Some(mcp_socket) = mcp_socket_ours.filter(|socket| socket.exists()) {
         let _ = std::fs::remove_file(mcp_socket);
         log::info!(target: "mcp", "Cleaned up MCP socket: {:?}", mcp_socket);
     }
@@ -2305,7 +2305,7 @@ mod exit_guard_tests {
         fs::write(&port_file, b"54321").unwrap();
 
         // http_enabled=false → skip the real HTTP registry deregister.
-        app_exit_cleanup(&socket, true, &port_file, false);
+        app_exit_cleanup(Some(&socket), &port_file, false);
 
         // Runtime artifacts cleaned…
         assert!(!socket.exists(), "MCP socket should be cleaned at exit");
@@ -2337,7 +2337,7 @@ mod exit_guard_tests {
         fs::write(&socket, b"").unwrap();
         let port_file = tmp.path().join("http.port");
 
-        app_exit_cleanup(&socket, false, &port_file, false);
+        app_exit_cleanup(None, &port_file, false);
 
         assert!(
             socket.exists(),

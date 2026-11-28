@@ -6,6 +6,7 @@ pub mod git_util;
 pub(crate) mod hash;
 pub mod invoke_stats;
 pub mod json_io;
+pub(crate) mod local_endpoint;
 pub mod lock_ext;
 pub(crate) mod opener;
 pub use codesense_host_proto::machine_wording;

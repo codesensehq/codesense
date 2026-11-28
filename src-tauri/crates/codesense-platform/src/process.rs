@@ -278,6 +278,26 @@ pub fn terminate_pid(pid: Pid) -> io::Result<()> {
     sys::terminate_pid(pid.0)
 }
 
+/// Kill the one process `pid`, never its group or what it started: SIGKILL
+/// on unix, `TerminateProcess` on Windows. Pid 0 is refused, and on unix a pid
+/// above `i32::MAX`, as by [`terminate_pid`].
+pub fn kill_pid(pid: Pid) -> io::Result<()> {
+    if pid.0 == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "pid 0 names no single process",
+        ));
+    }
+    sys::kill_pid(pid.0)
+}
+
+/// Whether a shell's exit `code` reports a job-control stop rather than an
+/// exit: on unix 128 plus `SIGSTOP`, `SIGTSTP`, `SIGTTIN` or `SIGTTOU`, as a
+/// shell reports a stopped job. Never on Windows, which has no such stops.
+pub fn is_job_control_stop(code: i64) -> bool {
+    sys::is_job_control_stop(code)
+}
+
 /// Whether `child` has exited, without reaping it: until it is reaped its pid
 /// (and the group it leads) cannot be reused, so its group can still be
 /// signalled safely. Unix: `waitid` with `WNOWAIT`. Windows: whether its

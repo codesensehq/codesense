@@ -586,8 +586,42 @@ fn clear_status_socket_if_current(inner: &AgentUsageInner, failed_path: &std::pa
     }
 }
 
+/// The bound status-line receiver: each call waits up to a second for the next
+/// datagram and returns its length.
+type StatusReceiver = Box<dyn FnMut(&mut [u8]) -> std::io::Result<usize> + Send>;
+
+/// Make the owner-only `runtime` directory and bind the status-line datagram
+/// socket in it: its path and its receiver.
+#[cfg(unix)]
+fn bind_status_receiver(
+    runtime: &std::path::Path,
+) -> Result<(std::path::PathBuf, StatusReceiver), String> {
+    use std::os::unix::net::UnixDatagram;
+    std::fs::create_dir_all(runtime).map_err(|e| e.to_string())?;
+    codesense_platform::fs::set_owner_only(runtime).map_err(|e| e.to_string())?;
+    let socket_path = std::path::Path::join(runtime, "status-line.sock");
+    let _ = std::fs::remove_file(&socket_path);
+    let socket = UnixDatagram::bind(&socket_path).map_err(|e| e.to_string())?;
+    UnixDatagram::set_read_timeout(&socket, Some(std::time::Duration::from_secs(1)))
+        .map_err(|e| e.to_string())?;
+    Ok((
+        socket_path,
+        Box::new(move |buffer: &mut [u8]| UnixDatagram::recv(&socket, buffer)),
+    ))
+}
+
+/// No status-line receiver here: nothing is made, and registering is refused.
+/// Status-line usage on this OS is a later port.
+#[cfg(not(unix))]
+fn bind_status_receiver(
+    _runtime: &std::path::Path,
+) -> Result<(std::path::PathBuf, StatusReceiver), String> {
+    Err("status-line usage is not available on this OS".to_string())
+}
+
 /// Register an account whose CLI reports usage on its status line with the single
-/// per-process datagram receiver.
+/// per-process datagram receiver. Refused, with nothing made or registered, on an
+/// OS without the receiver (Windows), so no status-line wrapper is installed there.
 /// The returned capability and socket path stay backend/provider-home only.
 pub fn register_status_line(
     app: &AppHandle,
@@ -595,38 +629,36 @@ pub fn register_status_line(
     account_id: &str,
     provider: AgentProvider,
 ) -> Result<(std::path::PathBuf, String), String> {
-    use std::os::unix::net::UnixDatagram;
     if !matches!(usage_of(provider), Usage::StatusLine { .. }) {
         return Err("this account's CLI reports no usage on a status line".into());
     }
     let state = app.state::<AgentUsageState>();
+    let cached = state.inner.status_socket.lock().unwrap().clone();
+    let socket_path = match cached {
+        Some(path) => path,
+        None => start_status_receiver(app, &state.inner)?,
+    };
     let capability = crate::http::random_hex_secret();
     state.inner.status_routes.lock().unwrap().insert(
         capability.clone(),
         (github_user_id, account_id.to_string(), provider),
     );
-    if let Some(path) = state.inner.status_socket.lock().unwrap().clone() {
-        return Ok((path, capability));
-    }
+    Ok((socket_path, capability))
+}
+
+/// Bind this process's status-line receiver and start the thread that routes each
+/// datagram to its account: the socket's path.
+fn start_status_receiver(
+    app: &AppHandle,
+    inner: &Arc<AgentUsageInner>,
+) -> Result<std::path::PathBuf, String> {
     let runtime = codesense_home_dir()
         .ok_or("cannot resolve home directory")?
         .join("runtime")
         .join(format!("agent-usage-{}", std::process::id()));
-    std::fs::create_dir_all(&runtime).map_err(|e| e.to_string())?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&runtime, std::fs::Permissions::from_mode(0o700))
-            .map_err(|e| e.to_string())?;
-    }
-    let socket_path = runtime.join("status-line.sock");
-    let _ = std::fs::remove_file(&socket_path);
-    let socket = UnixDatagram::bind(&socket_path).map_err(|e| e.to_string())?;
-    socket
-        .set_read_timeout(Some(std::time::Duration::from_secs(1)))
-        .map_err(|e| e.to_string())?;
-    *state.inner.status_socket.lock().unwrap() = Some(socket_path.clone());
-    let inner = state.inner.clone();
+    let (socket_path, mut receive) = bind_status_receiver(&runtime)?;
+    *inner.status_socket.lock().unwrap() = Some(socket_path.clone());
+    let inner = Arc::clone(inner);
     let task_app = app.clone();
     let receiver_path = socket_path.clone();
     std::thread::Builder::new()
@@ -634,7 +666,7 @@ pub fn register_status_line(
         .spawn(move || {
             let mut buffer = vec![0u8; MAX_ADAPTER_MESSAGE + 128];
             loop {
-                let count = match socket.recv(&mut buffer) {
+                let count = match receive(&mut buffer) {
                     Ok(count) => count,
                     Err(error)
                         if matches!(
@@ -690,7 +722,7 @@ pub fn register_status_line(
             }
         })
         .map_err(|e| e.to_string())?;
-    Ok((socket_path, capability))
+    Ok(socket_path)
 }
 
 /// How CodeSense learns `provider`'s accounts' allowance windows: through the CLI its
@@ -844,6 +876,27 @@ fn current_epoch_seconds() -> i64 {
 #[cfg(test)]
 mod lifecycle_tests {
     use super::*;
+
+    /// Unix binds the status-line socket in an owner-only runtime directory;
+    /// elsewhere registering is refused before anything is made.
+    #[test]
+    fn status_line_usage_is_off_where_no_receiver_is_built() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = dir.path().join("agent-usage");
+        let bound = bind_status_receiver(&runtime);
+        if cfg!(unix) {
+            let (socket, _receive) = bound.ok().expect("a unix receiver binds");
+            assert_eq!(socket, runtime.join("status-line.sock"));
+            assert!(socket.exists());
+            assert!(crate::test_support::owner_only::is_owner_only(&runtime));
+        } else {
+            assert_eq!(
+                bound.err().as_deref(),
+                Some("status-line usage is not available on this OS")
+            );
+            assert!(!runtime.exists(), "nothing is made");
+        }
+    }
 
     fn queued_snapshot(sequence: u64) -> AgentUsageSnapshot {
         AgentUsageSnapshot {

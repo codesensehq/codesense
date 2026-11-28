@@ -26,7 +26,10 @@ impl std::fmt::Display for PrivateDirError {
 /// Create the directory `dir` owner-only (unix 0700; on Windows a protected
 /// owner-only DACL), its missing parents plainly, then make `dir` owner-only
 /// even when it already existed. Unlike `commands::paths::ensure_private_dir`,
-/// an existing directory is tightened.
+/// an existing directory is tightened. One already exactly as tightening leaves
+/// it is left as it is: on Windows rewriting its DACL would hand its
+/// inheritable entry down the whole tree under it again, on every call. On
+/// unix an owner-only mode missing owner bits (0500) is still repaired.
 pub(crate) fn create_or_tighten(dir: &Path) -> Result<(), PrivateDirError> {
     if let Some(parent) = dir
         .parent()
@@ -35,7 +38,19 @@ pub(crate) fn create_or_tighten(dir: &Path) -> Result<(), PrivateDirError> {
         std::fs::create_dir_all(parent).map_err(PrivateDirError::Create)?;
     }
     codesense_platform::fs::create_dir_owner_only(dir).map_err(PrivateDirError::Create)?;
+    if already_owner_only(dir) {
+        return Ok(());
+    }
     codesense_platform::fs::set_owner_only(dir).map_err(PrivateDirError::Tighten)
+}
+
+/// Whether `dir` itself, read through one handle opened without following a
+/// link, is already exactly owner-only. One that cannot be opened or checked
+/// is not, so it is tightened, and a link is refused there.
+fn already_owner_only(dir: &Path) -> bool {
+    codesense_platform::fs::open_nofollow(std::fs::OpenOptions::new().read(true), dir)
+        .and_then(|opened| codesense_platform::fs::is_exactly_owner_only(&opened))
+        .unwrap_or(false)
 }
 
 #[cfg(test)]
@@ -58,6 +73,56 @@ mod tests {
         assert!(matches!(
             create_or_tighten(&file),
             Err(PrivateDirError::Create(_))
+        ));
+    }
+
+    #[test]
+    fn an_owner_only_directory_is_left_as_it_is() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("private");
+        create_or_tighten(&dir).unwrap();
+        let before = codesense_platform::fs::change_stamp(&dir).unwrap();
+        // Past the file system's time granularity, so a rewrite would show.
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        create_or_tighten(&dir).unwrap();
+        assert_eq!(
+            codesense_platform::fs::change_stamp(&dir).unwrap(),
+            before,
+            "an owner-only directory was rewritten"
+        );
+        assert!(is_owner_only(&dir));
+    }
+
+    /// An owner-only directory missing owner bits is repaired to the full
+    /// owner mode, not left as it is.
+    #[cfg(unix)]
+    #[test]
+    fn an_owner_only_directory_missing_owner_bits_is_repaired() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        for mode in [0o500, 0o300, 0o000] {
+            let dir = root.path().join(format!("private-{mode:o}"));
+            create_or_tighten(&dir).unwrap();
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(mode)).unwrap();
+            create_or_tighten(&dir).unwrap();
+            let mode = std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o700);
+        }
+    }
+
+    /// The owner-only check never follows a link: a link to an owner-only
+    /// directory is still refused, not taken for it.
+    #[cfg(unix)]
+    #[test]
+    fn a_link_to_an_owner_only_directory_is_refused() {
+        let root = tempfile::tempdir().unwrap();
+        let target = root.path().join("target");
+        create_or_tighten(&target).unwrap();
+        let link = root.path().join("link");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        assert!(matches!(
+            create_or_tighten(&link),
+            Err(PrivateDirError::Tighten(_))
         ));
     }
 }

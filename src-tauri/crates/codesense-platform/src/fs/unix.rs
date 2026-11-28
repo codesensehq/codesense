@@ -23,6 +23,12 @@ fn owned(meta: &Metadata) -> bool {
     meta.uid() == unsafe { libc::geteuid() }
 }
 
+pub(super) fn is_exactly_owner_only(file: &File) -> io::Result<bool> {
+    let meta = file.metadata()?;
+    let mode = if meta.is_dir() { 0o700 } else { 0o600 };
+    Ok(owned(&meta) && meta.mode() & 0o7777 == mode)
+}
+
 pub(super) fn is_owner_only(file: &File) -> io::Result<bool> {
     let meta = file.metadata()?;
     Ok(owned(&meta) && meta.mode() & 0o077 == 0)

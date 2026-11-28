@@ -791,15 +791,13 @@ impl HistorySource {
                 .env("GIT_CONFIG_GLOBAL", "/dev/null")
                 .env("GIT_CONFIG_NOSYSTEM", "1");
         }
-        {
-            use std::os::unix::process::CommandExt;
-            command.process_group(0);
-        }
-        let mut child = command
+        // The root of a tree (its own process group on unix), with no console window on
+        // Windows.
+        command
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
+            .stderr(Stdio::piped());
+        let mut tree = codesense_platform::process::ProcessTree::spawn_hidden(&mut command)
             .map_err(|_| FETCH_FAILED)?;
         // A process that escaped the group (an ssh control master) may hold a pipe open, so
         // reads are collected through channels with a bound, never joined.
@@ -815,27 +813,31 @@ impl HistorySource {
             });
             rx
         };
-        let stdout = read(child.stdout.take().map(|p| Box::new(p) as _));
-        let stderr = read(child.stderr.take().map(|p| Box::new(p) as _));
+        let stdout = read(tree.child().stdout.take().map(|p| Box::new(p) as _));
+        let stderr = read(tree.child().stderr.take().map(|p| Box::new(p) as _));
         let status = loop {
-            match child.try_wait() {
+            // A normal exit leaves what the root started (an ssh control master) running.
+            match tree.try_wait_leaving_rest() {
                 Ok(Some(status)) => break Some(status),
                 Ok(None) if Instant::now() < deadline => {
                     std::thread::sleep(Duration::from_millis(20))
                 }
-                _ => {
-                    // The whole group: a remote helper or ssh must not outlive the bound. Ask it
-                    // to stop, then kill what is left after a short grace.
-                    let group = -(std::process::Child::id(&child) as i32);
-                    unsafe { libc::kill(group, libc::SIGTERM) };
+                Ok(None) => {
+                    // The whole tree: a remote helper or ssh must not outlive the bound. Ask it
+                    // to stop, then kill what is left after a short grace. A root that exits
+                    // during the grace takes the rest of its tree with it at once.
+                    let _ = codesense_platform::process::terminate(&tree);
                     let grace = Instant::now() + STOP_GRACE;
-                    while Instant::now() < grace && matches!(child.try_wait(), Ok(None)) {
+                    while Instant::now() < grace && matches!(tree.try_wait(), Ok(None)) {
                         std::thread::sleep(Duration::from_millis(20));
                     }
-                    unsafe { libc::kill(group, libc::SIGKILL) };
-                    let _ = child.wait();
+                    let _ = codesense_platform::process::kill_hard(&tree);
+                    let _ = tree.wait();
                     break None;
                 }
+                // The root's exit cannot be read: it may be reaped and its pid reused, so
+                // the tree signals nothing more.
+                Err(_) => break None,
             }
         };
         let collect = |rx: std::sync::mpsc::Receiver<String>| {

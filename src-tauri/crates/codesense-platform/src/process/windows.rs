@@ -294,6 +294,17 @@ pub(super) fn terminate_pid(pid: u32) -> io::Result<()> {
     Ok(())
 }
 
+/// Windows has no gentler stop for a single process: the same as
+/// [`terminate_pid`].
+pub(super) fn kill_pid(pid: u32) -> io::Result<()> {
+    terminate_pid(pid)
+}
+
+/// Windows has no job-control stops.
+pub(super) fn is_job_control_stop(_code: i64) -> bool {
+    false
+}
+
 pub(super) fn exited_unreaped(child: &Child) -> io::Result<bool> {
     // SAFETY: `child` owns its open process handle; a zero timeout only polls.
     match unsafe { WaitForSingleObject(child.as_raw_handle(), 0) } {

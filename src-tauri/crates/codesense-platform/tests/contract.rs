@@ -18,23 +18,23 @@ use codesense_platform::dirs::{codesense_home, lock_dir};
 use codesense_platform::fs::{
     atomic_replace, available_space, can_execute, canonicalize, change_stamp,
     create_dir_new_owner_only, create_dir_owner_only, create_new_owner_only, create_owner_only,
-    file_id, file_id_of, is_executable, is_owned_by_current_user, is_owner_only, is_text_busy,
-    is_world_writable, link_count, link_or_copy, lock_exclusive, open_nofollow,
-    open_nofollow_nonblocking, place_link, portable_name, read_exact_at, set_executable,
-    set_owner_only, sync_dir, try_lock_exclusive, try_lock_shared, unlock, Linked, NonPortableName,
-    Open, PlaceLink, Reach,
+    file_id, file_id_of, is_exactly_owner_only, is_executable, is_owned_by_current_user,
+    is_owner_only, is_text_busy, is_world_writable, link_count, link_or_copy, lock_exclusive,
+    open_nofollow, open_nofollow_nonblocking, place_link, portable_name, read_exact_at,
+    set_executable, set_owner_only, sync_dir, try_lock_exclusive, try_lock_shared, unlock, Linked,
+    NonPortableName, Open, PlaceLink, Reach,
 };
 use codesense_platform::ipc::{blocking, Endpoint, LocalListener, LocalStream};
 use codesense_platform::limits::{is_descriptor_exhaustion, is_open_file_limit};
 use codesense_platform::process::{
-    exited_unreaped, group_and_foreground, is_alive, kill_hard, terminate, terminate_pid,
-    ExitWaiter, Identity, Pid, ProcessGroup, ProcessTree,
+    exited_unreaped, group_and_foreground, is_alive, is_job_control_stop, kill_hard, kill_pid,
+    terminate, terminate_pid, ExitWaiter, Identity, Pid, ProcessGroup, ProcessTree,
 };
 use codesense_platform::testutil::{
     fifo_or_skip, make_group_writable, make_world_writable, pathext, relative_from_cwd,
     symlink_or_skip, without_hard_links, Anyone,
 };
-use codesense_platform::user::{current_user, hostname, login_shell};
+use codesense_platform::user::{current_uid, current_user, hostname, login_shell};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
 
 fn fixture(args: &[&str]) -> Command {
@@ -280,6 +280,52 @@ fn terminate_pid_stops_one_process_not_its_tree() {
 }
 
 #[test]
+fn kill_pid_ends_one_process_not_its_tree() {
+    let (mut tree, grandchild) = spawn_tree();
+    kill_pid(tree.pid()).unwrap();
+    // The root directly: the tree's own wait would end the rest.
+    let root_exited = || tree.child().try_wait().unwrap().is_some();
+    assert!(eventually(Duration::from_secs(5), root_exited));
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(is_alive(grandchild), "the grandchild was killed too");
+}
+
+#[test]
+fn kill_pid_ends_a_process_that_ignores_terminate() {
+    let mut tree = ProcessTree::spawn(&mut fixture(&["ignore-terminate"])).unwrap();
+    assert_eq!(first_line(&mut tree), "ready");
+    kill_pid(tree.pid()).unwrap();
+    assert!(exits_within(&mut tree, Duration::from_secs(5)));
+}
+
+#[test]
+fn kill_pid_and_terminate_pid_refuse_a_pid_that_names_no_single_process() {
+    for refused in [kill_pid(Pid::from_raw(0)), terminate_pid(Pid::from_raw(0))] {
+        assert_eq!(refused.unwrap_err().kind(), ErrorKind::InvalidInput);
+    }
+    // Above `i32::MAX`, cast to a unix `pid_t`, a pid would name a group, or
+    // with -1 every process this user may signal.
+    for raw in [i32::MAX as u32 + 1, u32::MAX] {
+        for refused in [
+            kill_pid(Pid::from_raw(raw)),
+            terminate_pid(Pid::from_raw(raw)),
+        ] {
+            expect_out_of_range_pid_refused(refused);
+        }
+    }
+}
+
+#[test]
+fn a_job_control_stop_is_told_from_an_exit() {
+    for code in [-1, 0, 1, 2, 126, 127, 128, 130, 137, 143, 255] {
+        assert!(!is_job_control_stop(code), "{code}");
+    }
+    for code in expect_job_control_stop_codes() {
+        assert!(is_job_control_stop(code), "{code}");
+    }
+}
+
+#[test]
 fn an_exit_is_seen_without_reaping() {
     let mut child = fixture(&["sleep"]).spawn().unwrap();
     assert!(!exited_unreaped(&child).unwrap());
@@ -473,6 +519,11 @@ fn current_user_is_stable() {
 }
 
 #[test]
+fn current_uid_is_the_real_uid() {
+    expect_current_uid(current_uid());
+}
+
+#[test]
 fn home_is_dot_codesense() {
     let home = std::env::var_os(expect_home_variable()).expect("the home variable is set");
     assert_eq!(
@@ -528,6 +579,26 @@ fn set_owner_only_denies_others() {
         expect_owner_only_mode(path);
     }
     assert_eq!(std::fs::read_to_string(&file).unwrap(), "secret");
+}
+
+#[test]
+fn only_what_set_owner_only_leaves_is_exactly_owner_only() {
+    let dir = tempfile::tempdir().unwrap();
+    let private = dir.path().join("private");
+    create_dir_owner_only(&private).unwrap();
+    let exactly = |path: &Path| {
+        let opened = open_nofollow(OpenOptions::new().read(true), path).unwrap();
+        is_exactly_owner_only(&opened).unwrap()
+    };
+    assert!(exactly(&private));
+    expect_fewer_owner_bits_not_exact(&private);
+    set_owner_only(&private).unwrap();
+    assert!(exactly(&private));
+    make_group_writable(&private);
+    assert!(!exactly(&private), "a shared directory");
+    let file = dir.path().join("secret");
+    drop(create_new_owner_only(&file).unwrap());
+    assert!(exactly(&file));
 }
 
 #[test]
@@ -1212,6 +1283,90 @@ fn a_blocking_read_gets_what_was_written_before_the_other_end_closed() {
     assert_eq!(heard, b"last words");
 }
 
+/// Each end reads on one clone while it writes on another, both at once and
+/// more than the pipe buffers between them hold: if a read and a write on
+/// clones of one stream ran one after the other, neither end would drain.
+#[test]
+fn clones_read_and_write_at_the_same_time() {
+    const LEN: usize = 4 * 1024 * 1024;
+    let dir = tempfile::tempdir().unwrap();
+    let (client, server) = blocking_pair(&ephemeral(dir.path(), "duplex"));
+    let (done, finished) = mpsc::channel();
+    for (end, byte) in [(client, b'c'), (server, b's')] {
+        let mut reader = end.try_clone().unwrap();
+        let mut writer = end;
+        reader.set_read_timeout(Some(CONNECT_LIMIT)).unwrap();
+        let sent = done.clone();
+        std::thread::spawn(move || {
+            // Dropping this clone leaves the stream open: the reader holds it.
+            writer.write_all(&vec![byte; LEN]).unwrap();
+            let _ = sent.send(());
+        });
+        let read = done.clone();
+        std::thread::spawn(move || {
+            let mut heard = vec![0; LEN];
+            reader.read_exact(&mut heard).unwrap();
+            assert!(
+                heard.iter().all(|&b| b != byte),
+                "an end read its own bytes"
+            );
+            let _ = read.send(());
+        });
+    }
+    for _ in 0..4 {
+        finished
+            .recv_timeout(Duration::from_secs(30))
+            .expect("both ends read and wrote at once");
+    }
+}
+
+#[test]
+fn a_shutdown_on_one_clone_ends_a_read_blocked_on_another() {
+    let dir = tempfile::tempdir().unwrap();
+    let (client, mut server) = blocking_pair(&ephemeral(dir.path(), "clones"));
+    let mut reader = client.try_clone().unwrap();
+    let mut writer = client.try_clone().unwrap();
+
+    // One clone reads while another writes, each reaching the other end.
+    server.write_all(b"ping").unwrap();
+    let mut heard = [0; 4];
+    reader.read_exact(&mut heard).unwrap();
+    assert_eq!(&heard, b"ping");
+    writer.write_all(b"pong").unwrap();
+    server.read_exact(&mut heard).unwrap();
+    assert_eq!(&heard, b"pong");
+
+    // A timeout set on the clone that reads bounds its read.
+    reader
+        .set_read_timeout(Some(Duration::from_millis(200)))
+        .unwrap();
+    let error = reader.read(&mut [0; 16]).unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::TimedOut, "{error}");
+    reader.set_read_timeout(None).unwrap();
+
+    // A read blocked with no timeout ends when another clone shuts down.
+    let (sent, received) = mpsc::channel();
+    let blocked = std::thread::spawn(move || {
+        let ended = reader.read(&mut [0; 16]);
+        let _ = sent.send(());
+        ended
+    });
+    std::thread::sleep(Duration::from_millis(200));
+    client.shutdown().unwrap();
+    received
+        .recv_timeout(Duration::from_secs(5))
+        .expect("the blocked read ended");
+    expect_read_after_shutdown(blocked.join().unwrap());
+
+    // Later reads and writes on any clone end too.
+    let mut later = client.try_clone().unwrap();
+    expect_read_after_shutdown(later.read(&mut [0; 16]));
+    assert!(
+        writer.write_all(b"after").is_err(),
+        "a write after shutdown"
+    );
+}
+
 #[test]
 fn peer_pid_is_the_client() {
     let dir = tempfile::tempdir().unwrap();
@@ -1744,6 +1899,80 @@ fn expect_user_id(id: &str) {
     #[cfg(windows)]
     {
         assert!(id.starts_with("S-1-5-"), "{id}");
+    }
+}
+
+/// An owner-only directory that grants its owner less than `set_owner_only`
+/// does is owner-only but not exactly as `set_owner_only` leaves it. Unix: mode
+/// 0500. Windows: a protected DACL whose one ACE grants the current user read
+/// and execute only (`icacls`).
+fn expect_fewer_owner_bits_not_exact(dir: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o500)).unwrap();
+    }
+    #[cfg(windows)]
+    {
+        let grant = format!("*{}:(OI)(CI)(RX)", current_user().unwrap());
+        let status = Command::new("icacls")
+            .arg(dir)
+            .args(["/inheritance:r", "/grant:r", &grant])
+            .stdout(Stdio::null())
+            .status()
+            .unwrap();
+        assert!(status.success(), "icacls: {status}");
+    }
+    let opened = open_nofollow(OpenOptions::new().read(true), dir).unwrap();
+    assert!(is_owner_only(&opened).unwrap());
+    assert!(!is_exactly_owner_only(&opened).unwrap());
+}
+
+/// Unix: the real uid; Windows names users by SID only, so none.
+fn expect_current_uid(uid: Option<u32>) {
+    #[cfg(unix)]
+    {
+        // SAFETY: getuid has no preconditions.
+        assert_eq!(uid, Some(unsafe { libc::getuid() }));
+    }
+    #[cfg(windows)]
+    {
+        assert_eq!(uid, None);
+    }
+}
+
+/// A pid above `i32::MAX`: refused before any signal on unix; on Windows no
+/// such process can be opened.
+fn expect_out_of_range_pid_refused(result: std::io::Result<()>) {
+    let error = result.unwrap_err();
+    if cfg!(unix) {
+        assert_eq!(error.kind(), ErrorKind::InvalidInput, "{error}");
+    }
+}
+
+/// The exit codes a shell reports for a stopped job: 128 plus `SIGSTOP`,
+/// `SIGTSTP`, `SIGTTIN` or `SIGTTOU` on unix; none on Windows.
+fn expect_job_control_stop_codes() -> Vec<i64> {
+    #[cfg(unix)]
+    {
+        [libc::SIGSTOP, libc::SIGTSTP, libc::SIGTTIN, libc::SIGTTOU]
+            .into_iter()
+            .map(|signal| i64::from(128 + signal))
+            .collect()
+    }
+    #[cfg(windows)]
+    {
+        Vec::new()
+    }
+}
+
+/// A read on a stream that was shut down: the end of the stream on unix
+/// (the socket's `shutdown`), [`ErrorKind::NotConnected`] on Windows.
+fn expect_read_after_shutdown(read: std::io::Result<usize>) {
+    if cfg!(unix) {
+        assert_eq!(read.unwrap(), 0);
+    } else {
+        assert_eq!(read.unwrap_err().kind(), ErrorKind::NotConnected);
     }
 }
 

@@ -25,12 +25,12 @@ use windows_sys::Win32::Security::Authorization::{
     GetSecurityInfo, SetNamedSecurityInfoW, SE_FILE_OBJECT,
 };
 use windows_sys::Win32::Security::{
-    EqualSid, GetAce, InitializeSecurityDescriptor, IsWellKnownSid, SetSecurityDescriptorControl,
-    SetSecurityDescriptorDacl, WinAuthenticatedUserSid, WinBuiltinUsersSid, WinWorldSid,
-    ACCESS_ALLOWED_ACE, ACE_FLAGS, ACE_HEADER, ACL, CONTAINER_INHERIT_ACE,
-    DACL_SECURITY_INFORMATION, INHERIT_ONLY_ACE, OBJECT_INHERIT_ACE, OWNER_SECURITY_INFORMATION,
-    PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID, SECURITY_ATTRIBUTES,
-    SECURITY_DESCRIPTOR, SE_DACL_PROTECTED,
+    EqualSid, GetAce, GetSecurityDescriptorControl, InitializeSecurityDescriptor, IsWellKnownSid,
+    SetSecurityDescriptorControl, SetSecurityDescriptorDacl, WinAuthenticatedUserSid,
+    WinBuiltinUsersSid, WinWorldSid, ACCESS_ALLOWED_ACE, ACE_FLAGS, ACE_HEADER, ACL,
+    CONTAINER_INHERIT_ACE, DACL_SECURITY_INFORMATION, INHERIT_ONLY_ACE, OBJECT_INHERIT_ACE,
+    OWNER_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID,
+    SECURITY_ATTRIBUTES, SECURITY_DESCRIPTOR, SE_DACL_PROTECTED,
 };
 use windows_sys::Win32::Storage::FileSystem::{
     CreateDirectoryW, CreateFileW, FileIdInfo, GetDiskFreeSpaceExW, GetFileInformationByHandle,
@@ -116,6 +116,20 @@ impl Security {
         })
     }
 
+    /// Whether the DACL is protected: it inherits nothing from the parent.
+    fn dacl_protected(&self) -> io::Result<bool> {
+        let mut control = 0;
+        let mut revision = 0;
+        // SAFETY: the descriptor is valid while `self` lives; the out
+        // pointers are writable.
+        if unsafe { GetSecurityDescriptorControl(self.descriptor, &mut control, &mut revision) }
+            == 0
+        {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(control & SE_DACL_PROTECTED != 0)
+    }
+
     /// Whether the owner is `user`'s token user or its default owner.
     fn owned_by(&self, user: &CurrentUser) -> bool {
         // SAFETY: the owner SID is null or points into the descriptor `self`
@@ -142,6 +156,45 @@ impl Drop for Security {
         // freed once, here.
         unsafe { LocalFree(self.descriptor) };
     }
+}
+
+/// Owned by the current user, with the protected DACL [`set_owner_only`]
+/// writes: one ACE granting the current user `FILE_ALL_ACCESS`, inherited by a
+/// directory's new entries. An owner-only DACL of another shape (less access,
+/// other inheritance, more ACEs, or not protected) is not exact.
+pub(super) fn is_exactly_owner_only(file: &File) -> io::Result<bool> {
+    let is_dir = file.metadata()?.is_dir();
+    let user = CurrentUser::read()?;
+    let security = Security::of(file)?;
+    if !security.owned_by(user) || !security.dacl_protected()? {
+        return Ok(false);
+    }
+    // SAFETY: `dacl` is null or points into the descriptor `security` holds;
+    // the SID is valid while `user` lives.
+    Ok(unsafe { is_owner_only_ace(security.dacl, user.sid(), inheritance(is_dir)) })
+}
+
+/// Whether `dacl` holds exactly the one ACE [`set_owner_only`] writes: it
+/// grants `sid` `FILE_ALL_ACCESS`, with the ACE flags `flags`.
+///
+/// # Safety
+///
+/// `dacl` is null or a valid ACL; `sid` is a valid SID.
+unsafe fn is_owner_only_ace(dacl: *const ACL, sid: PSID, flags: ACE_FLAGS) -> bool {
+    if dacl.is_null() || (*dacl).AceCount != 1 {
+        return false;
+    }
+    let mut ace: *mut c_void = std::ptr::null_mut();
+    if GetAce(dacl, 0, &mut ace) == 0 {
+        return false;
+    }
+    let header = &*ace.cast::<ACE_HEADER>();
+    if header.AceType != ACCESS_ALLOWED_ACE_TYPE || u32::from(header.AceFlags) != flags {
+        return false;
+    }
+    let allowed = &*ace.cast::<ACCESS_ALLOWED_ACE>();
+    allowed.Mask == FILE_ALL_ACCESS
+        && EqualSid(std::ptr::addr_of!(allowed.SidStart).cast_mut().cast(), sid) != 0
 }
 
 pub(super) fn is_owner_only(file: &File) -> io::Result<bool> {

@@ -858,7 +858,7 @@ fn restore_relay(
     let descriptor_path = dir.join("local-relay.json");
     let old = codesense_host_proto::scoped_mcp::read_descriptor(&descriptor_path)?;
     // A second app must not replace a relay that still owns the live grant.
-    if std::os::unix::net::UnixStream::connect(&old.socket).is_ok() {
+    if crate::shared::local_endpoint::answers(&old.socket) {
         return Ok(());
     }
     let identity = scope_identity(dir)?;
@@ -940,6 +940,36 @@ mod restart_tests {
         if fifo(&captured) {
             assert!(refused(root.path()).contains("must be private"));
         }
+    }
+
+    /// Another app's relay still answers at the descriptor's endpoint: restoring
+    /// leaves its descriptor, and the live grant behind it, alone.
+    #[tokio::test]
+    async fn a_relay_that_still_answers_is_left_alone() {
+        let root = tempfile::tempdir().unwrap();
+        let endpoint = codesense_platform::ipc::Endpoint::Ephemeral {
+            dir: root.path().to_path_buf(),
+            name: root
+                .path()
+                .file_name()
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .to_owned(),
+        };
+        let _live = codesense_platform::ipc::LocalListener::bind(&endpoint).unwrap();
+        let path = root.path().join("local-relay.json");
+        let descriptor = Descriptor {
+            version: wire::VERSION,
+            socket: std::path::PathBuf::from(endpoint.to_wire().unwrap()),
+            capability: "a".repeat(64),
+        };
+        wire::write_descriptor(&path, &descriptor).unwrap();
+        restore_relay(root.path(), std::sync::Arc::new(|| Ok::<(), String>(()))).unwrap();
+        assert_eq!(
+            wire::read_descriptor(&path).unwrap().capability,
+            "a".repeat(64)
+        );
     }
 
     #[tokio::test]

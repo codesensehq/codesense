@@ -5,13 +5,23 @@ use rmcp::transport::async_rw::AsyncRwTransport;
 use rmcp::transport::Transport;
 use rmcp::{RoleServer, ServerHandler, ServiceExt};
 use std::future::Future;
-use std::path::{Path, PathBuf};
+#[cfg(cap_mcp_bridge)]
+use std::path::Path;
+use std::path::PathBuf;
 use tokio::io::{AsyncRead, AsyncWrite};
+#[cfg(cap_mcp_bridge)]
 use tokio::net::UnixListener;
 
+#[cfg(cap_mcp_bridge)]
 use super::handler::CodesenseHandler;
 
+// The local MCP socket and its lock and modes exist only where the MCP bridge
+// does (`cap_mcp_bridge`). Elsewhere `start_mcp_server` binds nothing, and no
+// socket path is offered to agents; `serve_stream` serves the remote and
+// routine streams on every OS.
+
 /// Returns the socket path: ~/.codesense/mcp.sock
+#[cfg(cap_mcp_bridge)]
 fn socket_path() -> PathBuf {
     crate::commands::paths::codesense_home_dir()
         .expect("could not determine home directory")
@@ -19,81 +29,81 @@ fn socket_path() -> PathBuf {
 }
 
 /// Ensures ~/.codesense/ exists with 0700 permissions.
+#[cfg(cap_mcp_bridge)]
 fn ensure_socket_dir(path: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
     let dir = path.parent().expect("socket path must have parent");
     if !dir.exists() {
         std::fs::create_dir_all(dir)?;
     }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
-    }
+    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
     Ok(())
 }
 
 /// Detects whether an existing socket file is stale (no process listening)
 /// or live (another CodeSense instance).
+#[cfg(cap_mcp_bridge)]
 fn handle_existing_socket(path: &Path) -> std::io::Result<()> {
     if !path.exists() {
         return Ok(());
     }
-    match std::os::unix::net::UnixStream::connect(path) {
-        Ok(_) => Err(std::io::Error::new(
+    if crate::shared::local_endpoint::answers(path) {
+        return Err(std::io::Error::new(
             std::io::ErrorKind::AddrInUse,
             "Another CodeSense instance is already running (MCP socket is live)",
-        )),
-        Err(_) => {
-            log::info!(target: "mcp", "Removing stale socket file: {:?}", path);
-            std::fs::remove_file(path)?;
-            Ok(())
-        }
+        ));
     }
+    log::info!(target: "mcp", "Removing stale socket file: {:?}", path);
+    std::fs::remove_file(path)?;
+    Ok(())
 }
 
-/// The socket file this process last bound, by device and inode. Another
-/// instance on the same home finds the socket live and does not bind, so it must
-/// not remove it at exit either.
-static BOUND_SOCKET: std::sync::Mutex<Option<(u64, u64)>> = std::sync::Mutex::new(None);
+/// The socket file this process last bound, by its file id. Another instance
+/// on the same home finds the socket live and does not bind, so it must not
+/// remove it at exit either.
+#[cfg(cap_mcp_bridge)]
+static BOUND_SOCKET: std::sync::Mutex<Option<codesense_platform::fs::FileId>> =
+    std::sync::Mutex::new(None);
 
-fn file_identity(path: &Path) -> Option<(u64, u64)> {
-    use std::os::unix::fs::MetadataExt;
-    let metadata = std::fs::symlink_metadata(path).ok()?;
-    Some((metadata.dev(), metadata.ino()))
+#[cfg(cap_mcp_bridge)]
+fn file_identity(path: &Path) -> Option<codesense_platform::fs::FileId> {
+    codesense_platform::fs::file_id(path).ok()
 }
 
 /// Binds the UDS listener, then sets 0600 permissions on the socket file.
 /// Uses post-bind chmod instead of umask manipulation (umask is process-wide
 /// and not thread-safe in a multi-threaded Tauri app).
+#[cfg(cap_mcp_bridge)]
 fn bind_listener(path: &Path) -> std::io::Result<UnixListener> {
+    use std::os::unix::fs::PermissionsExt;
     let listener = UnixListener::bind(path)?;
     *BOUND_SOCKET.lock().unwrap_or_else(|p| p.into_inner()) = file_identity(path);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
-    }
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
     Ok(listener)
 }
 
 /// How often an instance that found the socket served elsewhere checks again.
+#[cfg(cap_mcp_bridge)]
 const TAKEOVER_POLL: std::time::Duration = std::time::Duration::from_secs(3);
 
 /// How long an instance waits before trying again after the socket failed to bind.
+#[cfg(cap_mcp_bridge)]
 const BIND_RETRY: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// The lock held for the life of the instance serving the socket. The kernel
 /// drops it when that process ends, however it ends, which is what lets a
 /// waiting instance take over without two of them binding at once.
+#[cfg(cap_mcp_bridge)]
 static SOCKET_LOCK: std::sync::OnceLock<std::fs::File> = std::sync::OnceLock::new();
 
+#[cfg(cap_mcp_bridge)]
 fn lock_path(socket: &Path) -> PathBuf {
     socket.with_extension("sock.lock")
 }
 
 /// Take the socket lock, without waiting. `Ok(false)` while another process holds it.
+#[cfg(cap_mcp_bridge)]
 fn try_lock_socket(socket: &Path) -> std::io::Result<bool> {
-    use std::os::fd::AsRawFd;
     if SOCKET_LOCK.get().is_some() {
         return Ok(true);
     }
@@ -102,12 +112,8 @@ fn try_lock_socket(socket: &Path) -> std::io::Result<bool> {
         .truncate(false)
         .write(true)
         .open(lock_path(socket))?;
-    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
-        let error = std::io::Error::last_os_error();
-        return match error.raw_os_error() {
-            Some(libc::EWOULDBLOCK) => Ok(false),
-            _ => Err(error),
-        };
+    if !codesense_platform::fs::try_lock_exclusive(&file)? {
+        return Ok(false);
     }
     let _ = SOCKET_LOCK.set(file);
     Ok(true)
@@ -116,6 +122,7 @@ fn try_lock_socket(socket: &Path) -> std::io::Result<bool> {
 /// Bind the socket for this instance, once it holds the lock and no process
 /// answers on the socket (an older build serves it without taking the lock).
 /// `AddrInUse` while another instance serves it.
+#[cfg(cap_mcp_bridge)]
 fn claim_socket(path: &Path) -> std::io::Result<UnixListener> {
     if !try_lock_socket(path)? {
         return Err(std::io::Error::new(
@@ -127,18 +134,33 @@ fn claim_socket(path: &Path) -> std::io::Result<UnixListener> {
     bind_listener(path)
 }
 
-/// Returns the canonical socket path for cleanup from outside this module.
-pub fn mcp_socket_path() -> PathBuf {
-    socket_path()
+/// The canonical socket path, for cleanup and for agents' configs from outside
+/// this module; `None` where there is no MCP socket (`cap_mcp_bridge` off).
+pub fn mcp_socket_path() -> Option<PathBuf> {
+    #[cfg(cap_mcp_bridge)]
+    let path = Some(socket_path());
+    #[cfg(not(cap_mcp_bridge))]
+    let path = None;
+    path
 }
 
-/// Whether the socket file at `path` is the one this process bound.
-pub fn mcp_socket_bound_here(path: &Path) -> bool {
-    let bound = *BOUND_SOCKET.lock().unwrap_or_else(|p| p.into_inner());
-    bound.is_some_and(|bound| file_identity(path) == Some(bound))
+/// Whether the socket file at `path` is the one this process bound; never
+/// where there is no MCP socket.
+pub fn mcp_socket_bound_here(path: &std::path::Path) -> bool {
+    #[cfg(cap_mcp_bridge)]
+    {
+        let bound = *BOUND_SOCKET.lock().unwrap_or_else(|p| p.into_inner());
+        bound.is_some_and(|bound| file_identity(path) == Some(bound))
+    }
+    #[cfg(not(cap_mcp_bridge))]
+    {
+        let _ = path;
+        false
+    }
 }
 
-/// Starts the MCP server on a Unix domain socket.
+/// Starts the MCP server on a Unix domain socket where the MCP bridge exists;
+/// elsewhere it only manages the local connections' state and binds nothing.
 /// Called from Tauri's `setup()` hook.
 pub fn start_mcp_server(app_handle: tauri::AppHandle) {
     use tauri::Manager;
@@ -149,7 +171,17 @@ pub fn start_mcp_server(app_handle: tauri::AppHandle) {
         log::info!(target: "mcp", "MCP server disabled via CODESENSE_DISABLE_MCP");
         return;
     }
+    serve_socket(app_handle);
+}
 
+/// No MCP socket here (`cap_mcp_bridge` off): nothing is bound.
+#[cfg(not(cap_mcp_bridge))]
+fn serve_socket(_app_handle: tauri::AppHandle) {}
+
+/// Bind the MCP socket and serve each connection, binding it again whenever
+/// the socket file is lost.
+#[cfg(cap_mcp_bridge)]
+fn serve_socket(app_handle: tauri::AppHandle) {
     let path = socket_path();
 
     tauri::async_runtime::spawn(async move {
@@ -201,6 +233,7 @@ pub fn start_mcp_server(app_handle: tauri::AppHandle) {
 /// tabs are not left without CodeSense tools for the rest of its life. A failure
 /// to bind is retried too: this instance may hold the lock, and giving up would
 /// leave every instance without the socket.
+#[cfg(cap_mcp_bridge)]
 async fn claim_with_retry(path: &Path) -> UnixListener {
     let mut last_logged: Option<String> = None;
     loop {
@@ -223,6 +256,7 @@ async fn claim_with_retry(path: &Path) -> UnixListener {
     }
 }
 
+#[cfg(cap_mcp_bridge)]
 async fn serve_local_stream<S>(handler: CodesenseHandler, stream: S)
 where
     S: AsyncRead + AsyncWrite + Send + 'static,
@@ -491,9 +525,23 @@ mod tests {
         Client::connect().initializes().await;
     }
 
+    /// Where there is no MCP socket (`cap_mcp_bridge` off), no path is offered
+    /// to agents and nothing reads as bound here.
+    #[test]
+    fn a_socket_path_is_offered_only_where_the_mcp_bridge_is() {
+        assert_eq!(mcp_socket_path().is_some(), cfg!(cap_mcp_bridge));
+        if !cfg!(cap_mcp_bridge) {
+            let dir = tempfile::TempDir::new().unwrap();
+            let path = dir.path().join("mcp.sock");
+            std::fs::write(&path, b"").unwrap();
+            assert!(!mcp_socket_bound_here(&path));
+        }
+    }
+
     /// While another process holds the socket lock this instance does not bind;
     /// once that lock is released (the other instance quit or died) it takes the
     /// socket over, replacing the stale file left behind.
+    #[cfg(cap_mcp_bridge)]
     #[tokio::test]
     async fn the_socket_is_taken_over_once_its_owner_is_gone() {
         use std::os::fd::AsRawFd;

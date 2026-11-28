@@ -400,6 +400,7 @@ test("rust.yml runs the Windows check on a pull request only with ci:windows, ne
     steps.filter((s) => /\bcargo\b/.test(s.run ?? "")).map((s) => s.run),
     [
       "cargo check --locked -p codesense-platform -p codesense-host-proto -p codesense-fs-core -p codesense-pty-core -p codesense-session-server --all-targets",
+      "cargo check --locked -p codesense --lib --features dashboard-publish",
       "cargo test --locked -p codesense-platform --features pdf",
       "cargo test --locked -p codesense-host-proto --lib hook::",
       'cargo test --locked -p codesense-session-server --lib portable 2>&1 | tee "$RUNNER_TEMP/portable-tests.log"\n' +
@@ -411,6 +412,15 @@ test("rust.yml runs the Windows check on a pull request only with ci:windows, ne
       "cargo test --locked --no-fail-fast -p codesense-pty-core --test pty_contract --test process_tree --test headless_session",
     ],
   );
+  // The app library's check leaves out of the config only what a bundle needs: the sidecars, the
+  // bundled git-ai and the emulator worker.
+  const app = steps.find((s) => s.run?.startsWith("cargo check --locked -p codesense --lib"));
+  assert.deepEqual(JSON.parse(app.env.TAURI_CONFIG), {
+    bundle: {
+      externalBin: [],
+      resources: { "resources/git-ai": null, "binaries/codesense-emulator.cjs": null },
+    },
+  });
   // The pty tests run the Windows worker, built after Rust (the script asks rustc for the triple)
   // from the installed packages, and named to them.
   const names = steps.map((s) => s.name);
@@ -2707,16 +2717,19 @@ test("smoke images: the policy rejects a bare tag, a short digest, a duplicate o
   assert.deepEqual(smokeImagesPolicy(`# a comment\n\nubuntu:24.04${pin}\n`), []);
 });
 
-// Linux compiles the code a platform without git-ai and the agent-CLI sockets builds (the
-// facades' off arms, with the gated parts left out); the Linux app job runs the git-ai facade's
-// tests, with the rest of the app's.
-test("rust.yml checks the app with git-ai and agent-cli-sockets off", () => {
+// Linux compiles the code a platform without git-ai, the agent-CLI sockets and the MCP bridge
+// builds (the facades' off arms, with the gated parts left out); the Linux app job runs the git-ai
+// facade's tests, with the rest of the app's.
+test("rust.yml checks the app with git-ai, agent-cli-sockets and mcp-bridge off", () => {
   const workflow = parse(fs.readFileSync(path.join(directory, "rust.yml"), "utf8"));
   const steps = workflow.jobs["rust-check-linux"].steps;
   const off = steps.filter((step) => step.env?.CODESENSE_CAPS_OFF !== undefined);
   assert.equal(off.length, 1, "one cap-off check step");
-  assert.equal(off[0].name, "Check the desktop app with git-ai and agent-cli-sockets off");
-  assert.equal(off[0].env.CODESENSE_CAPS_OFF, "git-ai,agent-cli-sockets");
+  assert.equal(
+    off[0].name,
+    "Check the desktop app with git-ai, agent-cli-sockets and mcp-bridge off",
+  );
+  assert.equal(off[0].env.CODESENSE_CAPS_OFF, "git-ai,agent-cli-sockets,mcp-bridge");
   assert.equal(
     off[0].run,
     "cargo check --locked -p codesense --lib --tests --features dashboard-publish",

@@ -2182,12 +2182,8 @@ pub(crate) fn resolve_sidecar_source(base_name: &str) -> Result<PathBuf, String>
         v
     };
 
-    let binary_name = if cfg!(windows) {
-        format!("{base_name}.exe")
-    } else {
-        base_name.to_string()
-    };
-    let dev_name = format!("{}-{}", binary_name, TARGET_TRIPLE);
+    let binary_name = format!("{base_name}{}", sidecar_exe_suffix(TARGET_TRIPLE));
+    let dev_name = dev_sidecar_name(base_name, TARGET_TRIPLE);
 
     // Per-exe-dir probes: production (alongside exe) then dev-cli
     // (with target-triple suffix).
@@ -2225,6 +2221,23 @@ pub(crate) fn resolve_sidecar_source(base_name: &str) -> Result<PathBuf, String>
         binary_name,
         dev_name,
     ))
+}
+
+/// The executable suffix for `triple`: `.exe` on Windows, else none
+/// (`scripts/lib/sidecar.sh` `sidecar_exe_suffix`).
+fn sidecar_exe_suffix(triple: &str) -> &'static str {
+    if triple.contains("-windows-") {
+        ".exe"
+    } else {
+        ""
+    }
+}
+
+/// The name a dev build gives sidecar `base_name` for `triple`, as the build scripts
+/// write it under `src-tauri/binaries/` (`scripts/lib/sidecar.sh` `sidecar_path`):
+/// `<name>-<triple>`, with `.exe` after the triple on Windows.
+fn dev_sidecar_name(base_name: &str, triple: &str) -> String {
+    format!("{base_name}-{triple}{}", sidecar_exe_suffix(triple))
 }
 
 /// Idempotent symlink creation at `link` pointing to `source`. Pure helper
@@ -2306,6 +2319,39 @@ fn ensure_symlink_at(source: &Path, link: &Path) -> Result<(), String> {
 mod tests {
     use super::*;
     use crate::agents::launch_check::LaunchWarningCode;
+
+    /// A dev build finds each sidecar under the name the build scripts give it:
+    /// `<name>-<triple>`, with `.exe` after the triple on Windows, never before it.
+    #[test]
+    fn dev_sidecar_names_match_the_build_scripts() {
+        for (triple, name) in [
+            (
+                "aarch64-apple-darwin",
+                "codesense-session-server-aarch64-apple-darwin",
+            ),
+            (
+                "x86_64-unknown-linux-gnu",
+                "codesense-session-server-x86_64-unknown-linux-gnu",
+            ),
+            (
+                "x86_64-pc-windows-msvc",
+                "codesense-session-server-x86_64-pc-windows-msvc.exe",
+            ),
+            (
+                "aarch64-pc-windows-msvc",
+                "codesense-session-server-aarch64-pc-windows-msvc.exe",
+            ),
+        ] {
+            assert_eq!(dev_sidecar_name("codesense-session-server", triple), name);
+        }
+        // This build's own names carry this OS's executable suffix.
+        assert!(dev_sidecar_name("codesense-bridge", TARGET_TRIPLE)
+            .ends_with(&format!("{TARGET_TRIPLE}{}", std::env::consts::EXE_SUFFIX)));
+        assert_eq!(
+            sidecar_exe_suffix(TARGET_TRIPLE),
+            std::env::consts::EXE_SUFFIX
+        );
+    }
 
     #[test]
     fn git_install_hint_per_os() {

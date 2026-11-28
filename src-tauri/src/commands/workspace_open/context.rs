@@ -11,21 +11,21 @@ pub(crate) struct ContextDestination {
     pub warnings: Vec<LaunchWarning>,
 }
 
-/// Bounded Git subprocess, owned by this attempt, with its own process group.
+/// Bounded Git subprocess, owned by this attempt, the root of its own process tree (a
+/// process group on unix), with no console window on Windows.
 fn git(cwd: &Path, args: &[&str]) -> Result<String, String> {
     use std::io::Read;
-    use std::os::unix::process::CommandExt;
     use std::process::{Command, Stdio};
-    let mut child = Command::new(super::super::worktree::git_bin())
+    let mut command = Command::new(super::super::worktree::git_bin());
+    command
         .args(args)
         .current_dir(cwd)
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .process_group(0)
-        .spawn()
+        .stderr(Stdio::piped());
+    let mut tree = codesense_platform::process::ProcessTree::spawn_hidden(&mut command)
         .map_err(|e| e.to_string())?;
-    let mut stdout = child.stdout.take().unwrap();
-    let mut stderr = child.stderr.take().unwrap();
+    let mut stdout = tree.child().stdout.take().unwrap();
+    let mut stderr = tree.child().stderr.take().unwrap();
     let out = std::thread::spawn(move || {
         let mut s = String::new();
         let _ = stdout.read_to_string(&mut s);
@@ -38,15 +38,14 @@ fn git(cwd: &Path, args: &[&str]) -> Result<String, String> {
     });
     let start = std::time::Instant::now();
     let status = loop {
-        if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
+        // A normal exit leaves what the root started running, as a plain child would.
+        if let Some(status) = tree.try_wait_leaving_rest().map_err(|e| e.to_string())? {
             break status;
         }
         if start.elapsed() > std::time::Duration::from_secs(30) {
-            // The child was spawned as its own process-group leader.
-            unsafe {
-                libc::kill(-(child.id() as i32), libc::SIGKILL);
-            }
-            let _ = child.wait();
+            // The whole tree, at once.
+            let _ = codesense_platform::process::kill_hard(&tree);
+            let _ = tree.wait();
             let _ = out.join();
             let _ = err.join();
             return Err("Git took too long creating the worktree. Nothing was launched".into());

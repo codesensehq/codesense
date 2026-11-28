@@ -39,8 +39,10 @@ pub(crate) mod session_wake;
 pub(crate) mod strays;
 use crate::commands::auth::private_authority::PrivateAuthorityLease;
 use codesense_host_proto::agent_cli::NativeLaunch;
+use codesense_platform::ipc::{blocking::LocalStream, Endpoint};
 use std::collections::{HashMap, HashSet};
 use std::io::{BufReader, Read, Write};
+#[cfg(test)]
 use std::os::unix::net::UnixStream;
 use std::panic::AssertUnwindSafe;
 use std::path::{Path, PathBuf};
@@ -732,6 +734,13 @@ pub(crate) trait TransportReader: Read + Send {
     }
 }
 
+impl TransportReader for LocalStream {
+    fn set_read_timeout(&mut self, timeout: Option<Duration>) -> std::io::Result<()> {
+        LocalStream::set_read_timeout(self, timeout)
+    }
+}
+
+#[cfg(test)]
 impl TransportReader for UnixStream {
     fn set_read_timeout(&mut self, timeout: Option<Duration>) -> std::io::Result<()> {
         UnixStream::set_read_timeout(self, timeout)
@@ -927,6 +936,13 @@ impl<T: TransportWriter> TransportWriter for Rm4fWriter<T> {
     }
 }
 
+impl TransportWriter for LocalStream {
+    fn close(&mut self) -> std::io::Result<()> {
+        LocalStream::shutdown(self)
+    }
+}
+
+#[cfg(test)]
 impl TransportWriter for UnixStream {
     fn close(&mut self) -> std::io::Result<()> {
         self.shutdown(std::net::Shutdown::Both)
@@ -1195,21 +1211,30 @@ impl WriteMailbox {
     }
 }
 
+/// The endpoint the sidecar of the instance rooted at `root` serves: on unix
+/// its socket, [`socket_path`].
+fn session_endpoint(root: &Path) -> Endpoint {
+    Endpoint::SessionServer(root.to_path_buf())
+}
+
+/// Whether something answers on the sidecar endpoint of `root`.
+fn endpoint_answers(root: &Path) -> bool {
+    LocalStream::connect(&session_endpoint(root)).is_ok()
+}
+
 fn open_socket(root: &Path) -> Result<SessionServerTransport, ConnectError> {
     let socket = socket_path(root);
-    let stream = UnixStream::connect(&socket)
+    let mut stream = LocalStream::connect(&session_endpoint(root))
         .map_err(|e| ConnectError::Unreachable(format!("connect {socket:?}: {e}")))?;
     let refused = |e: std::io::Error| ConnectError::Refused(format!("{socket:?}: {e}"));
-    stream
-        .set_write_timeout(Some(WRITE_TIMEOUT))
-        .map_err(refused)?;
-    let reader = stream.try_clone().map_err(refused)?;
-    let interrupt = stream.try_clone().map_err(refused)?;
-    reader
-        .set_read_timeout(Some(HANDSHAKE_TIMEOUT))
-        .map_err(refused)?;
+    // Each timeout is set on the handle that uses it: on Windows a clone's
+    // timeouts are its own.
+    LocalStream::set_write_timeout(&mut stream, Some(WRITE_TIMEOUT)).map_err(refused)?;
+    let mut reader = LocalStream::try_clone(&stream).map_err(refused)?;
+    let interrupt = LocalStream::try_clone(&stream).map_err(refused)?;
+    LocalStream::set_read_timeout(&mut reader, Some(HANDSHAKE_TIMEOUT)).map_err(refused)?;
     Ok(SessionServerTransport::new(reader, stream, move || {
-        let _ = interrupt.shutdown(std::net::Shutdown::Both);
+        let _ = LocalStream::shutdown(&interrupt);
     }))
 }
 
@@ -5289,7 +5314,7 @@ impl SessionServerState {
                                         error.to_string(),
                                         // An unknown lock state never launches.
                                         !matches!(host_running(root), Ok(false)),
-                                        UnixStream::connect(socket_path(root)).is_ok(),
+                                        endpoint_answers(root),
                                     )
                                 });
                                 let settled = after_stop(released);
@@ -5592,7 +5617,7 @@ fn wait_until_released(root: &Path) -> Result<(), ConnectError> {
 /// Wait for the instance's socket to stop answering once its sidecar ends.
 fn wait_until_unreachable(root: &Path) -> Result<(), ConnectError> {
     let deadline = Instant::now() + STARTUP_WAIT;
-    while UnixStream::connect(socket_path(root)).is_ok() {
+    while endpoint_answers(root) {
         if Instant::now() >= deadline {
             return Err(ConnectError::Refused(
                 "the terminal server did not stop".to_string(),
@@ -5692,11 +5717,11 @@ pub fn terminate_sidecar(pid: u32) -> Result<(), String> {
     if !is_sidecar {
         return Err(format!("process {pid} is not a {SIDECAR_BIN}"));
     }
-    let target = pid as libc::pid_t;
+    let target = codesense_platform::process::Pid::from_raw(pid);
     let exited = |within: Duration| {
         let deadline = Instant::now() + within;
         loop {
-            if unsafe { libc::kill(target, 0) } != 0 {
+            if !codesense_platform::process::is_alive(target) {
                 return true;
             }
             if Instant::now() >= deadline {
@@ -5705,11 +5730,11 @@ pub fn terminate_sidecar(pid: u32) -> Result<(), String> {
             std::thread::sleep(Duration::from_millis(25));
         }
     };
-    unsafe { libc::kill(target, libc::SIGTERM) };
+    let _ = codesense_platform::process::terminate_pid(target);
     if exited(TERMINATE_GRACE) {
         return Ok(());
     }
-    unsafe { libc::kill(target, libc::SIGKILL) };
+    let _ = codesense_platform::process::kill_pid(target);
     if exited(TERMINATE_GRACE) {
         Ok(())
     } else {

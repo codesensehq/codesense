@@ -3,6 +3,7 @@
 //! A provider home is never copied or changed by this adapter.
 use super::{config::Grant, Validate};
 use codesense_host_proto::scoped_mcp::{self as wire, Descriptor, Hello};
+use codesense_platform::ipc::{Endpoint, LocalListener, LocalStream};
 use std::{path::Path, sync::Arc, time::Duration};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -12,7 +13,6 @@ pub(crate) fn start(
     aliases: std::collections::BTreeMap<String, String>,
     validate: Arc<dyn Fn() -> Result<(), String> + Send + Sync>,
 ) -> Result<Descriptor, String> {
-    use std::os::unix::fs::PermissionsExt;
     validate()?;
     static LAUNCHES: std::sync::OnceLock<Arc<tokio::sync::Semaphore>> = std::sync::OnceLock::new();
     let launch_slot = LAUNCHES
@@ -20,20 +20,27 @@ pub(crate) fn start(
         .clone()
         .try_acquire_owned()
         .map_err(|_| "too many prepared local MCP launches; close an unused managed session")?;
-    // macOS sockaddr_un is short; the ordinary per-session config path can
-    // exceed it. This RAII-owned 0700 directory contains only the socket.
-    let socket_dir = tempfile::Builder::new()
-        .prefix("csm-")
-        .tempdir_in("/tmp")
-        .map_err(|_| "cannot allocate private local MCP socket directory")?;
-    let path = socket_dir.path().join("s");
-    let listener = std::os::unix::net::UnixListener::bind(&path)
-        .map_err(|_| "cannot bind private local MCP relay (launch path may be too long)")?;
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
-        .map_err(|_| "cannot protect local MCP relay")?;
-    listener
-        .set_nonblocking(true)
-        .map_err(|_| "cannot configure local MCP relay")?;
+    // On unix, macOS sockaddr_un is short; the ordinary per-session config
+    // path can exceed it. This RAII-owned 0700 directory contains only the
+    // socket. A Windows pipe has no directory.
+    let socket_dir = if cfg!(unix) {
+        let dir = tempfile::Builder::new()
+            .prefix("csm-")
+            .tempdir_in("/tmp")
+            .map_err(|_| "cannot allocate private local MCP socket directory")?;
+        Some(dir)
+    } else {
+        None
+    };
+    let endpoint = relay_endpoint(socket_dir.as_ref().map(tempfile::TempDir::path));
+    let path = Endpoint::address(&endpoint).map_err(|_| "cannot name local MCP relay")?;
+    let listener = {
+        // The listener is polled on the app's runtime, so it binds there.
+        let runtime = tauri::async_runtime::handle();
+        let _entered = tokio::runtime::Handle::enter(runtime.inner());
+        LocalListener::bind(&endpoint)
+            .map_err(|_| "cannot bind private local MCP relay (launch path may be too long)")?
+    };
     let descriptor = Descriptor {
         version: wire::VERSION,
         socket: path,
@@ -63,9 +70,7 @@ pub(crate) fn start(
     tauri::async_runtime::spawn(async move {
         let _socket_dir = socket_dir;
         let _launch_slot = launch_slot;
-        let Ok(listener) = tokio::net::UnixListener::from_std(listener) else {
-            return;
-        };
+        let mut listener = listener;
         let slots = Arc::new(tokio::sync::Semaphore::new(32));
         let grant = Arc::new(grant);
         let aliases = Arc::new(aliases);
@@ -74,7 +79,7 @@ pub(crate) fn start(
             tokio::select! {
                 _ = tick.tick() => if validate().is_err() { break; },
                 result = listener.accept() => {
-                    let Ok((stream, _)) = result else { break };
+                    let Ok(stream) = result else { break };
                     let Ok(permit) = slots.clone().try_acquire_owned() else { continue };
                     let grant = grant.clone();
                     let capability = capability.clone();
@@ -93,8 +98,17 @@ pub(crate) fn start(
     Ok(descriptor)
 }
 
+/// The relay's endpoint for one launch: a name no other launch can guess or
+/// share (a v4 UUID), in `dir` on unix; a Windows pipe takes no directory.
+fn relay_endpoint(dir: Option<&Path>) -> Endpoint {
+    Endpoint::Ephemeral {
+        dir: dir.map(Path::to_path_buf).unwrap_or_default(),
+        name: uuid::Uuid::new_v4().simple().to_string(),
+    }
+}
+
 async fn serve_connection(
-    mut stream: tokio::net::UnixStream,
+    mut stream: LocalStream,
     capability: &str,
     grant: Arc<Grant>,
     aliases: Arc<std::collections::BTreeMap<String, String>>,
@@ -124,8 +138,11 @@ async fn serve_connection(
             .cloned()
             .ok_or("MCP server was not selected")?;
         let ingress = if hello.server == "codesense" {
-            let caller = codesense_pty_core::activity::peer::of_socket(&stream)
-                .ok_or("MCP relay ingress has no kernel peer")?;
+            let caller = match LocalStream::peer_pid(&stream) {
+                Ok(pid) => codesense_pty_core::activity::peer::inspect(pid.as_raw()),
+                Err(_) => None,
+            }
+            .ok_or("MCP relay ingress has no kernel peer")?;
             let proof = identity.clone();
             let verified = tokio::task::spawn_blocking(move || proof.ingress(caller))
                 .await
@@ -164,6 +181,28 @@ mod tests {
     use super::*;
     use std::sync::atomic::{AtomicBool, Ordering};
     use tokio::io::{AsyncBufReadExt, BufReader};
+
+    /// Each launch's relay gets a name of its own, never a fixed one, so two
+    /// prepared at once, even in one directory, bind side by side.
+    #[tokio::test]
+    async fn two_relays_prepared_at_once_bind_distinct_endpoints() {
+        // A short parent, as `start` uses: macOS socket paths are short.
+        let parent = if cfg!(unix) {
+            std::path::PathBuf::from("/tmp")
+        } else {
+            std::env::temp_dir()
+        };
+        let dir = tempfile::Builder::new()
+            .prefix("csm-")
+            .tempdir_in(parent)
+            .unwrap();
+        let first = relay_endpoint(Some(dir.path()));
+        let second = relay_endpoint(Some(dir.path()));
+        assert_ne!(first, second);
+        assert_ne!(first.address().unwrap(), second.address().unwrap());
+        let _first = LocalListener::bind(&first).unwrap();
+        let _second = LocalListener::bind(&second).unwrap();
+    }
 
     #[tokio::test]
     async fn review_r2_a_valid_victim_descriptor_cannot_authorize_an_unrelated_ingress() {

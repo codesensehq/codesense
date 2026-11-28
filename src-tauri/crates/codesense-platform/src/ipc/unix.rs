@@ -354,6 +354,14 @@ pub(crate) mod blocking {
         pub(crate) fn set_write_timeout(&mut self, timeout: Option<Duration>) -> io::Result<()> {
             self.0.set_write_timeout(timeout)
         }
+
+        pub(crate) fn try_clone(&self) -> io::Result<Self> {
+            self.0.try_clone().map(Self)
+        }
+
+        pub(crate) fn shutdown(&self) -> io::Result<()> {
+            self.0.shutdown(std::net::Shutdown::Both)
+        }
     }
 
     /// A blocking socket's timeout shows as `WouldBlock`; say what it is.
