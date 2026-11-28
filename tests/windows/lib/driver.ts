@@ -58,7 +58,9 @@ export async function open(options: { id: string; probe?: string }): Promise<str
   return label;
 }
 
-export type Invoked = { ok: true; value: unknown } | { ok: false; error: string };
+// Never `error`: a script result with an `error` field reads to the WebDriver client as a
+// W3C error response, which it throws with that field's text.
+export type Invoked = { ok: true; value: unknown } | { ok: false; refusal: string };
 
 /** `invoke(cmd, args)` in the current window; a refusal is returned, not thrown. */
 export async function invoke(cmd: string, args?: Record<string, unknown>): Promise<Invoked> {
@@ -66,7 +68,7 @@ export async function invoke(cmd: string, args?: Record<string, unknown>): Promi
     (c, a) =>
       (window as DriverWindow).__TAURI_INTERNALS__!.invoke(c, a).then(
         (value): Invoked => ({ ok: true, value }),
-        (e: unknown): Invoked => ({ ok: false, error: String(e) }),
+        (e: unknown): Invoked => ({ ok: false, refusal: String(e) }),
       ),
     cmd,
     args ?? {},

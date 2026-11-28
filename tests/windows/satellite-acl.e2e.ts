@@ -22,7 +22,7 @@ describe("a satellite under the command ACL", () => {
     await open({ id: freshId("acl") });
     expect(await invoke("save_app_state", args)).toEqual({
       ok: false,
-      error: "not allowed in this window: save_app_state",
+      refusal: "not allowed in this window: save_app_state",
     });
     await browser.closeWindow();
 

@@ -37,7 +37,7 @@ type Reply = MemberTarget & {
 const BOOT_KEY = "codesense.terminal.clientBootId";
 
 function ok(cmd: string, result: Awaited<ReturnType<typeof invoke>>): unknown {
-  if (!result.ok) throw new Error(`${cmd}: ${result.error}`);
+  if (!result.ok) throw new Error(`${cmd}: ${result.refusal}`);
   return result.value;
 }
 
