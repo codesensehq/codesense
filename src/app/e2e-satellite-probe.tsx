@@ -77,7 +77,8 @@ export function collectProbeResults(target: Window = window): () => void {
   target.__CODESENSE_PROBE_RESULTS__ = results;
   const onMessage = (event: MessageEvent) => {
     const frames = [...target.document.querySelectorAll("iframe")];
-    if (!frames.some((frame) => frame.contentWindow === event.source)) return;
+    if (event.source === null || !frames.some((frame) => frame.contentWindow === event.source))
+      return;
     const data = event.data as { type?: unknown; key?: unknown; text?: unknown } | null;
     if (data?.type !== "probe:result" || typeof data.key !== "string") return;
     results[data.key] = String(data.text);

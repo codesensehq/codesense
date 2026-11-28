@@ -202,6 +202,11 @@ const SITES: Record<string, { count: number; reason: string }> = {
     reason:
       "e2e control surface installed only under the test harness; not rendered in a team view.",
   },
+  "src/app/e2e-satellite-probe.tsx": {
+    count: 1,
+    reason:
+      "window message listener of the webdriver/mock-only probe route; keeps only what its own frames post (event.source).",
+  },
   "src/app/e2e-terminal-webgl-control.ts": {
     count: 1,
     reason:

@@ -26,9 +26,13 @@ const HELPER = "shared/windows/listen-scoped.ts";
 const RAW_LISTENERS = new Set(["listen", "once"]);
 /** The `current-window.ts` handle getters whose `.listen`/`.once` register on that webview alone. */
 const HANDLE_GETTERS = new Set(["currentWindow", "currentWebview", "currentWebviewWindow"]);
-/** The files that may register on a handle: webview-scoped, and either gated to `main` by hand,
- *  a satellite's own registry client, or the move commands' abort toast (sent to the source). */
+/**
+ * The files that may register on a handle: webview-scoped, and either gated to `main` by hand, a
+ * satellite's own registry client (the satellite probe's, which `main.tsx` loads only in webdriver
+ * and mock builds, among them), or the move commands' abort toast (sent to the source).
+ */
 const HANDLE_LISTENERS = new Set([
+  "app/e2e-satellite-probe.tsx",
   "shared/hooks/use-rendered-document-bridge.ts",
   "shared/windows/use-main-window-registry.ts",
   "shared/windows/use-main-window-moves.ts",

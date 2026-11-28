@@ -45,26 +45,33 @@ describe("the satellite probe route", () => {
       document.body.innerHTML = "";
     });
 
-    const post = (source: MessageEventSource | null, data: unknown) =>
-      window.dispatchEvent(new MessageEvent("message", { data, source }));
+    // happy-dom loads no iframe page, so each frame gets a window of its own here, and a
+    // message carries its source as set rather than as the DOM's MessageEvent keeps it.
+    const frameWindow = () => {
+      const frame = document.createElement("iframe");
+      const contentWindow = {} as Window;
+      Object.defineProperty(frame, "contentWindow", { value: contentWindow });
+      document.body.append(frame);
+      return contentWindow;
+    };
+    const post = (source: unknown, data: unknown) =>
+      window.dispatchEvent(Object.assign(new Event("message"), { data, source }));
 
     it("keeps each probe:result its frames post, and nothing else", () => {
-      const frame = document.createElement("iframe");
-      document.body.append(frame);
+      const frame = frameWindow();
       stop = collectProbeResults();
-      post(frame.contentWindow, { type: "probe:result", key: "read", text: "hello" });
-      post(frame.contentWindow, { type: "probe:result", key: "push", text: "a.md" });
-      post(frame.contentWindow, { type: "probe:other", key: "x", text: "no" });
+      post(frame, { type: "probe:result", key: "read", text: "hello" });
+      post(frame, { type: "probe:result", key: "push", text: "a.md" });
+      post(frame, { type: "probe:other", key: "x", text: "no" });
       post(window, { type: "probe:result", key: "forged", text: "no" });
       post(null, { type: "probe:result", key: "forged", text: "no" });
       expect(window.__CODESENSE_PROBE_RESULTS__).toEqual({ read: "hello", push: "a.md" });
     });
 
     it("stops listening once removed", () => {
-      const frame = document.createElement("iframe");
-      document.body.append(frame);
+      const frame = frameWindow();
       collectProbeResults()();
-      post(frame.contentWindow, { type: "probe:result", key: "read", text: "late" });
+      post(frame, { type: "probe:result", key: "read", text: "late" });
       expect(window.__CODESENSE_PROBE_RESULTS__).toEqual({});
     });
   });
