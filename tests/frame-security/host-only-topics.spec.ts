@@ -73,9 +73,13 @@ test.afterAll(async () => {
   await new Promise<void>((done) => (frames ? frames.close(() => done()) : done()));
 });
 
+// The host mounts its frame through React, so WebKit can still list a frame that is being
+// replaced. A detached frame reads as "not yet", and the poll tries again.
 async function outcomes(page: Page): Promise<Outcome[] | undefined> {
-  const frame = page.frames().find((f) => f !== page.mainFrame());
-  return frame ? frame.evaluate(() => (window as any).outcomes) : undefined;
+  const frame = page.frames().find((f) => f !== page.mainFrame() && !f.isDetached());
+  return frame
+    ?.evaluate(() => (window as any).outcomes as Outcome[] | undefined)
+    .catch(() => undefined);
 }
 
 test("a page is refused every host-only topic and none reaches the live hub", async ({ page }) => {
@@ -85,17 +89,19 @@ test("a page is refused every host-only topic and none reaches the live hub", as
     (window as any).framePort = port;
   }, framePort);
   await page.goto(url);
-  await expect.poll(() => outcomes(page), { timeout: 30_000 }).toBeDefined();
-  const results = (await outcomes(page))!;
+  let results: Outcome[] | undefined;
+  await expect
+    .poll(async () => (results = await outcomes(page)), { timeout: 30_000 })
+    .toBeDefined();
 
-  const refused = results.filter((r) => HOST_ONLY.includes(r.topic));
+  const refused = results!.filter((r) => HOST_ONLY.includes(r.topic));
   expect(refused).toHaveLength(HOST_ONLY.length * VERBS.length);
   for (const r of refused) {
     expect(r.ok, `${r.verb} ${r.topic}`).toBe(false);
     expect(r.error).toContain(`denied: ${r.verb}: ${r.topic} is a host-only topic`);
   }
   // The control: an ordinary topic still subscribes through the same host.
-  expect(results.find((r) => r.topic === "sessions")).toEqual({
+  expect(results!.find((r) => r.topic === "sessions")).toEqual({
     verb: "subscribe",
     topic: "sessions",
     ok: true,
