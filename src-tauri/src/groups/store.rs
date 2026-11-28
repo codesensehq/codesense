@@ -319,7 +319,7 @@ impl GroupStore {
     /// The group `id`'s head for a client: `None` when it never existed, its `rev` and no tree
     /// when it was deleted (a new file continues from that `rev`), else its `rev` and tree,
     /// repaired in memory. Reads only.
-    pub fn head(&self, id: &str) -> Result<Option<(u64, Option<SavedNode>)>, StoreError> {
+    pub fn group_head(&self, id: &str) -> Result<Option<(u64, Option<SavedNode>)>, StoreError> {
         let path = self.group_file(id)?;
         match read_head(&path) {
             Head::Absent => Ok(None),
@@ -452,14 +452,12 @@ impl GroupStore {
     /// write reads the head and replaces the file, so two app processes never interleave.
     fn lock_folder(&self) -> Result<std::fs::File, StoreError> {
         let path = self.group_dir().join(LOCK_FILE);
-        let file = codesense_platform::fs::open_nofollow(
-            std::fs::OpenOptions::new()
-                .create(true)
-                .truncate(false)
-                .write(true),
-            &path,
-        )
-        .map_err(|e| StoreError::Refused(format!("the group folder's lock: {e}")))?;
+        let mut options = std::fs::OpenOptions::new();
+        std::fs::OpenOptions::write(&mut options, true);
+        std::fs::OpenOptions::truncate(&mut options, false);
+        std::fs::OpenOptions::create(&mut options, true);
+        let file = codesense_platform::fs::open_nofollow(&mut options, &path)
+            .map_err(|e| StoreError::Refused(format!("the group folder's lock: {e}")))?;
         codesense_platform::fs::lock_exclusive(&file)
             .map_err(|e| StoreError::Io(format!("the group folder's lock: {e}")))?;
         Ok(file)

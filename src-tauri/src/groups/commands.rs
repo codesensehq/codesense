@@ -47,7 +47,7 @@ pub fn read(store: &GroupStore, file: &GroupFileRef) -> Result<Option<GroupHead>
     if !GroupStore::tiles(store) {
         return Err(StoreError::TilesOff.to_string());
     }
-    let head = GroupStore::head(store, &file.id).map_err(|e| e.to_string())?;
+    let head = GroupStore::group_head(store, &file.id).map_err(|e| e.to_string())?;
     Ok(head.map(|(rev, tree)| GroupHead { rev, tree }))
 }
 
@@ -72,7 +72,7 @@ pub fn commit(
         owner: file.owner,
         ops,
     };
-    match store.write(&file.id, write) {
+    match GroupStore::write(store, &file.id, write) {
         Ok(placed) => Ok(CommitReply::Placed { rev: placed.rev }),
         Err(StoreError::Conflict { current_revision }) => Ok(CommitReply::Conflict {
             conflict: CommitConflict {
@@ -133,7 +133,7 @@ pub fn group_commit(
     ops: Vec<serde_json::Value>,
 ) -> Result<CommitReply, String> {
     let store = store_for(&app, flag.is_on(), &org)?;
-    commit(&store, window.label(), &file, base_rev, &ops)
+    commit(&store, tauri::Window::label(&window), &file, base_rev, &ops)
 }
 
 #[cfg(test)]
