@@ -23,9 +23,7 @@ use serde::Serialize;
 use tauri::{Emitter, Manager, Runtime};
 
 use super::item_key::ItemKey;
-
-/// The label of the app's first window, which owns every item no satellite holds.
-pub const MAIN_LABEL: &str = "main";
+use super::label::MAIN_LABEL;
 
 /// The event a window's new slice is sent on, to that window only.
 pub const SLICE_EVENT: &str = "window:slice";
