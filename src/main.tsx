@@ -176,6 +176,19 @@ function renderApp(): void {
     });
     return;
   }
+  if (
+    import.meta.env.MODE === "mock" &&
+    new URLSearchParams(window.location.search).get("harness") === "tile-host"
+  ) {
+    void import("./app/mock/tile-host-harness").then(({ TileHostHarness }) => {
+      ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
+        <ThemeProvider attribute="class" defaultTheme="dark">
+          <TileHostHarness />
+        </ThemeProvider>,
+      );
+    });
+    return;
+  }
 
   // `dev:mock` only: `?harness=source-diff` mounts the source-diff tool alone on
   // its fixture world. Dead (and tree-shaken) outside mock builds.

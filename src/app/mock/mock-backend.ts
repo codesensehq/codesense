@@ -173,7 +173,7 @@ export function createMockBackend(
                     >) ?? []
                   ).map((row) => ({ id: row.handle, ...row })),
           });
-  if (new URLSearchParams(search).get("harness") === "live-hub")
+  if (["live-hub", "tile-host"].includes(new URLSearchParams(search).get("harness") ?? ""))
     Object.assign(handlers, liveHubFixture(events));
   Object.assign(handlers, recordsHandlers(events, { ...handlers }));
   Object.assign(handlers, needsYouHandlers({ ...handlers }));
