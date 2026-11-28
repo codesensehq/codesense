@@ -38,7 +38,7 @@ describe("TileTabBar", () => {
     bar({
       onNewTab: vi.fn(),
       controls: <button type="button">Edit</button>,
-      menu: <DropdownMenuItem>Copy path</DropdownMenuItem>,
+      menuOf: () => <DropdownMenuItem>Copy path</DropdownMenuItem>,
     });
     const tabs = within(screen.getByRole("tablist", { name: "Tabs in this tile" }));
     expect(tabs.getAllByRole("tab")).toHaveLength(1);
@@ -96,6 +96,40 @@ describe("TileTabBar", () => {
     expect(document.activeElement).toBe(screen.getByRole("tab", { name: "zsh" }));
     fireEvent.keyDown(document.activeElement!, { key: "Delete" });
     expect(onClose).toHaveBeenLastCalledWith("tab_7F3e");
+  });
+
+  it("opens a right-clicked tab's own menu and leaves the active tab as it is", async () => {
+    const onSelect = vi.fn();
+    const shell: TileTab = { key: "tab_7F3e", kind: "shell", name: "zsh" };
+    const menuOf = (key: string) => <DropdownMenuItem>Menu of {key}</DropdownMenuItem>;
+    bar({ tabs: [DOC, shell], activeKey: DOC.key, onSelect, menuOf });
+    fireEvent.contextMenu(screen.getByRole("tab", { name: "zsh" }));
+    expect(await screen.findByRole("menuitem", { name: "Menu of tab_7F3e" })).toBeTruthy();
+    expect(screen.queryByRole("menuitem", { name: `Menu of ${DOC.key}` })).toBeNull();
+    expect(onSelect).not.toHaveBeenCalled();
+    // The open menu is modal, so the tabs behind it are hidden from the accessibility tree.
+    const first = screen.getByRole("tab", { name: "team-handbook.md", hidden: true });
+    expect(first.getAttribute("aria-selected")).toBe("true");
+  });
+
+  it("opens a focused tab's menu with Shift+F10, and ⋯ opens the active tab's", async () => {
+    const shell: TileTab = { key: "tab_7F3e", kind: "shell", name: "zsh" };
+    const menuOf = (key: string) => <DropdownMenuItem>Menu of {key}</DropdownMenuItem>;
+    bar({ tabs: [DOC, shell], activeKey: DOC.key, menuOf });
+    fireEvent.keyDown(screen.getByRole("tab", { name: "zsh" }), { key: "F10", shiftKey: true });
+    expect(await screen.findByRole("menuitem", { name: "Menu of tab_7F3e" })).toBeTruthy();
+    fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+    await act(async () => {});
+    const more = screen.getByRole("button", { name: "More for team-handbook.md" });
+    fireEvent.pointerDown(more, { button: 0, ctrlKey: false });
+    expect(await screen.findByRole("menuitem", { name: `Menu of ${DOC.key}` })).toBeTruthy();
+  });
+
+  it("opens no menu for a tab whose menu is empty", () => {
+    bar({ menuOf: () => null });
+    fireEvent.contextMenu(screen.getByRole("tab", { name: "team-handbook.md" }));
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(screen.queryByRole("button", { name: /^More for/ })).toBeNull();
   });
 
   it("keeps one tab stop, on the active tab", () => {

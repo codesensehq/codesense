@@ -21,9 +21,10 @@ export interface TileTabsView {
   onClose(cell: string, key: string): void;
   onReorder?(cell: string, from: number, to: number): void;
   onNewTab?(cell: string): void;
-  /** The active tab's controls, identity and ⋯ items, by its key. */
+  /** The active tab's controls and identity, by its key. */
   controlsOf?(key: string): ReactNode;
   identityOf?(key: string): ReactNode;
+  /** A tab's menu items, by its key: ⋯ shows the active tab's, a right-click any tab's. */
   menuOf?(key: string): ReactNode;
 }
 
@@ -52,7 +53,7 @@ export function TileTabFrame({ tileKey, children }: { tileKey: string; children:
         onNewTab={onNewTab && (() => onNewTab(cell))}
         controls={view.controlsOf?.(tabs.active)}
         identity={view.identityOf?.(tabs.active)}
-        menu={view.menuOf?.(tabs.active)}
+        menuOf={view.menuOf && ((key) => view.menuOf?.(key))}
       />
       <div className="relative min-h-0 flex-1">{children}</div>
     </div>

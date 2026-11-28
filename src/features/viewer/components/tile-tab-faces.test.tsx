@@ -147,7 +147,7 @@ function diffBar(
       />
     ),
     controls: <DiffNavControls {...nav} />,
-    menu: <DiffTabMenu row={picked} />,
+    menuOf: () => <DiffTabMenu row={picked} />,
   });
   return { onPick, nav };
 }

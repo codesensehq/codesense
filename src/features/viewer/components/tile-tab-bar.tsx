@@ -8,6 +8,10 @@
  *
  * A name truncates before its chip, which never shrinks. A cut-off name keeps its full text as
  * the tab's tooltip and accessible name.
+ *
+ * Each tab has its own menu, `menuOf(key)`: a right-click on a tab (or the menu key, Shift+F10,
+ * on a focused tab) opens that tab's menu where it was asked for, and never changes the active
+ * tab. ⋯ opens the active tab's.
  */
 import { useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import {
@@ -30,7 +34,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { InfoTip } from "@/components/ui/tooltip";
-import { hasAnyModifier, isCloseKey } from "@/shared/lib/shortcuts/keystroke";
+import { hasAnyModifier, hasCommandModifier, isCloseKey } from "@/shared/lib/shortcuts/keystroke";
 import type { TileKind } from "@/shared/tiling/tile-kinds";
 
 import { MiddleTruncate } from "./middle-truncate";
@@ -62,8 +66,9 @@ export interface TileTabBarProps {
   identity?: ReactNode;
   /** The active tab's own controls, at the right before ⋯. */
   controls?: ReactNode;
-  /** The ⋯ menu's items. Unset, ⋯ is not drawn. */
-  menu?: ReactNode;
+  /** A tab's menu items, for ⋯ (the active tab) and a right-click on any tab. Unset or
+   *  empty for a key, that tab has no menu. */
+  menuOf?: (key: string) => ReactNode;
 }
 
 const KIND_ICONS: Record<TileKind, typeof FileText> = {
@@ -88,7 +93,7 @@ export function TileTabBar({
   onNewTab,
   identity,
   controls,
-  menu,
+  menuOf,
 }: TileTabBarProps) {
   const pillRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const drag = useRef<{ from: number; startX: number; rects: (DOMRect | null)[] } | null>(null);
@@ -101,8 +106,23 @@ export function TileTabBar({
     : (tabs[activeIdx]?.key ?? tabs[0]?.key);
   const active = tabs[activeIdx];
   const activeName = active ? (active.fullName ?? active.name) : "";
+  const menu = active && menuOf?.(active.key);
+  // The tab whose menu a right-click opened, and where.
+  const [tabMenu, setTabMenu] = useState<{ key: string; x: number; y: number } | null>(null);
+  const tabMenuItems = tabMenu && menuOf?.(tabMenu.key);
+  const openTabMenu = (key: string, x: number, y: number) => {
+    if (menuOf?.(key)) setTabMenu({ key, x, y });
+  };
 
   const onPillKeyDown = (e: KeyboardEvent<HTMLButtonElement>, tab: TileTab, idx: number) => {
+    // The menu key and Shift+F10 open the focused tab's menu under it.
+    if (e.key === "ContextMenu" || (e.key === "F10" && e.shiftKey && !hasCommandModifier(e))) {
+      e.preventDefault();
+      e.stopPropagation();
+      const rect = e.currentTarget.getBoundingClientRect();
+      openTabMenu(tab.key, rect.left, rect.bottom);
+      return;
+    }
     // Any chord belongs to the global shortcuts.
     if (hasAnyModifier(e)) return;
     if (isCloseKey(e)) {
@@ -172,6 +192,7 @@ export function TileTabBar({
                 role="tab"
                 aria-selected={isActive}
                 aria-label={full}
+                aria-haspopup={menuOf?.(tab.key) ? "menu" : undefined}
                 title={full}
                 tabIndex={tab.key === stopKey ? 0 : -1}
                 data-active={isActive ? "true" : "false"}
@@ -184,6 +205,10 @@ export function TileTabBar({
                 onFocus={() => setFocusedKey(tab.key)}
                 onBlur={() => setFocusedKey(null)}
                 onKeyDown={(e) => onPillKeyDown(e, tab, idx)}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  openTabMenu(tab.key, e.clientX, e.clientY);
+                }}
                 onPointerDown={(e) => {
                   if (e.button === 0 && onReorder) {
                     drag.current = {
@@ -224,6 +249,20 @@ export function TileTabBar({
           );
         })}
       </div>
+      {tabMenuItems && (
+        <DropdownMenu open onOpenChange={(open) => !open && setTabMenu(null)}>
+          <DropdownMenuTrigger asChild>
+            <span
+              aria-hidden
+              className="pointer-events-none fixed h-0 w-0"
+              style={{ left: tabMenu.x, top: tabMenu.y }}
+            />
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" data-tile-tab-menu={tabMenu.key}>
+            {tabMenuItems}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      )}
       {onNewTab && (
         <InfoTip label="New tab" side="top">
           <button
