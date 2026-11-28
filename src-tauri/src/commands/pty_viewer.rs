@@ -68,7 +68,7 @@ impl InstallId {
 
     /// An empty id, or one with a `:`, would blur the viewer prefix: it reads as unreadable.
     fn checked(self) -> Self {
-        Self(self.0.filter(|id| !id.is_empty() && !id.contains(':')))
+        Self(self.0.filter(|id| !str::is_empty(id) && !id.contains(':')))
     }
 
     /// The prefix of every viewer this install's windows other than `main` use on a host.
@@ -120,7 +120,7 @@ pub(crate) fn window_viewport<R: Runtime>(
 
 /// Whether `viewer` is `main`'s.
 pub(crate) fn is_main_viewer(viewer: &ViewerId) -> bool {
-    viewer.as_str() == MAIN_VIEWER
+    ViewerId::as_str(viewer) == MAIN_VIEWER
 }
 
 /// The viewport a viewer shows a session through: `webview` for `main`, one of its own for
@@ -177,7 +177,7 @@ pub(crate) fn boots() -> &'static Boots {
 /// `main`'s boot, which every caller with no calling window reads under; `None` before
 /// `main` first read the layout.
 pub(crate) fn main_boot() -> Option<ClientBootId> {
-    BOOTS.of(&main_viewer())
+    Boots::of(&BOOTS, &main_viewer())
 }
 
 /// What one layout read by a viewer sets off. Only `main`'s reads have app-wide effects:
