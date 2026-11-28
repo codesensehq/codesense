@@ -25,14 +25,14 @@ src-tauri/crates/codesense-host-proto/src/activity.rs 1
 src-tauri/crates/codesense-pty-core/src/activity/owner.rs 9
 src-tauri/crates/codesense-session-server/src/host.rs 1
 src-tauri/src/agent_state.rs 13
-src-tauri/src/commands/agent_inbox.rs 8
+src-tauri/src/commands/agent_inbox.rs 6
 src-tauri/src/commands/agent_read_model.rs 2
 src-tauri/src/commands/weft_ledger.rs 3
 src-tauri/src/http/routes/terminal.rs 1
 src-tauri/src/live_hub/agent_list/presentation.rs 1
 src-tauri/src/live_hub/effective_status.rs 9
 src-tauri/src/live_hub/inbox.rs 2
-src-tauri/src/live_hub/mod.rs 12
+src-tauri/src/live_hub/mod.rs 9
 src-tauri/src/mcp/agent_dot.rs 3
 src-tauri/src/mcp/handler.rs 5
 src-tauri/src/mcp/live_data_authoring.rs 2

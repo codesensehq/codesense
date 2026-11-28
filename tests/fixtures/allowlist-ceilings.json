@@ -3,6 +3,6 @@
   "current": "R0",
   "ceilings": {
     "needsYouPredicates": { "R0": 108, "R1": 108, "R2a": 108, "R2b": 108, "R3a": 108, "R3b": 108 },
-    "needsYouPredicatesHits": { "R0": 411, "R1": 411, "R2a": 411, "R2b": 411, "R3a": 411, "R3b": 411 }
+    "needsYouPredicatesHits": { "R0": 406, "R1": 406, "R2a": 406, "R2b": 406, "R3a": 406, "R3b": 406 }
   }
 }
