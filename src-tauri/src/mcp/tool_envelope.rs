@@ -283,10 +283,8 @@ mod tests {
         let value = serde_json::to_value(&reply).unwrap();
         assert_eq!(value["status"], "conflict");
         assert_eq!(value["data"]["current_revision"], 2);
-        assert!(value["data"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("revision 2"));
+        let message = serde_json::Value::as_str(&value["data"]["message"]).unwrap();
+        assert!(message.contains("revision 2"), "{message}");
         let invalid = crate::groups::store::StoreError::InvalidOp("no".into());
         assert_eq!(
             serde_json::to_value(ToolEnvelope::<()>::from_group_error(&invalid)).unwrap()["status"],
