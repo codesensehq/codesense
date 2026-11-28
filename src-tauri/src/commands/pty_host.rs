@@ -3285,7 +3285,7 @@ mod tests {
             self.admission
                 .effects
                 .reserve_spawn(self.live_target(sidecar), &self.session, pool)
-                .unwrap()
+                .unwrap_or_else(|e| panic!("reserve sidecar={sidecar}: {e}"))
         }
 
         /// Reserves as the product spawn does: waits up to `WAIT` for the
@@ -3314,9 +3314,9 @@ mod tests {
                 .rows
                 .into_iter()
                 .find(|row| row.member.slot == slot)
-                .unwrap();
+                .unwrap_or_else(|| panic!("no admission row for {slot:?}"));
             let RuntimeAdmissionState::Live { namespace } = row.state else {
-                panic!("live")
+                panic!("{slot:?} is not live")
             };
             RuntimeMemberTarget {
                 member: row.member,
