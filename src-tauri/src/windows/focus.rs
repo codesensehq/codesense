@@ -11,7 +11,9 @@
 //!   window's own webview handle (`src/shared/windows/menu-listener.ts`), so one click runs
 //!   once.
 //!
-//! Nothing here is macOS-only: `menu::on_event` is, and it calls [`emit_menu_action`].
+//! Nothing here is macOS-only: `menu::on_event` is, and it calls [`emit_menu_action`]. Off
+//! macOS the menu helpers have no caller outside the tests, so each carries an
+//! `allow(dead_code)` with that reason rather than an OS `cfg` (the platform-cfg ratchet).
 
 use std::sync::Mutex;
 
@@ -22,6 +24,10 @@ use super::registry::WindowRegistry;
 use super::target::{resolve_target, FocusSource, TargetAction};
 
 /// The event a native menu click is sent on, to one window.
+#[allow(
+    dead_code,
+    reason = "the caller, menu::on_event, is macOS-only; the routing tests use it on every platform"
+)]
 pub const MENU_ACTION_EVENT: &str = "menu:action";
 
 #[derive(Debug, Default)]
@@ -84,10 +90,18 @@ impl FocusSource for FocusTracker {
 
 /// The one window a menu click goes to: [`resolve_target`]'s `Focused` choice (the focused
 /// window if ready, else the last-focused if ready, else `main`), and `main` should it refuse.
+#[allow(
+    dead_code,
+    reason = "the caller, menu::on_event, is macOS-only; the routing tests use it on every platform"
+)]
 pub fn menu_target(focus: &dyn FocusSource, registry: &WindowRegistry) -> String {
     target_or_main(resolve_target(registry, TargetAction::Focused, None, focus))
 }
 
+#[allow(
+    dead_code,
+    reason = "the caller, menu::on_event, is macOS-only; the routing tests use it on every platform"
+)]
 fn target_or_main(resolved: Result<String, String>) -> String {
     resolved.unwrap_or_else(|e| {
         log::warn!(target: "menu", "menu target: {e}; using main");
@@ -96,6 +110,10 @@ fn target_or_main(resolved: Result<String, String>) -> String {
 }
 
 /// Sends the menu item `id` to the window [`menu_target`] picks, and to it alone.
+#[allow(
+    dead_code,
+    reason = "the caller, menu::on_event, is macOS-only; the routing tests use it on every platform"
+)]
 pub fn emit_menu_action<R: Runtime, E: Emitter<R>>(
     emitter: &E,
     focus: &dyn FocusSource,
