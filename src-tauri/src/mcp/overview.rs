@@ -646,6 +646,9 @@ pub(crate) async fn gather(
         None => Err("no active team: machines are listed per team".to_string()),
     };
 
+    // Read before `scope` moves into the routines read below.
+    let needs_you_scope = needs_you_view(&scope);
+
     let (agents, routines, docs_root) = match &ambient {
         Ok((home, user_id)) => {
             let principal = Principal::from(*user_id);
@@ -736,7 +739,7 @@ pub(crate) async fn gather(
     let needs_you = app
         .try_state::<crate::live_hub::LiveHub>()
         .ok_or_else(|| "the live hub is not running".to_string())
-        .and_then(|hub| hub.needs_you_rows(&needs_you_view(&scope)?));
+        .and_then(|hub| hub.needs_you_rows(&needs_you_scope?));
 
     OverviewInputs {
         generated_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
