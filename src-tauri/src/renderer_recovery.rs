@@ -211,7 +211,7 @@ fn terminate_survivors(
                     return Ok(killed);
                 }
                 if let Err(error) = (ops.signal)(pid) {
-                    if error.kind() == std::io::ErrorKind::NotFound {
+                    if std::io::Error::kind(&error) == std::io::ErrorKind::NotFound {
                         log::info!(target: "webview-watchdog", "renderer pid={pid} exited before termination");
                         continue;
                     }
