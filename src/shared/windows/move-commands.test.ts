@@ -230,6 +230,12 @@ describe("refusals", () => {
     expect(toastError).toHaveBeenCalledExactlyOnceWith("mockups.html is already moving");
   });
 
+  it("a move into a window that holds an item already says so", async () => {
+    moveItem.mockResolvedValue({ status: "refused", reason: "occupied" });
+    await moveItemToMain(tab);
+    expect(toastError).toHaveBeenCalledExactlyOnceWith("That window already has an item open");
+  });
+
   it("a move to the window it is in already shows nothing", async () => {
     moveItem.mockResolvedValue({ status: "refused", reason: "self" });
     await moveItemToMain(tab);

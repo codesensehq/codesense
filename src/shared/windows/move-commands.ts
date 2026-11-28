@@ -63,6 +63,8 @@ function refusalText(reason: string, name: string): string | null {
     case "timeout":
     case "window_failed":
       return `Couldn’t move ${name}: the new window didn’t open`;
+    case "occupied":
+      return "That window already has an item open";
     case "gone":
     case "unknown_target":
       return `Couldn’t move ${name}: the other window closed`;
