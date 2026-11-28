@@ -17,10 +17,12 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import type { DocBadge, DocBadgeSeverity } from "@/features/dashboard/components/html-viewer";
+import { dashboardRefOfKey } from "@/features/dashboard/lib/dashboard-ref";
 import type { SourceRepo } from "@/features/git-sync/lib/source-redline-source";
 import { StageRail } from "@/shared/components/stage-rail";
 import { useCopyToClipboard } from "@/shared/hooks/use-copy-to-clipboard";
 import { basename } from "@/shared/lib/path";
+import { tileKindOf } from "@/shared/tiling/tile-kinds";
 import { revealPath } from "@/tauri/commands";
 
 import { MiddleTruncate } from "./middle-truncate";
@@ -89,6 +91,41 @@ export function diffTabFace({ key, row }: { key: string; row?: DiffWorktreeRow }
     name: row ? `Diff ${row.branch}` : "Diff",
     fullName: row ? `Diff ${worktreeLabel(row)}` : undefined,
   };
+}
+
+/** A tab's face from its key alone, for a tab whose data the window has not read. */
+export function tabFaceOfKey(key: string): TileTab {
+  const kind = tileKindOf(key);
+  switch (kind) {
+    case "dashboard": {
+      const ref = dashboardRefOfKey(key);
+      const owner = ref?.scope === "team" ? ref.team : ref?.org;
+      return { key, kind, name: ref?.id ?? key, fullName: ref ? `${ref.id} · ${owner}` : key };
+    }
+    case "file": {
+      const [, team = "", path = key] = /^doc:([^/]+)\/(.+)$/.exec(key) ?? [];
+      return /\.html?$/i.test(path)
+        ? htmlTabFace({ key, name: basename(path), source: team })
+        : fileTabFace({ key, path });
+    }
+    case "story":
+      return storyTabFace({ key, storyId: key.slice("story-page:".length) });
+    case "diff":
+      return diffTabFace({ key });
+    case "notes":
+      return { key, kind, name: "Notes" };
+    case "inbox":
+      return { key, kind, name: "Inbox", fullName: `Inbox · ${key.slice("inbox:".length)}` };
+    case "agent":
+      return {
+        key,
+        kind,
+        name: key.slice(key.indexOf("/") + 1),
+        fullName: key.slice("agent:".length),
+      };
+    case "shell":
+      return { key, kind, name: key };
+  }
 }
 
 const SEVERITY_CLASS: Record<DocBadgeSeverity, string> = {

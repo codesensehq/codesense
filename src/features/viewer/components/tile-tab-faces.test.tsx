@@ -15,6 +15,7 @@ import {
   fileTabFace,
   htmlTabFace,
   storyTabFace,
+  tabFaceOfKey,
   type DiffWorktreeRow,
 } from "./tile-tab-faces";
 
@@ -211,5 +212,24 @@ describe("diff tab", () => {
     openMenu(/^More for/);
     expect(await screen.findByRole("menuitem", { name: "Copy path · On build-box" })).toBeTruthy();
     expect(screen.queryByRole("menuitem", { name: "Open in Finder" })).toBeNull();
+  });
+});
+
+describe("a tab's face from its key", () => {
+  it.each([
+    ["dashboard:team:acme:core/board", "dashboard", "board", "board · core"],
+    ["dashboard:built-in:acme/inbox", "dashboard", "inbox", "inbox · acme"],
+    ["doc:core/notes/plan.md", "file", "plan.md", "notes/plan.md"],
+    ["doc:core/dashboards/status.html", "file", "status.html", "status.html · core"],
+    ["story-page:DEMO-63", "story", "DEMO-63", "DEMO-63"],
+    ["diff:context:ctx-demo", "diff", "Diff", undefined],
+    ["notes:scratch", "notes", "Notes", undefined],
+    ["inbox:acme", "inbox", "Inbox", "Inbox · acme"],
+    ["agent:team-2/review.bot_1", "agent", "review.bot_1", "team-2/review.bot_1"],
+    ["tab_7F3e", "shell", "tab_7F3e", undefined],
+  ])("%s is a %s tab named %s", (key, kind, name, fullName) => {
+    const face = tabFaceOfKey(key);
+    expect(face).toMatchObject({ key, kind, name });
+    expect(face.fullName).toBe(fullName);
   });
 });
