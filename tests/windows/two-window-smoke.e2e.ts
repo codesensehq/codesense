@@ -86,8 +86,11 @@ describe("two windows", () => {
       }
     });
 
-    it("#462 AC 3 gap: resize_pty and subscribe_terminal from a satellite act as its own viewer", async () => {
+    it("#462 AC 3 gap: resize_pty from a satellite sizes as its own viewer", async () => {
       await browser.switchToWindow(label);
+      // The satellite subscribes as a real one would before it sizes. That the subscription is
+      // its own viewport, and leaves main's stream alone, is not asserted: a spec sees no stream
+      // without an output channel.
       const subscribed = (await call("subscribe_terminal", { ptyId: ref(a) })) as {
         streamId: number;
       };
@@ -136,13 +139,13 @@ describe("two windows", () => {
 
     // Not drivable by one app on one Linux host; each stays pending until a job can.
     it(
-      "#462 AC 3 gap: a remote attach from a satellite uses its own viewer, and window-less callers use main's (needs a second machine)",
+      "#462 AC 3 gap: a remote attach from a satellite uses its own viewer, and window-less callers use main's (needs a second machine; owner: the move-between-windows follow-up)",
     );
     it(
-      "#462 AC 2 gap: after a crash with no Destroyed, the next launch's sweep detaches the viewer (needs the app killed and relaunched against the same host)",
+      "#462 AC 2 gap: after a crash with no Destroyed, the next launch's sweep detaches the viewer (needs the app killed and relaunched against the same host; owner: the crash-safe window persistence follow-up)",
     );
     it(
-      "#462 AC 2 gap: two installs on one host keep each other's viewers (needs a second install)",
+      "#462 AC 2 gap: two installs on one host keep each other's viewers (needs a second install; owner: the crash-safe window persistence follow-up)",
     );
   });
 });
