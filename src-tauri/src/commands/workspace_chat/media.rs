@@ -147,7 +147,7 @@ pub(crate) async fn prepare(
                     MediaRefusal::NoTeam
                 })?
                 .team;
-            if input.alt.trim().is_empty() {
+            if input.alt.trim() == "" {
                 return Err(MediaRefusal::NoAlt);
             }
             if let Some(reason) = human_media_refusal(input) {

@@ -46,7 +46,7 @@ pub(crate) async fn send(
     started: impl Future<Output = ()>,
     fanout: impl FnOnce(&WorkspaceChatMessage),
 ) -> Result<WorkspaceChatMessage, SendRefusal> {
-    if post.text.trim().is_empty() && post.media.is_none() {
+    if post.text.trim() == "" && post.media.is_none() {
         return Err(SendRefusal::Store(ChatStoreError::EmptyText));
     }
     let prepared = match &post.media {

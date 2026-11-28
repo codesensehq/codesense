@@ -294,7 +294,7 @@ pub async fn workspace_chat_send(
     team: Option<InboxTeam>,
 ) -> Result<ChatSendResult, String> {
     let trimmed: &str = text.trim();
-    if trimmed.is_empty() && media.is_none() {
+    if trimmed == "" && media.is_none() {
         return Err(ChatStoreError::EmptyText.to_string());
     }
     if is_archived(&app, &workspace_id) {
