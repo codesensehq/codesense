@@ -504,6 +504,15 @@ fn a_refused_id_writes_nothing() {
         "a b",
         "a\0b",
         long.as_str(),
+        "con",
+        "prn",
+        "aux",
+        "nul",
+        "com0",
+        "com1",
+        "com9",
+        "lpt0",
+        "lpt9",
     ] {
         assert!(
             matches!(
@@ -527,6 +536,10 @@ fn a_refused_id_writes_nothing() {
     assert!(snapshot(tmp.path()).is_empty(), "nothing written");
     assert_eq!(s.commit(&"a".repeat(64), 0, put(leaf("ws-1"))), Ok(1));
     assert_eq!(s.commit("0-a-9", 0, put(leaf("ws-1"))), Ok(1));
+    // Only the bare device names are reserved.
+    for id in ["console", "com10", "lpt", "nul-1", "com-1"] {
+        assert_eq!(s.commit(id, 0, put(leaf("ws-1"))), Ok(1), "{id}");
+    }
 }
 
 #[cfg(unix)]
@@ -735,7 +748,9 @@ fn opening_the_space_excludes_group_files_and_writes_the_folder_gitignore() {
         .unwrap();
     assert_eq!(dir, file_of(tmp.path(), "x").parent().unwrap());
     let exclude = std::fs::read_to_string(exclude_of(tmp.path())).unwrap();
-    assert_eq!(exclude.lines().filter(|l| *l == GROUPS_EXCLUDE).count(), 1);
+    for line in GROUPS_EXCLUDES {
+        assert_eq!(exclude.lines().filter(|l| *l == line).count(), 1, "{line}");
+    }
     assert_eq!(
         std::fs::read_to_string(dir.join(".gitignore")).unwrap(),
         "*\n"
@@ -767,8 +782,53 @@ fn an_existing_repo_gets_the_entry_once_and_keeps_its_other_lines() {
     }
     assert_eq!(
         std::fs::read_to_string(&exclude).unwrap(),
-        format!("# mine\n*.log\n{GROUPS_EXCLUDE}\n")
+        format!(
+            "# mine\n*.log\n{}\n{}\n",
+            GROUPS_EXCLUDES[0], GROUPS_EXCLUDES[1]
+        )
     );
+}
+
+/// The exclude is anchored to the real group folders: a user's own `config/groups` folder under
+/// a space's content still shows in the private repo, and a one-segment org's group folder is
+/// kept out of it.
+#[test]
+fn the_exclude_hides_only_the_real_group_folders() {
+    let tmp = tempdir().unwrap();
+    scratch_space::open_group_space(tmp.path(), &me(), ORG, true).unwrap();
+    let root = scratch_space::scratch_root(tmp.path(), &me());
+    let mine = root.join("orgs/acme/ctx/content/config/groups/x.md");
+    std::fs::create_dir_all(mine.parent().unwrap()).unwrap();
+    std::fs::write(&mine, "mine").unwrap();
+    assert_eq!(
+        group_statuses(tmp.path()),
+        ["orgs/acme/ctx/content/config/groups/x.md"]
+    );
+    let solo = root.join("orgs/solo/config/groups/main.json");
+    std::fs::create_dir_all(solo.parent().unwrap()).unwrap();
+    std::fs::write(&solo, "{}").unwrap();
+    assert_eq!(
+        group_statuses(tmp.path()),
+        ["orgs/acme/ctx/content/config/groups/x.md"]
+    );
+}
+
+#[test]
+fn a_one_segment_org_round_trips_and_is_a_group_path() {
+    let tmp = tempdir().unwrap();
+    let solo = GroupStore::at(tmp.path(), &me(), "solo", true).unwrap();
+    assert_eq!(solo.commit("main", 0, put(leaf("ws-1"))), Ok(1));
+    let file = groups_dir(&scratch_space::org_space_at(tmp.path(), &me(), "solo").unwrap())
+        .join("main.json");
+    assert!(file.is_file());
+    let root = scratch_space::scratch_root(tmp.path(), &me());
+    let parts: Vec<String> = file
+        .strip_prefix(&root)
+        .unwrap()
+        .components()
+        .map(|c| c.as_os_str().to_string_lossy().into_owned())
+        .collect();
+    assert!(is_group_path(&parts), "{parts:?}");
 }
 
 #[test]

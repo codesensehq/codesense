@@ -379,7 +379,7 @@ pub fn ensure_scratch_repo(
     Ok(root)
 }
 
-/// Keep group files out of the scratch repo's git status: add the group folders' entry to the
+/// Keep group files out of the scratch repo's git status: add the group folders' entries to the
 /// repo's `.git/info/exclude` once, keeping its other lines. Does nothing with the tiles flag off
 /// or before the repo exists. A failed write is logged and never fails the open; the group
 /// folder's own `.gitignore` ([`open_group_space`]) still keeps the status clean.
@@ -391,8 +391,10 @@ pub fn exclude_group_files(scratch_root: &Path, tiles: bool) {
     if !std::path::Path::is_dir(&git_dir) {
         return;
     }
-    if let Err(e) = add_exclude_line(&git_dir, crate::groups::store::GROUPS_EXCLUDE) {
-        log::warn!(target: "scratch_space", "could not exclude group files from the private repo: {e}");
+    for line in crate::groups::store::GROUPS_EXCLUDES {
+        if let Err(e) = add_exclude_line(&git_dir, line) {
+            log::warn!(target: "scratch_space", "could not exclude group files from the private repo: {e}");
+        }
     }
 }
 

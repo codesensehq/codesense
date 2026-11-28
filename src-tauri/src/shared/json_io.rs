@@ -244,8 +244,41 @@ fn write_atomic_inner(path: &Path, json: &str, private: bool) -> Result<(), Json
         let _ = std::fs::remove_file(&tmp_path);
         return Err(JsonIoError::Io(e));
     }
+    record("rename");
+    if private {
+        sync_parent(path);
+    }
 
     Ok(())
+}
+
+/// Flush the folder entry the rename wrote, so a power loss keeps the new file's name. Unix only
+/// (a directory can't be opened for a sync on Windows); the rename has landed, so a failure here
+/// is not an error of the write.
+fn sync_parent(path: &Path) {
+    #[cfg(unix)]
+    {
+        let parent = path.parent().filter(|p| !p.as_os_str().is_empty());
+        if let Some(parent) = parent {
+            let _ = std::fs::File::open(parent).and_then(|dir| dir.sync_all());
+            record("sync-dir");
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = path;
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The order of a private write's durability steps, for the tests.
+    static EVENTS: std::cell::RefCell<Vec<&'static str>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+fn record(event: &'static str) {
+    #[cfg(test)]
+    EVENTS.with(|events| events.borrow_mut().push(event));
+    #[cfg(not(test))]
+    let _ = event;
 }
 
 /// Create the private record's `parent` owner-only (its missing ancestors
@@ -277,7 +310,11 @@ fn write_tmp(tmp_path: &Path, json: &str, private: bool) -> std::io::Result<()> 
         let mut file = codesense_platform::fs::create_new_owner_only(tmp_path)?;
         // The unix create mode is masked by the umask; make it exact.
         codesense_platform::fs::set_owner_only(tmp_path)?;
-        return file.write_all(json.as_bytes());
+        file.write_all(json.as_bytes())?;
+        // Flush the data before the rename, so a power loss never keeps the name without it.
+        file.sync_all()?;
+        record("sync-file");
+        return Ok(());
     }
     std::fs::write(tmp_path, json.as_bytes())
 }
@@ -292,6 +329,29 @@ mod tests {
     struct Sample {
         name: String,
         count: u32,
+    }
+
+    /// A private write flushes the file before the rename and, on unix, the folder after it.
+    #[test]
+    fn private_writer_syncs_the_file_before_the_rename_and_the_folder_after() {
+        let dir = tempdir().unwrap();
+        let val = Sample {
+            name: "x".into(),
+            count: 1,
+        };
+        EVENTS.with(|events| events.borrow_mut().clear());
+        write_json_atomic_private(&dir.path().join("a.json"), &val).unwrap();
+        let events = EVENTS.with(|events| events.borrow().clone());
+        let expected: &[&str] = if cfg!(unix) {
+            &["sync-file", "rename", "sync-dir"]
+        } else {
+            &["sync-file", "rename"]
+        };
+        assert_eq!(events, expected);
+        // The plain writer keeps its cheaper path.
+        EVENTS.with(|events| events.borrow_mut().clear());
+        write_json_atomic(&dir.path().join("b.json"), &val).unwrap();
+        assert_eq!(EVENTS.with(|events| events.borrow().clone()), ["rename"]);
     }
 
     #[cfg(unix)]

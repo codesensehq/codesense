@@ -294,7 +294,13 @@ mod tests {
             &root.join("orgs/acme/plans/config/groups")
         ));
         assert!(content_change_payload(&group).is_none());
+        // A one-segment org keeps its group folder at orgs/<name>/config/groups.
+        assert!(is_group_file(
+            root,
+            &root.join("orgs/solo/config/groups/main.json")
+        ));
         for other in [
+            "orgs/solo/content/groups/main.json",
             "orgs/acme/plans/config/profile.json",
             "orgs/acme/plans/content/groups/main.json",
             "orgs/acme/plans/config/groupsx/main.json",
@@ -342,8 +348,11 @@ mod tests {
             }
             exclude_group_files_for_launch(app.handle(), tmp.path());
             let exclude = tmp.path().join(".git/info/exclude");
-            std::fs::read_to_string(exclude)
-                .is_ok_and(|text| text.contains(crate::groups::store::GROUPS_EXCLUDE))
+            std::fs::read_to_string(exclude).is_ok_and(|text| {
+                crate::groups::store::GROUPS_EXCLUDES
+                    .iter()
+                    .all(|line| text.contains(line))
+            })
         };
         assert!(!exclude_has_groups(None), "no flag managed: off");
         assert!(!exclude_has_groups(Some(false)));

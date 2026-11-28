@@ -9,7 +9,8 @@
 //!   forward slashes only, no empty, `.` or `..` segment, and no absolute or drive-letter path,
 //!   backslash, `~`, NUL, control character or scheme.
 //! - `generic:<absolute directory>`: the id of a generic workspace, machine-local and valid
-//!   only in the private layer. The directory is absolute (`/…` or a drive letter) and holds no
+//!   only in the private layer. The directory is absolute (`/…` or a drive letter), local (no
+//!   leading `//`, `/\`, `\\` or `\/`, which Windows reads as a network share) and holds no
 //!   control character.
 //! - a workspace id or a terminal tab id (`[A-Za-z0-9._-]{1,128}`, no prefix, not only dots):
 //!   machine-local, valid only in the private layer, which never pushes. A story workspace's id
@@ -82,6 +83,12 @@ fn generic_dir_problem(dir: &str) -> Option<&'static str> {
         && (bytes[2] == b'/' || bytes[2] == b'\\');
     if !(dir.starts_with('/') || drive) {
         return Some("a generic workspace ref holds an absolute directory");
+    }
+    if ["//", "/\\", "\\\\", "\\/"]
+        .iter()
+        .any(|unc| dir.starts_with(unc))
+    {
+        return Some("a generic workspace directory is local, not a UNC or network path");
     }
     if dir.len() > GENERIC_PATH_MAX {
         return Some("the generic workspace directory is too long");

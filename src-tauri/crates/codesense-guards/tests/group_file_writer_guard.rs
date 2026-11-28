@@ -14,7 +14,12 @@
 //! - a `concat!` whose literals join into a group path (`concat!("config/", "groups")`);
 //! - a use of the store's `groups_dir` or `GROUPS_DIR`, outside [`ALLOWED`].
 //!
-//! Test code is skipped: items under a `cfg` that names `test`, `#[test]` functions, and files
+//! A syntactic guard can't be complete (a path built from runtime strings gets through), so the
+//! store being the only code that holds `write` stays the real boundary; this catches the cheap
+//! slips.
+//!
+//! Test code is skipped: items under `cfg(test)` or `cfg(all(test, ..))` (not `cfg(not(test))` or
+//! `cfg(any(test, ..))`, which build in production), `#[test]` functions, and files
 //! that only tests include (`*_tests.rs`, `tests.rs`, `tests/`). Point `CODESENSE_GUARD_ROOT` at
 //! another checkout's `src-tauri` to run it there; the planted self-tests show each form failing.
 
@@ -44,30 +49,46 @@ fn is_test_file(label: &str) -> bool {
         || label.starts_with("tests/")
 }
 
+/// Whether `meta` (a `cfg` predicate) holds only in a test build: `test`, or an `all(..)` with
+/// one. `not(test)` and `any(test, ..)` build in production, so they are scanned.
+fn test_only(meta: &syn::Meta) -> bool {
+    match meta {
+        syn::Meta::Path(path) => path.is_ident("test"),
+        syn::Meta::List(list) if list.path.is_ident("all") => list
+            .parse_args_with(
+                syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated,
+            )
+            .is_ok_and(|args| args.iter().any(test_only)),
+        _ => false,
+    }
+}
+
 fn names_test(attrs: &[syn::Attribute]) -> bool {
     attrs.iter().any(|attr| {
         let path = attr.path();
         if path.is_ident("test") {
             return true;
         }
-        if !path.is_ident("cfg") {
-            return false;
-        }
-        let syn::Meta::List(list) = &attr.meta else {
-            return false;
-        };
-        list.tokens
-            .clone()
-            .into_iter()
-            .any(|tree| names_test_token(&tree))
+        path.is_ident("cfg")
+            && attr
+                .parse_args::<syn::Meta>()
+                .is_ok_and(|meta| test_only(&meta))
     })
 }
 
-fn names_test_token(tree: &TokenTree) -> bool {
-    match tree {
-        TokenTree::Ident(ident) => ident == "test",
-        TokenTree::Group(group) => group.stream().into_iter().any(|t| names_test_token(&t)),
-        _ => false,
+/// The string `groups` as an expression, bare or wrapped as `String::from("groups")`,
+/// `Path::new("groups")`, `"groups".to_string()` or `&"groups"`.
+fn bare_groups(expr: &syn::Expr) -> Option<&syn::LitStr> {
+    match expr {
+        syn::Expr::Lit(syn::ExprLit {
+            lit: syn::Lit::Str(lit),
+            ..
+        }) => (lit.value() == "groups").then_some(lit),
+        syn::Expr::Call(call) if call.args.len() == 1 => bare_groups(&call.args[0]),
+        syn::Expr::MethodCall(call) if call.args.is_empty() => bare_groups(&call.receiver),
+        syn::Expr::Reference(inner) => bare_groups(&inner.expr),
+        syn::Expr::Paren(inner) => bare_groups(&inner.expr),
+        _ => None,
     }
 }
 
@@ -97,17 +118,11 @@ impl Scan<'_> {
 
     /// `expr` is the string `groups`: the folder's name held in a constant or a list of segments.
     fn named_folder(&mut self, expr: &syn::Expr) {
-        if let syn::Expr::Lit(syn::ExprLit {
-            lit: syn::Lit::Str(lit),
-            ..
-        }) = expr
-        {
-            if lit.value() == "groups" {
-                self.flag(
-                    lit.span(),
-                    "the folder name \"groups\" held in a value".into(),
-                );
-            }
+        if let Some(lit) = bare_groups(expr) {
+            self.flag(
+                lit.span(),
+                "the folder name \"groups\" held in a value".into(),
+            );
         }
     }
 
@@ -132,14 +147,21 @@ impl Scan<'_> {
         }
     }
 
-    fn tokens(&mut self, stream: TokenStream) {
+    /// Flag a macro's tokens. `keys` is whether a bare `"groups"` literal is a name here (a
+    /// `json!` key is not: `json!({ "groups": [] })`).
+    fn tokens(&mut self, stream: TokenStream, keys: bool) {
         for tree in stream {
             match tree {
-                TokenTree::Group(group) => self.tokens(group.stream()),
+                TokenTree::Group(group) => self.tokens(group.stream(), keys),
                 TokenTree::Literal(literal) => {
                     let text = literal.to_string();
                     if group_literal(&text) {
                         self.flag(literal.span(), format!("literal {text} in a macro"));
+                    } else if keys && text == "\"groups\"" {
+                        self.flag(
+                            literal.span(),
+                            "the folder name \"groups\" in a macro".into(),
+                        );
                     }
                 }
                 TokenTree::Ident(ident) => {
@@ -215,13 +237,10 @@ impl<'ast> Visit<'ast> for Scan<'_> {
 
     fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
         let joins = call.method == "join" || call.method == "push";
-        if let (true, Some(syn::Expr::Lit(arg))) = (joins, call.args.first()) {
-            if let syn::Lit::Str(lit) = &arg.lit {
-                if lit.value() == "groups" {
-                    let method = &call.method;
-                    self.flag(lit.span(), format!("`{method}(\"groups\")`"));
-                }
-            }
+        let name = call.args.first().and_then(bare_groups);
+        if let (true, Some(lit)) = (joins, name) {
+            let method = &call.method;
+            self.flag(lit.span(), format!("`{method}(\"groups\")`"));
         }
         visit::visit_expr_method_call(self, call);
     }
@@ -245,7 +264,12 @@ impl<'ast> Visit<'ast> for Scan<'_> {
         if mac.path.is_ident("concat") {
             self.concat(mac);
         }
-        self.tokens(mac.tokens.clone());
+        let json = mac
+            .path
+            .segments
+            .last()
+            .is_some_and(|last| last.ident == "json");
+        self.tokens(mac.tokens.clone(), !json);
         visit::visit_macro(self, mac);
     }
 }
@@ -338,6 +362,15 @@ fn planted_writers_are_caught() {
         r#"fn f() -> std::path::PathBuf { ["config", "groups"].iter().collect::<std::path::PathBuf>() }"#,
         r#"fn f(d: &std::path::Path) { let g = "groups"; let _ = d.join(g); }"#,
         r#"fn f() { let _ = ["groups"]; }"#,
+        r#"#[cfg(not(test))] fn f(p: &std::path::Path) { std::fs::write(p.join("config/groups/x.json"), b""); }"#,
+        r#"#[cfg(any(test, feature = "x"))] fn f(p: &std::path::Path) { let _ = p.join("config/groups/x"); }"#,
+        r#"#[cfg(not(test))] mod m { fn f() { let _ = "config/groups/x"; } }"#,
+        r#"fn f() -> Vec<&'static str> { vec!["config", "groups"] }"#,
+        r#"fn f(d: &str) -> String { format!("{}/{}", d, "groups") }"#,
+        r#"fn f(d: &std::path::Path) { let _ = d.join(String::from("groups")); }"#,
+        r#"fn f(d: &std::path::Path) { let _ = d.join(std::path::Path::new("groups")); }"#,
+        r#"fn f(d: &std::path::Path) { let _ = d.join("groups".to_string()); }"#,
+        r#"fn f() { let g = String::from("groups"); }"#,
     ];
     for src in planted {
         assert!(!violations("elsewhere.rs", src).is_empty(), "missed: {src}");
@@ -352,6 +385,8 @@ fn the_store_tests_and_allowed_uses_pass() {
     assert!(violations("groups/store_tests.rs", writer).is_empty());
     let in_test = format!("#[cfg(test)] mod tests {{ {writer} }}");
     assert!(violations("elsewhere.rs", &in_test).is_empty());
+    let in_all_test = format!("#[cfg(all(test, unix))] mod tests {{ {writer} }}");
+    assert!(violations("elsewhere.rs", &in_all_test).is_empty());
     let in_test_fn = r#"#[test] fn t() { let _ = "config/groups/x.json"; }"#;
     assert!(violations("elsewhere.rs", in_test_fn).is_empty());
     let opener = "fn open(s: &S) { let _ = crate::groups::store::groups_dir(s); }";

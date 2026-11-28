@@ -34,9 +34,10 @@ use crate::domain::Principal;
 
 /// The folder under a space's `config/` that holds the group files.
 const GROUPS_DIR: &str = "groups";
-/// The scratch repo's exclude entry for every space's group folder. A pattern with a slash in
-/// the middle is anchored to the repo root, so it leads with `**/` to match under `orgs/`.
-pub const GROUPS_EXCLUDE: &str = "**/config/groups/";
+/// The scratch repo's exclude entries for the group folder of a space, one per org layout
+/// (`orgs/<owner>/<repo>` and a one-segment `orgs/<name>`). Each leads with `/`, so it is
+/// anchored to the repo root and a user's own `config/groups` folder elsewhere stays tracked.
+pub const GROUPS_EXCLUDES: [&str; 2] = ["/orgs/*/*/config/groups/", "/orgs/*/config/groups/"];
 /// The reason a file that can't be loaded is listed with.
 pub const UNREADABLE: &str = "can't be read";
 
@@ -52,12 +53,14 @@ pub fn groups_dir(space: &ScratchOrgSpace) -> PathBuf {
 }
 
 /// Whether a path under the scratch repo, as segments, is in a space's group folder
-/// (`orgs/<owner>/<repo>/config/groups/…`).
+/// (`orgs/<owner>/<repo>/config/groups/…`, or `orgs/<name>/config/groups/…` for a one-segment org).
 pub fn is_group_path(parts: &[String]) -> bool {
-    parts.len() >= 5
-        && parts[0] == "orgs"
-        && parts[3] == crate::context_repo::CONFIG_DIR
-        && parts[4] == GROUPS_DIR
+    let at = |start: usize| {
+        parts.len() >= start + 2
+            && parts[start] == crate::context_repo::CONFIG_DIR
+            && parts[start + 1] == GROUPS_DIR
+    };
+    parts.first().is_some_and(|first| first == "orgs") && (at(2) || at(3))
 }
 
 /// Why a store call did nothing.
@@ -354,10 +357,24 @@ impl GroupStore {
 fn id_problem(id: &str) -> Option<String> {
     let valid = !str::is_empty(id)
         && id.len() <= ID_MAX
+        && !is_device_name(id)
         && !id
             .chars()
             .any(|c| !(c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'));
     (!valid).then(|| format!("{id:?}: a group id is [a-z0-9-]{{1,64}}"))
+}
+
+/// A Windows device name (`con`, `prn`, `aux`, `nul`, `com0`-`com9`, `lpt0`-`lpt9`). Windows maps
+/// it to the device whatever the extension, so `nul.json` is not a file. Refused on every
+/// platform, so a file written on one machine stays loadable on another. An id holds no dot, so
+/// the whole id is the stem.
+fn is_device_name(id: &str) -> bool {
+    let id = id.to_ascii_lowercase();
+    let numbered = |prefix: &str| {
+        id.strip_prefix(prefix)
+            .is_some_and(|n| n.len() == 1 && n.as_bytes()[0].is_ascii_digit())
+    };
+    matches!(id.as_str(), "con" | "prn" | "aux" | "nul") || numbered("com") || numbered("lpt")
 }
 
 /// Why a saved leaf is refused: its `id` and `workspaceId` differ, or the ref isn't valid in the
