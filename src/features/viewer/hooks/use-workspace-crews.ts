@@ -249,7 +249,7 @@ export function useWorkspaceCrews(teamKey: string): ReadonlyMap<string, PillCrew
   const projectedReferences = useAgentListProjectionStore((state) => state.references);
   const sessions = useAgentListProjectionStore((s) => s.sessions);
   const choices = useAgentIdentityChoices(teamKey);
-  const { faces } = useAvatarPacks();
+  const { faces } = useAvatarPacks(teamKey);
   const tags = useFaceTags(teamKey);
   const tabIndex = useTerminalTabIndex();
   const allWorkspaces = useViewerStore((s) => s.workspaces);

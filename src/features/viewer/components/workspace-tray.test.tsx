@@ -8,6 +8,7 @@ vi.mock("@/shared/lib/team-key", async (original) => ({
   getActiveTeamKey: () => "acme:default",
 }));
 vi.mock("@/tauri/commands", () => ({
+  avatarPacksListForTeam: vi.fn().mockResolvedValue({ packs: [], warnings: [] }),
   workspaceGroupEdit: vi.fn(),
   saveAppState: vi.fn().mockResolvedValue(undefined),
   loadAppState: vi.fn().mockResolvedValue("{}"),

@@ -72,7 +72,8 @@ import { isQuietMark } from "@/shared/lib/status-mark";
 import { StageRail } from "@/shared/components/stage-rail";
 import { TerminalTabBar, type SelectTabOptions } from "./terminal-tab-bar";
 import { useWorkspaceTeamHue } from "../hooks/use-workspace-crews";
-import { useActiveTeamKey } from "@/shared/lib/team-key";
+import { teamKeyOfOrg } from "@/shared/lib/team-key";
+import { useOrgStore } from "@/shared/stores/org-store";
 import { focusWorkspaceTerminal } from "../lib/focus-cascade";
 import type { FocusIndicator } from "../lib/focus-indicator";
 import {
@@ -363,10 +364,12 @@ export function TerminalTileChrome({
   const menuTab = contextMenu ? tabs.find((t) => t.id === contextMenu.tabId) : undefined;
   const menuTabEnded = useSessionEnd(menuTab?.sessionId ?? "", menuTab?.exit) !== null;
   const menuAgentLook = useTabAgentLook(menuTab?.sessionId);
-  const menuSessions = useAgentListProjectionStore((s) => s.sessions);
-  const menuAgent = menuTab
-    ? menuSessions?.find((r) => isFleetAgent(r) && r.sessionId === menuTab.sessionId)
-    : undefined;
+  // Only the right-clicked tab's agent: no other session's change redraws the chrome.
+  const menuAgent = useAgentListProjectionStore((s) =>
+    menuTab
+      ? s.sessions?.find((r) => isFleetAgent(r) && r.sessionId === menuTab.sessionId)
+      : undefined,
+  );
   const { requestStop, dialog: stopDialog } = useAgentStop();
   // SW-AGR-6: "Remind this agent…" on an interactive agent tab (saved or
   // unnamed, local or remote); its popover hangs from that tab's pill.
@@ -390,8 +393,10 @@ export function TerminalTileChrome({
   // the SAME label span a story tile uses.
   const isEpic = ws.kind === "epic";
   const label = useWorkspaceLabel(ws);
-  const activeTeamKey = useActiveTeamKey();
-  const teamKey = teamKeyProp ?? activeTeamKey;
+  // A tile given its team reads no active team: a switch commits nothing in it.
+  const teamKey = useOrgStore(
+    (s) => teamKeyProp ?? teamKeyOfOrg(s.activeOrgSlug, s.activeTeamName),
+  );
   const teamHue = useWorkspaceTeamHue(teamKey, ws.id);
   // The tile `×` names the verb a click takes (Hide / End), probed on hover,
   // focus, or when ⋮ opens (a folded entry has no hover).

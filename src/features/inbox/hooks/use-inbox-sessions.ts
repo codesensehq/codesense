@@ -40,8 +40,12 @@ function watch() {
     }
   };
 }
-export function useInboxSessions(): SessionListRow[] | null {
+/** Keep the shared session list read while the caller is mounted, without subscribing to it. */
+export function useWatchInboxSessions(): void {
   useEffect(watch, []);
+}
+export function useInboxSessions(): SessionListRow[] | null {
+  useWatchInboxSessions();
   const sessions = useInboxSessionsStore((s) => s.sessions);
   const counts = useInboxProjection();
   return useMemo(() => (sessions ? joinInboxSessions(sessions, counts) : null), [sessions, counts]);

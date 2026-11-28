@@ -53,6 +53,7 @@ const backend = vi.hoisted(() => ({
 }));
 
 vi.mock("@/tauri/commands", () => ({
+  avatarPacksListForTeam: vi.fn().mockResolvedValue({ packs: [], warnings: [] }),
   saveAppState: vi.fn().mockResolvedValue(undefined),
   loadAppState: vi.fn().mockResolvedValue("{}"),
   pushViewerState: vi.fn().mockResolvedValue(undefined),
