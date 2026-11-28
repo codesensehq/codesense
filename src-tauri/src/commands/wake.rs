@@ -9,6 +9,8 @@ use crate::delivery::authority::{Caller, SessionRef};
 use crate::delivery::events::WakeHistoryEntry;
 use crate::delivery::wakeup::{self, ScheduledWakeup, WakeupAsk, WakeupRow};
 use crate::delivery::DeliveryError;
+use crate::windows::human::is_human_window;
+use crate::windows::registry::WindowRegistry;
 
 /// A tab's wake history (its timer popover): its last deliveries, oldest
 /// first. `machineId` names a remote tab's machine; omitted, this Mac.
@@ -42,21 +44,18 @@ impl HumanGesture {
     }
 }
 
-/// The app's one window. Every webview this app opens today is `main`, so
-/// this check does not tell a dashboard from the app: what keeps dashboards
-/// out is their sandbox (an opaque-origin iframe with no Tauri IPC, see
-/// `html-viewer.tsx`) and the bridge allowlist with no timer verb. Agents
-/// reach the app only through MCP, never through these commands. The check
-/// refuses any other window a later change might add.
-const PERSON_WINDOW: &str = crate::windows::MAIN_LABEL;
-
-/// The person behind a command from the app window, or a refusal.
+/// The person behind a command from one of their windows, or a refusal. A
+/// person's window is `main` or a registered satellite that is ready
+/// (`windows::human`); a dashboard frame has no Tauri IPC (an opaque-origin
+/// iframe, see `html-viewer.tsx`) and the bridge allowlist has no timer verb.
+/// Agents reach the app only through MCP, never through these commands.
 fn person(webview: &Webview) -> Result<Caller, String> {
-    person_in(webview.label())
+    let registry = Manager::state::<WindowRegistry>(webview);
+    person_in(&registry, webview.label())
 }
 
-fn person_in(label: &str) -> Result<Caller, String> {
-    if label == PERSON_WINDOW {
+fn person_in(registry: &WindowRegistry, label: &str) -> Result<Caller, String> {
+    if is_human_window(registry, label) {
         Ok(Caller::Human(HumanGesture(())))
     } else {
         Err("Reminders are set from the CodeSense window".into())
@@ -185,14 +184,26 @@ pub(crate) async fn cancel_session_timer(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::windows::registry::test_host::Recorder;
 
-    // Only the app window acts as the person, and only this module makes the
-    // gesture that says so.
+    // Only a person's window acts as the person, and only this module makes
+    // the gesture that says so.
     #[test]
-    fn only_the_main_window_acts_as_the_person() {
-        assert_eq!(person_in("main"), Ok(Caller::Human(HumanGesture(()))));
-        for other in ["dashboard", "other", ""] {
-            assert!(person_in(other).is_err(), "{other}");
+    fn only_a_persons_window_acts_as_the_person() {
+        let host = Recorder::default();
+        let reg = WindowRegistry::new();
+        reg.add_satellite(&host, "sat-1").unwrap();
+        reg.ready(&host, "sat-1").unwrap();
+        reg.add_satellite(&host, "sat-2").unwrap();
+        for person in ["main", "sat-1"] {
+            assert_eq!(
+                person_in(&reg, person),
+                Ok(Caller::Human(HumanGesture(()))),
+                "{person}"
+            );
+        }
+        for other in ["dashboard", "other", "pane-zzz", "sat-2", ""] {
+            assert!(person_in(&reg, other).is_err(), "{other}");
         }
     }
 }
