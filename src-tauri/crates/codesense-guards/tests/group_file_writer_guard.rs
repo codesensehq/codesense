@@ -9,7 +9,7 @@
 //!
 //! - a string literal holding `config/groups` or `groups/` (macro tokens included);
 //! - a `join("groups")` or `push("groups")`;
-//! - a `const` or `static` whose value is the string `groups`, and an array literal that holds
+//! - a `const`, `static` or `let` whose value is the string `groups`, and an array literal that holds
 //!   `"groups"` (`["config", "groups"].iter().collect::<PathBuf>()`);
 //! - a `concat!` whose literals join into a group path (`concat!("config/", "groups")`);
 //! - a use of the store's `groups_dir` or `GROUPS_DIR`, outside [`ALLOWED`].
@@ -199,6 +199,13 @@ impl<'ast> Visit<'ast> for Scan<'_> {
         visit::visit_item_static(self, item);
     }
 
+    fn visit_local(&mut self, local: &'ast syn::Local) {
+        if let Some(init) = &local.init {
+            self.named_folder(&init.expr);
+        }
+        visit::visit_local(self, local);
+    }
+
     fn visit_expr_array(&mut self, array: &'ast syn::ExprArray) {
         for elem in &array.elems {
             self.named_folder(elem);
@@ -329,7 +336,8 @@ fn planted_writers_are_caught() {
         r#"fn f() -> &'static str { concat!("config/", "groups") }"#,
         r#"fn f() -> &'static str { concat!("config", "/", "groups", "/x") }"#,
         r#"fn f() -> std::path::PathBuf { ["config", "groups"].iter().collect::<std::path::PathBuf>() }"#,
-        r#"fn f() { let g = "groups"; let _ = [g, "x"]; let _ = ["groups"]; }"#,
+        r#"fn f(d: &std::path::Path) { let g = "groups"; let _ = d.join(g); }"#,
+        r#"fn f() { let _ = ["groups"]; }"#,
     ];
     for src in planted {
         assert!(!violations("elsewhere.rs", src).is_empty(), "missed: {src}");

@@ -86,9 +86,12 @@ fn generic_dir_problem(dir: &str) -> Option<&'static str> {
     if dir.len() > GENERIC_PATH_MAX {
         return Some("the generic workspace directory is too long");
     }
-    dir.chars()
-        .any(|c| c.is_control())
-        .then_some("the generic workspace directory holds a control character")
+    if dir.chars().any(|c| c.is_control()) {
+        return Some("the generic workspace directory holds a control character");
+    }
+    dir.split(['/', '\\'])
+        .any(|segment| matches!(segment, "." | ".."))
+        .then_some("the generic workspace directory holds a . or .. segment")
 }
 
 /// A team or agent name: `[a-z0-9][a-z0-9._-]{0,63}`.
