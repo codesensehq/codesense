@@ -26,6 +26,7 @@ import {
   leftNavDemoProcesses,
   leftNavDemoTabs,
 } from "./left-nav-demo";
+import { isPerfWorld } from "./perf-worlds";
 import type {
   TerminalCloseMode,
   TerminalGridState,
@@ -159,7 +160,12 @@ export function terminalLayoutHandlers(search: string, events: MockEventBus): Ha
     ...(agentTeam ? AGENT_TEAM_PROCESSES : {}),
     ...(navDemo ? leftNavDemoProcesses() : {}),
   };
-  const demo = agentTeam || navDemo || new URLSearchParams(search).get("terminals") === "demo";
+  // The perf baseline's 5,000-file nav boots as `?nav=demo` does, on the demo's app state.
+  const demo =
+    agentTeam ||
+    navDemo ||
+    isPerfWorld(search, "nav5k") ||
+    new URLSearchParams(search).get("terminals") === "demo";
   if (demo) seedDemo(host);
   // The `?nav=demo` world's story workspaces, each with its agents.
   if (navDemo) {

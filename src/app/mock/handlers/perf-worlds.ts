@@ -1,0 +1,72 @@
+// SPDX-License-Identifier: MIT
+import type { HandlerRegistry } from "../mock-router";
+import type { DerivedPipelineTree } from "@/shared/lib/pipeline-graph/types";
+
+/**
+ * The perf baseline's mock worlds (`tests/e2e-mock/perf-baseline.spec.ts`), each opt-in by query:
+ * `?perf=tiles12` boots 12 workspaces tiled 4 × 3 in the workspace mosaic (seeded by
+ * `terminal-layout.ts`), and `?perf=nav5k` answers `scan_pipeline_tree` with a team content tree of
+ * exactly 5,000 file rows in nested folders.
+ */
+export type PerfWorld = "tiles12" | "nav5k";
+
+export function isPerfWorld(search: string, world: PerfWorld): boolean {
+  return new URLSearchParams(search).get("perf") === world;
+}
+
+/** The nav tree's shape: top folders, the folders inside each, and the files in each of those. */
+const NAV_AREAS = 10;
+const NAV_GROUPS = 5;
+const NAV_FILES_PER_GROUP = 100;
+export const NAV_5K_FILES = NAV_AREAS * NAV_GROUPS * NAV_FILES_PER_GROUP;
+
+const pad = (n: number, width: number) => String(n).padStart(width, "0");
+
+function folder(root: string, dirPath: string, subEpics: DerivedPipelineTree[], docs: string[]) {
+  return {
+    dirPath,
+    dirName: dirPath.split("/").pop() ?? "",
+    absoluteDirPath: dirPath ? `${root}/${dirPath}` : root,
+    orderError: null,
+    mainDoc: null,
+    stories: [],
+    docs: docs.map((fileName) => ({ fileName, filePath: `${root}/${dirPath}/${fileName}` })),
+    subEpics,
+  } satisfies DerivedPipelineTree;
+}
+
+/** The 5,000-file team content: `area-NN/group-N/file-NNNNN.md`, numbered in tree order. */
+export function navTree5k(root: string): DerivedPipelineTree {
+  let next = 0;
+  const areas = Array.from({ length: NAV_AREAS }, (_, a) => {
+    const area = `area-${pad(a + 1, 2)}`;
+    const groups = Array.from({ length: NAV_GROUPS }, (_, g) => {
+      const files = Array.from({ length: NAV_FILES_PER_GROUP }, () => `file-${pad(next++, 5)}.md`);
+      return folder(root, `${area}/group-${g + 1}`, [], files);
+    });
+    return folder(root, area, groups, []);
+  });
+  return folder(root, "", areas, []);
+}
+
+/** The spec's clock, when it is installed (`window.__perf`). */
+type PerfClock = { start: { ms: number; endState: string } | null };
+
+/**
+ * `?perf=nav5k`: the team's scan answers the 5,000-file tree. Its first answer stamps the spec's
+ * start clock, which the nav's first paint is timed from; a later rescan leaves it.
+ */
+export function navPerfHandlers(): HandlerRegistry {
+  let stamped = false;
+  return {
+    scan_pipeline_tree: (args) => {
+      const tree = navTree5k(String(args.teamContentPath).replace(/\/+$/, ""));
+      const clock = (globalThis as { __perf?: PerfClock }).__perf;
+      if (clock && !stamped) {
+        stamped = true;
+        clock.start = { ms: performance.now(), endState: "scan_pipeline_tree" };
+      }
+      return tree;
+    },
+  };
+}
