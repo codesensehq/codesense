@@ -150,7 +150,8 @@ production or webdriver build even if a future import accidentally calls it.
 
 Mock code is referenced only inside a statically-false `MODE === "mock"` branch,
 so Vite/Rollup tree-shakes the entire `src/app/mock/` graph out of the production
-and `webdriver` bundles. `scripts/verify-webdriver-absence.ts` (`pnpm
-verify:webdriver:absence`) — which builds a fresh production bundle and already
-runs in CI — scans `dist/` for mock symbols alongside the webdriver ones and
-fails the build if any reach the shipped bundle.
+and `webdriver` bundles. No check scans the shipped bundle for mock symbols:
+`scripts/verify-webdriver-absence.ts` (`pnpm verify:webdriver-absence`, run in
+CI) builds a fresh production bundle into a temporary directory and fails if any
+webdriver-only marker (the e2e controls, the satellite probe route, the
+WebDriver plugin's front-end) reaches it.
