@@ -9,25 +9,31 @@
  *
  * The measured file is what `tests/e2e-mock/perf-baseline.spec.ts` writes (`PERF_BASELINE_OUT`):
  * `{engine, runs, commit, date, throttle, keys: {<key>: {unit, samples: [{ms|fps, endState}]}}}`.
- * The baseline (default `tests/fixtures/perf-baseline.json`) holds one set per runner and a
- * `compare` block: `{compare: {keys, tolerancePercent, floor: {ms, fps}}, sets: [{runner, engine,
- * runs, commit, date, throttle, keys: {<key>: {unit, p50, p95|p5, samples, endState}}}]}`.
+ * The baseline (default `tests/fixtures/perf-baseline.json`) holds one set per runner, a `compare`
+ * block and an optional open-time `budget`: `{compare: {keys, tolerancePercent, floor: {ms, fps}},
+ * budget: {runner, p95Ms, keys}, sets: [{runner, engine, runs, commit, date, throttle, keys: {<key>:
+ * {unit, p50, p95|p5, samples, endState}}}]}`.
  *
  * compare: for each `compare.keys` key, the current median against the runner set's p50. A time key
  * regresses when median > p50 × (1 + tol) and median − p50 > floor.ms; an fps key when median < p50
  * × (1 − tol) and p50 − median > floor.fps. Tolerance and floor come only from the file. Prints one
  * `PASS|FAIL` line per key, with `<set's end state> -> <current>` when the two differ, and a
- * verdict; with `$GITHUB_STEP_SUMMARY` set it appends the verdict and a table there. Exit 0 when
- * every key passes or the runner has no set, 1 on any regression, 2 on an input error (a bad file
- * or shape, a missing key, fewer than 3 samples, an engine mismatch, a bad argument) or any
- * unexpected error.
+ * verdict; with `$GITHUB_STEP_SUMMARY` set it appends the verdict and a table there. For
+ * `budget.runner` alone it then checks each `budget.keys` key's current p95 against `p95Ms`, from
+ * the current samples only (the key needs no set entry and no `compare.keys` entry): a p95 over it
+ * prints `FAIL <key> p95 <n>ms > budget <p95Ms>` and the verdict names the key. Exit 0 when every
+ * key passes or the runner has no set, 1 on any regression or a key over budget, 2 on an input
+ * error (a bad file or shape, a malformed budget block, a missing key, a budget key not in ms,
+ * fewer than 3 samples, an engine mismatch, a bad argument) or any unexpected error.
  *
  * record: replaces (or adds) only that runner's set; every other set keeps its bytes. A runner
  * other than m1 never records the `M1_ONLY_KEYS` (`team_switch`): they are dropped. A key of the
  * previous set that this run didn't measure is kept; outside m1 (whose hand-measured keys are
  * meant to stay) record names each one, since the set now carries the new commit. Prints each
  * key's spread over its samples: a key can join `compare.keys` when the spread is ≤ 10% of the
- * median or the range is within floor.ms. `compare.keys` itself is edited by hand.
+ * median or the range is within floor.ms. `compare.keys` itself is edited by hand. On
+ * `budget.runner` it also prints each budget key's FAIL line, or `budget <key>: not measured` for a
+ * key the run left out, and still exits 0; the `budget` block is kept as it is.
  */
 import fs from "node:fs";
 import path from "node:path";
