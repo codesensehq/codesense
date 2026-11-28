@@ -1880,17 +1880,20 @@ function restoredForegroundLayouts(saved: unknown): Record<string, ForegroundLay
   );
 }
 
-/** Layouts a prefs apply restored, each live layout's root kept when the group files own the
- *  roots (the tiles flag on): app-state then holds launch roots, never the ones shown. */
+/** Layouts a prefs apply restored, each one's live root kept when the group files own the roots
+ *  (the tiles flag on): app-state then holds launch roots, never the ones shown. A layout the
+ *  prefs no longer hold stays gone. */
 function withLiveRoots<T extends { root: MosaicNode | null }>(
   restored: Record<string, T>,
   live: Record<string, T>,
 ): Record<string, T> {
   if (!groupFilesOwnRoots()) return restored;
-  const kept = { ...restored };
-  for (const [key, layout] of Object.entries(live))
-    kept[key] = { ...(restored[key] ?? layout), root: layout.root };
-  return kept;
+  return Object.fromEntries(
+    Object.entries(restored).map(([key, layout]) => [
+      key,
+      key in live ? { ...layout, root: live[key].root } : layout,
+    ]),
+  );
 }
 
 /** Every team's saved per-rail foreground layouts, restored. */
@@ -13354,19 +13357,12 @@ export function applyOwnedViewerPrefs(viewer: Record<string, unknown>, reset = f
       );
     else if (key === "foregroundLayoutByRail") {
       const restored = restoredForegroundLayoutsByRail(value);
-      patch.foregroundLayoutByRail = groupFilesOwnRoots()
-        ? Object.fromEntries(
-            [
-              ...new Set([
-                ...Object.keys(restored),
-                ...Object.keys(viewerState.foregroundLayoutByRail),
-              ]),
-            ].map((team) => [
-              team,
-              withLiveRoots(restored[team] ?? {}, viewerState.foregroundLayoutByRail[team] ?? {}),
-            ]),
-          )
-        : restored;
+      patch.foregroundLayoutByRail = Object.fromEntries(
+        Object.entries(restored).map(([team, rails]) => [
+          team,
+          withLiveRoots(rails, viewerState.foregroundLayoutByRail[team] ?? {}),
+        ]),
+      );
     } else if (key === "workspaces") {
       patch.workspaces = Object.fromEntries(
         [

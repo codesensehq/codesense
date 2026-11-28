@@ -1763,6 +1763,27 @@ describe("mosaic leaves saved before leaves carried an id", () => {
     }
   });
 
+  it("with the tiles flag on, a layout a prefs echo no longer holds stays dropped", async () => {
+    tiles.on = true;
+    try {
+      await echoAfterGroupShow(shown);
+      const fg = { ...legacyViewer.foregroundLayout[TEAM_KEY], preset: "rows" };
+      applyOwnedViewerPrefs({
+        foregroundLayout: { [TEAM_KEY]: fg },
+        foregroundLayoutByRail: { [TEAM_KEY]: {} },
+        terminalTabGridSizes: {},
+      });
+      const s = useViewerStore.getState();
+      expect(s.tabGridLayout).not.toHaveProperty(gridKey);
+      expect(s.foregroundLayoutByRail[TEAM_KEY]).not.toHaveProperty("epic");
+      expect(s.foregroundLayout[TEAM_KEY].root).toEqual(shown);
+    } finally {
+      tiles.on = false;
+      resetLayoutClientForTests();
+      applyOwnedViewerPrefs({}, true);
+    }
+  });
+
   it("with the tiles flag off, a prefs echo restores each layout it carries, root included", async () => {
     try {
       const s = await echoAfterGroupShow(shown);
