@@ -28,6 +28,8 @@
 //!   Linux).
 //! - `pdf` (with the `pdf` feature): rendering a page to PDF in a hidden web
 //!   view, and which sources an export may load.
+//! - `webview_proxy` (with the `webview-proxy` feature): sending the web
+//!   views' `localhost` loads to the app's API listener (macOS 14 and later).
 
 pub mod cli;
 pub mod dialog;
@@ -40,6 +42,8 @@ pub mod pdf;
 pub mod process;
 pub mod tray;
 pub mod user;
+#[cfg(any(feature = "webview-proxy", test))]
+pub mod webview_proxy;
 
 pub use tray::status_notifier_host_registered;
 
