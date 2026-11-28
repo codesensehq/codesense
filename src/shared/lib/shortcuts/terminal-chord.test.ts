@@ -161,3 +161,25 @@ describe("terminalClipboardAction", () => {
     expect(terminalClipboardAction({ ...base, metaKey: true, key: "C" })).toBeNull();
   });
 });
+
+describe("terminalChord with a ⌃ chord", () => {
+  it("leaves a Ctrl chord as written: it is never lifted and never matches off macOS", () => {
+    setPlatform("Win32");
+    expect(terminalChord("Ctrl+CmdOrCtrl+K", { builtIns: [] })).toBe("Ctrl+CmdOrCtrl+K");
+    expect(terminalChord("Ctrl+CmdOrCtrl+Alt+ArrowRight", { builtIns: [] })).toBe(
+      "Ctrl+CmdOrCtrl+Alt+ArrowRight",
+    );
+    setPlatform("MacIntel");
+    expect(terminalChord("Ctrl+CmdOrCtrl+K", { builtIns: [] })).toBe("Ctrl+CmdOrCtrl+K");
+  });
+
+  it("a built-in on a Ctrl chord holds only that chord, not its plain or lifted form", () => {
+    setPlatform("Win32");
+    const builtIns = ["Ctrl+CmdOrCtrl+K"];
+    // A command on Ctrl+K still lifts onto Ctrl+Shift+K: the ⌃ built-in doesn't hold it.
+    expect(terminalChord("CmdOrCtrl+K", { builtIns }, true)).toBe("CmdOrCtrl+Shift+K");
+    expect(terminalChord("CmdOrCtrl+Shift+K", { builtIns }, true)).toBe("CmdOrCtrl+Shift+K");
+    // The same Ctrl chord is still the built-in's.
+    expect(terminalChord("Ctrl+CmdOrCtrl+K", { builtIns }, true)).toBe("");
+  });
+});

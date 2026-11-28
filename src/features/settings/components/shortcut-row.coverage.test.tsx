@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: MIT
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import { SHORTCUT_ACTIONS, type ShortcutAction } from "@/shared/lib/shortcuts/registry";
 import { useShortcutsStore } from "@/shared/stores/shortcuts-store";
+import { restorePlatform, setPlatform } from "@/test/platform";
 
 import { ShortcutRow } from "./shortcut-row";
 
@@ -200,5 +201,40 @@ describe("ShortcutRow", () => {
     expect(useShortcutsStore.getState().shortcuts).toEqual({});
     expect(screen.getByTestId("shortcut-row-settings.open-current")).toHaveTextContent("⌘,");
     expect(screen.getByTestId("shortcut-row-settings.open-reset")).toBeDisabled();
+  });
+});
+
+describe("recording a ⌃ chord", () => {
+  afterEach(restorePlatform);
+
+  async function record(init: KeyboardEventInit) {
+    const user = userEvent.setup();
+    render(<ShortcutRow action={getAction("settings.open")} />);
+    await user.click(screen.getByTestId("shortcut-row-settings.open-edit"));
+    act(() => {
+      fireEvent.keyDown(screen.getByTestId("shortcut-row-settings.open-capture"), init);
+    });
+  }
+
+  it("records ⌃⌥⌘→ on macOS and shows it with its ⌃", async () => {
+    setPlatform("MacIntel");
+    await record({ key: "ArrowRight", metaKey: true, ctrlKey: true, altKey: true });
+    expect(useShortcutsStore.getState().shortcuts["settings.open"]).toBe(
+      "Ctrl+CmdOrCtrl+Alt+ArrowRight",
+    );
+    expect(screen.getByTestId("shortcut-row-settings.open-current")).toHaveTextContent("⌃⌘⌥→");
+  });
+
+  it("refuses a Ctrl+Meta chord off macOS and saves nothing", async () => {
+    setPlatform("Win32");
+    await record({ key: "n", metaKey: true, ctrlKey: true });
+    expect(useShortcutsStore.getState().shortcuts).toEqual({});
+    expect(screen.getByTestId("shortcut-row-settings.open-error")).toHaveTextContent(/macOS/);
+  });
+
+  it("records Ctrl alone off macOS as today", async () => {
+    setPlatform("Win32");
+    await record({ key: ".", ctrlKey: true, shiftKey: true });
+    expect(useShortcutsStore.getState().shortcuts["settings.open"]).toBe("CmdOrCtrl+Shift+.");
   });
 });

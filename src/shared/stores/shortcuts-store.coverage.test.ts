@@ -502,3 +502,38 @@ describe("binding collisions from overrides saved before a new default", () => {
     expect(String(warnings[0][1])).toContain("viewer.reopen-closed-tab");
   });
 });
+
+describe("a saved ⌃ chord", () => {
+  it("setShortcut keeps a Ctrl chord in canonical form", () => {
+    const result = useShortcutsStore
+      .getState()
+      .setShortcut("settings.open", "Alt+CmdOrCtrl+Ctrl+ArrowRight");
+    expect(result).toEqual({ ok: true });
+    expect(useShortcutsStore.getState().shortcuts["settings.open"]).toBe(
+      "Ctrl+CmdOrCtrl+Alt+ArrowRight",
+    );
+  });
+
+  it("setShortcut refuses a ⌃ chord without ⌘", () => {
+    const result = useShortcutsStore.getState().setShortcut("settings.open", "Ctrl+N");
+    expect(result).toMatchObject({ ok: false, reason: "invalid" });
+  });
+
+  it("loadPersistedState keeps a Ctrl override and drops a ⌃-only one", async () => {
+    mockLoadAppState.mockResolvedValue(
+      JSON.stringify({
+        shortcuts: {
+          shortcuts: {
+            "settings.open": "Ctrl+CmdOrCtrl+Shift+ArrowRight",
+            "nav.switch-workspace": "Ctrl+Shift+ArrowRight",
+          },
+        },
+      }),
+    );
+    useShortcutsStore.setState({ shortcuts: {}, stateLoaded: false });
+    await useShortcutsStore.getState().loadPersistedState();
+    expect(useShortcutsStore.getState().shortcuts).toEqual({
+      "settings.open": "Ctrl+CmdOrCtrl+Shift+ArrowRight",
+    });
+  });
+});

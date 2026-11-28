@@ -5,6 +5,7 @@ import {
   hasAnyModifier,
   hasCmd,
   hasCommandModifier,
+  hasCtrlAndCmd,
   hasMod,
   hasPlatformMod,
   keydownEvent,
@@ -29,6 +30,15 @@ describe("mod helpers", () => {
   it("hasCmd is the Meta key only", () => {
     expect(hasCmd({ ...none, metaKey: true })).toBe(true);
     expect(hasCmd({ ...none, ctrlKey: true })).toBe(false);
+  });
+
+  it("hasCtrlAndCmd is Meta and Ctrl held together, on every platform", () => {
+    expect(hasCtrlAndCmd(none)).toBe(false);
+    expect(hasCtrlAndCmd({ ...none, metaKey: true })).toBe(false);
+    expect(hasCtrlAndCmd({ ...none, ctrlKey: true })).toBe(false);
+    expect(hasCtrlAndCmd({ metaKey: true, ctrlKey: true })).toBe(true);
+    setPlatform("Win32");
+    expect(hasCtrlAndCmd({ metaKey: true, ctrlKey: true })).toBe(true);
   });
 
   it("hasPlatformMod is Meta on macOS and Ctrl elsewhere", () => {

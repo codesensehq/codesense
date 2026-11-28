@@ -176,6 +176,26 @@ fn invalid_commands_reject_the_dashboard_with_a_plain_reason() {
     }
 }
 
+/// The app's ⌃ modifier (`Ctrl+CmdOrCtrl+…`) is for built-in actions only: a dashboard command
+/// can't take a ⌃ chord, because `Ctrl` reads as a second key.
+#[test]
+fn a_ctrl_chord_is_refused_for_a_dashboard_command() {
+    for chord in ["Ctrl+CmdOrCtrl+J", "Ctrl+CmdOrCtrl+Alt+ArrowRight", "Ctrl+J"] {
+        let html = format!(
+            r#"<meta name="codesense:commands" content='[{{"id":"a","label":"A","scope":"global","defaultChord":"{chord}"}}]'>"#
+        );
+        let entry = discover(&html, None);
+        assert_eq!(entry["status"], "rejected", "{chord}: {entry}");
+        assert!(
+            entry["rejectedReason"]
+                .as_str()
+                .unwrap()
+                .contains("more than one key"),
+            "{chord}: {entry}"
+        );
+    }
+}
+
 #[test]
 fn reserved_and_forwardable_default_chords_are_accepted() {
     for chord in [

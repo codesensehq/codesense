@@ -15,7 +15,10 @@ import { keydown } from "@/test/keydown";
 // with per-action spies and asserts the capture-phase intercept fires the right
 // run() (and the pty mock never sees the keystroke) — without pulling in the real
 // actions' store/toast dependencies.
+/** Bindings a test puts in place of the defaults below; cleared after each test. */
+const { rebound } = vi.hoisted(() => ({ rebound: {} as Record<string, string> }));
 function shortcutFor(id: string): string {
+  if (rebound[id]) return rebound[id];
   const map: Record<string, string> = {
     "nav.context-back": "CmdOrCtrl+[",
     "nav.context-forward": "CmdOrCtrl+]",
@@ -484,5 +487,32 @@ describe("off macOS", () => {
     expect(event.defaultPrevented).toBe(true);
     expect(runFor("viewer.cycle-workspace-next")).toHaveBeenCalledOnce();
     expect(ptyKey).not.toHaveBeenCalled();
+  });
+});
+
+describe("a ⌃ chord from the terminal", () => {
+  afterEach(() => {
+    delete rebound["viewer.jump-workspace-1"];
+    restorePlatform();
+  });
+
+  it("is shell input on macOS: ⌘⌃1 bound as Ctrl+CmdOrCtrl+1 reaches the pty", () => {
+    setPlatform("MacIntel");
+    rebound["viewer.jump-workspace-1"] = "Ctrl+CmdOrCtrl+1";
+    const ptyKey = vi.fn();
+    const { getByTestId } = render(<Harness ptyKey={ptyKey} />);
+    const event = press(getByTestId("pty-mock"), { key: "1", metaKey: true, ctrlKey: true });
+    expect(event.defaultPrevented).toBe(false);
+    expect(runFor("viewer.jump-workspace-1")).not.toHaveBeenCalled();
+    expect(ptyKey).toHaveBeenCalledOnce();
+  });
+
+  it("leaves a plain ⌘ chord taking ⌘ and refusing ⌘⌃ as today", () => {
+    setPlatform("MacIntel");
+    const { getByTestId } = render(<Harness ptyKey={vi.fn()} />);
+    const pty = getByTestId("pty-mock");
+    expect(press(pty, { key: "1", metaKey: true, ctrlKey: true }).defaultPrevented).toBe(false);
+    expect(press(pty, { key: "1", metaKey: true }).defaultPrevented).toBe(true);
+    expect(runFor("viewer.jump-workspace-1")).toHaveBeenCalledOnce();
   });
 });

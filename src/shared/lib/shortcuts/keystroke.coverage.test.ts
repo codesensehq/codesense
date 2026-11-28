@@ -8,10 +8,12 @@ import {
   HOST_RESERVED_CHORDS,
   isReservedForDashboardCommand,
   isReservedKeystroke,
+  keydownEvent,
   keystrokeFromEvent,
   matchesKeystroke,
   parseKeystroke,
 } from "./keystroke";
+import { resolveBindings, SHORTCUT_ACTIONS } from "./registry";
 
 // ---------- Platform stubbing ----------
 
@@ -545,5 +547,204 @@ describe("the chords a dashboard host keeps", () => {
     // Anything off the list is the dashboard's to declare, unlike the built-ins' wider set.
     expect(isReservedForDashboardCommand("CmdOrCtrl+Shift+C")).toBeNull();
     expect(isReservedKeystroke("CmdOrCtrl+Q")).not.toBeNull();
+  });
+});
+
+// ---------- the ⌃ modifier ----------
+
+describe("the Ctrl modifier (⌃, held with ⌘)", () => {
+  const CTRL_ALT = "Ctrl+CmdOrCtrl+Alt+ArrowRight";
+  const CTRL_SHIFT = "Ctrl+CmdOrCtrl+Shift+ArrowRight";
+
+  it("parses Ctrl as its own modifier and keeps the canonical segment order", () => {
+    expect(parseKeystroke(CTRL_ALT)).toEqual({
+      ctrl: true,
+      cmdOrCtrl: true,
+      shift: false,
+      alt: true,
+      key: "ArrowRight",
+    });
+    expect(formatKeystroke(parseKeystroke(CTRL_ALT))).toBe(CTRL_ALT);
+    expect(formatKeystroke(parseKeystroke(CTRL_SHIFT))).toBe(CTRL_SHIFT);
+    // Any written order comes back as Ctrl+CmdOrCtrl+Shift+Alt+Key.
+    expect(formatKeystroke(parseKeystroke("Alt+Shift+CmdOrCtrl+Ctrl+N"))).toBe(
+      "Ctrl+CmdOrCtrl+Shift+Alt+N",
+    );
+  });
+
+  it("leaves ctrl off a keystroke that does not name it", () => {
+    expect(parseKeystroke("CmdOrCtrl+Shift+P").ctrl).toBeFalsy();
+    expect(formatKeystroke({ cmdOrCtrl: true, shift: false, alt: false, key: "N" })).toBe(
+      "CmdOrCtrl+N",
+    );
+  });
+
+  it("refuses a ⌃ chord without ⌘", () => {
+    expect(() => parseKeystroke("Ctrl+N")).toThrow(/Ctrl/);
+    expect(() => parseKeystroke("Ctrl+Shift+N")).toThrow(/Ctrl/);
+  });
+
+  it("displays ⌃ before the other glyphs on macOS, and as Ctrl+Meta+ elsewhere", () => {
+    setPlatform("MacIntel");
+    expect(formatKeystrokeDisplay(CTRL_ALT)).toBe("⌃⌘⌥→");
+    expect(formatKeystrokeDisplay(CTRL_SHIFT)).toBe("⌃⌘⇧→");
+    setPlatform("Win32");
+    expect(formatKeystrokeDisplay(CTRL_ALT)).toBe("Ctrl+Meta+Alt+→");
+    expect(formatKeystrokeDisplay(CTRL_SHIFT)).toBe("Ctrl+Meta+Shift+→");
+  });
+
+  it("names Control and Meta in aria-keyshortcuts on every platform", () => {
+    setPlatform("MacIntel");
+    expect(ariaKeyshortcuts(CTRL_ALT)).toBe("Control+Meta+Alt+ArrowRight");
+    setPlatform("Linux x86_64");
+    expect(ariaKeyshortcuts(CTRL_SHIFT)).toBe("Control+Meta+Shift+ArrowRight");
+  });
+
+  it("captures ⌃⌥⌘ and ⌃⇧⌘ keydowns as Ctrl keystrokes that round-trip", () => {
+    setPlatform("MacIntel");
+    const ctrlAlt = new KeyboardEvent("keydown", {
+      key: "ArrowRight",
+      metaKey: true,
+      ctrlKey: true,
+      altKey: true,
+    });
+    const ctrlShift = new KeyboardEvent("keydown", {
+      key: "ArrowRight",
+      metaKey: true,
+      ctrlKey: true,
+      shiftKey: true,
+    });
+    expect(keystrokeFromEvent(ctrlAlt)).toBe(CTRL_ALT);
+    expect(keystrokeFromEvent(ctrlShift)).toBe(CTRL_SHIFT);
+    expect(matchesKeystroke(ctrlAlt, keystrokeFromEvent(ctrlAlt)!)).toBe(true);
+    expect(matchesKeystroke(ctrlShift, keystrokeFromEvent(ctrlShift)!)).toBe(true);
+    // ⌘ alone or ⌃ alone captures as today.
+    const cmdN = new KeyboardEvent("keydown", { key: "n", metaKey: true });
+    const ctrlN = new KeyboardEvent("keydown", { key: "n", ctrlKey: true });
+    expect(keystrokeFromEvent(cmdN)).toBe("CmdOrCtrl+N");
+    expect(keystrokeFromEvent(ctrlN)).toBe("N");
+  });
+
+  it("captures Meta+Ctrl as a Ctrl keystroke off macOS too, for the recorder to refuse", () => {
+    setPlatform("Win32");
+    const both = new KeyboardEvent("keydown", { key: "n", metaKey: true, ctrlKey: true });
+    expect(keystrokeFromEvent(both)).toBe("Ctrl+CmdOrCtrl+N");
+    const ctrlN = new KeyboardEvent("keydown", { key: "n", ctrlKey: true });
+    expect(keystrokeFromEvent(ctrlN)).toBe("CmdOrCtrl+N");
+  });
+
+  // The match table: event ⌘N, ⌃N, ⌘⌃N × keystroke CmdOrCtrl+N, Ctrl+CmdOrCtrl+N, with and
+  // without macCmdOnly, on macOS and off it.
+  const EVENTS = {
+    "⌘N": { metaKey: true },
+    "⌃N": { ctrlKey: true },
+    "⌘⌃N": { metaKey: true, ctrlKey: true },
+  } as const;
+  type Row = [
+    platform: string,
+    event: keyof typeof EVENTS,
+    keystroke: string,
+    macCmdOnly: boolean,
+    matches: boolean,
+  ];
+  const rows: Row[] = [
+    ["MacIntel", "⌘N", "CmdOrCtrl+N", false, true],
+    ["MacIntel", "⌃N", "CmdOrCtrl+N", false, true],
+    ["MacIntel", "⌘⌃N", "CmdOrCtrl+N", false, true],
+    ["MacIntel", "⌘N", "CmdOrCtrl+N", true, true],
+    ["MacIntel", "⌃N", "CmdOrCtrl+N", true, false],
+    ["MacIntel", "⌘⌃N", "CmdOrCtrl+N", true, false],
+    ["MacIntel", "⌘N", "Ctrl+CmdOrCtrl+N", false, false],
+    ["MacIntel", "⌃N", "Ctrl+CmdOrCtrl+N", false, false],
+    ["MacIntel", "⌘⌃N", "Ctrl+CmdOrCtrl+N", false, true],
+    ["MacIntel", "⌘N", "Ctrl+CmdOrCtrl+N", true, false],
+    ["MacIntel", "⌃N", "Ctrl+CmdOrCtrl+N", true, false],
+    ["MacIntel", "⌘⌃N", "Ctrl+CmdOrCtrl+N", true, false],
+    ["Win32", "⌘N", "CmdOrCtrl+N", false, true],
+    ["Win32", "⌃N", "CmdOrCtrl+N", false, true],
+    ["Win32", "⌘⌃N", "CmdOrCtrl+N", false, true],
+    ["Win32", "⌘N", "CmdOrCtrl+N", true, true],
+    ["Win32", "⌃N", "CmdOrCtrl+N", true, true],
+    ["Win32", "⌘⌃N", "CmdOrCtrl+N", true, true],
+    ["Win32", "⌘N", "Ctrl+CmdOrCtrl+N", false, false],
+    ["Win32", "⌃N", "Ctrl+CmdOrCtrl+N", false, false],
+    ["Win32", "⌘⌃N", "Ctrl+CmdOrCtrl+N", false, false],
+    ["Win32", "⌘N", "Ctrl+CmdOrCtrl+N", true, false],
+    ["Win32", "⌃N", "Ctrl+CmdOrCtrl+N", true, false],
+    ["Win32", "⌘⌃N", "Ctrl+CmdOrCtrl+N", true, false],
+  ];
+  it.each(rows)("on %s, %s × %s (macCmdOnly %s) matches: %s", (platform, event, ks, only, ok) => {
+    setPlatform(platform);
+    const e = new KeyboardEvent("keydown", { key: "n", ...EVENTS[event] });
+    expect(matchesKeystroke(e, ks, { macCmdOnly: only })).toBe(ok);
+  });
+
+  it("a ⌃ chord needs exactly its other modifiers", () => {
+    setPlatform("MacIntel");
+    const extraShift = new KeyboardEvent("keydown", {
+      key: "ArrowRight",
+      metaKey: true,
+      ctrlKey: true,
+      altKey: true,
+      shiftKey: true,
+    });
+    expect(matchesKeystroke(extraShift, CTRL_ALT)).toBe(false);
+    expect(matchesKeystroke(extraShift, "Ctrl+CmdOrCtrl+Shift+Alt+ArrowRight")).toBe(true);
+  });
+
+  it("is not reserved as the plain ⌘ chord is", () => {
+    setPlatform("MacIntel");
+    expect(isReservedKeystroke("CmdOrCtrl+Q")).not.toBeNull();
+    expect(isReservedKeystroke("Ctrl+CmdOrCtrl+Q")).toBeNull();
+  });
+});
+
+describe("every registry default and saved override parses and matches as before the Ctrl modifier", () => {
+  /** The keydown that presses `keystroke` on the given platform, as a person would. */
+  function pressing(keystroke: string, mac: boolean): KeyboardEvent {
+    const parts = parseKeystroke(keystroke);
+    const key = parts.key === "Space" ? " " : parts.key;
+    return keydownEvent({
+      key,
+      metaKey: parts.cmdOrCtrl && mac,
+      ctrlKey: parts.cmdOrCtrl && !mac,
+      shiftKey: parts.shift,
+      altKey: parts.alt,
+    });
+  }
+
+  /** Overrides a person may have saved: every modifier shape the recorder could write. */
+  const SAVED = [
+    "CmdOrCtrl+N",
+    "CmdOrCtrl+Shift+N",
+    "CmdOrCtrl+Alt+N",
+    "CmdOrCtrl+Shift+Alt+N",
+    "Shift+Alt+N",
+    "Alt+ArrowLeft",
+    "F2",
+    "CmdOrCtrl+Space",
+    "CmdOrCtrl+Shift+]",
+  ];
+  /** The defaults, and the terminal chords they lift onto off macOS. */
+  function defaults(): string[] {
+    setPlatform("Win32");
+    const terminal = [...resolveBindings({}).values()].map((b) => b.terminalKeystroke);
+    restorePlatform();
+    return [...SHORTCUT_ACTIONS.map((a) => a.defaultKeystroke), ...terminal];
+  }
+  const chords = [...new Set([...defaults(), ...SAVED].filter((k) => k !== ""))];
+
+  it("has defaults to check", () => {
+    expect(chords.length).toBeGreaterThan(20);
+  });
+
+  it.each(chords)("%s", (keystroke) => {
+    const parts = parseKeystroke(keystroke);
+    expect(parts.ctrl).toBeFalsy();
+    expect(formatKeystroke(parts)).toBe(formatKeystroke(parseKeystroke(formatKeystroke(parts))));
+    for (const platform of ["MacIntel", "Win32"]) {
+      setPlatform(platform);
+      expect(matchesKeystroke(pressing(keystroke, platform === "MacIntel"), keystroke)).toBe(true);
+    }
   });
 });
