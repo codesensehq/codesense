@@ -39,11 +39,19 @@ pub enum OwnerKind {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum SavedNode {
-    /// A tile: its ref under both keys, which must be equal.
+    /// A tile: its ref under both keys, which must be equal, and its tabs when it holds more
+    /// than one.
     Leaf {
         id: String,
         #[serde(rename = "workspaceId")]
         workspace_id: String,
+        /// The tile's tabs in order, each a tile ref. Empty (and not written) for a tile whose
+        /// one tab is its own ref.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        tabs: Vec<String>,
+        /// The tab the tile shows, one of `tabs`. Empty (and not written) with no `tabs`.
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        active: String,
     },
     /// A split: two or more children and one size per child.
     Split {
@@ -74,7 +82,8 @@ pub struct Tombstone {
 pub const TS_TYPE_FILE: &str = "src/shared/tiling/group-file.generated.ts";
 
 /// The TS declarations of [`GroupFile`], rendered from its JSON schema: the root type first, then
-/// each referenced type by name. Formatted as Prettier formats it.
+/// each referenced type by name. A field the schema doesn't require and that isn't nullable is
+/// one serde may leave out, so it is optional (`?`). Formatted as Prettier formats it.
 pub fn ts_type() -> String {
     let schema = serde_json::to_value(schemars::schema_for!(GroupFile)).unwrap_or_default();
     let defs = schema
@@ -106,7 +115,8 @@ fn declaration(name: &str, schema: &serde_json::Value) -> String {
     if members.len() == 1 && properties(schema).is_some() {
         let mut out = format!("\nexport interface {name} {{\n");
         for (key, value) in properties(schema).into_iter().flatten() {
-            out.push_str(&format!("  {key}: {};\n", render(&value)));
+            let mark = optional_mark(schema, &key, &value);
+            out.push_str(&format!("  {key}{mark}: {};\n", render(&value)));
         }
         out.push_str("}\n");
         return out;
@@ -150,6 +160,36 @@ fn properties(
         .map(|props| props.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
 }
 
+/// `?` for a property serde may leave out: not required and not nullable. A nullable one that is
+/// not required is an `Option` serde writes as `null`, so it stays present.
+fn optional_mark(schema: &serde_json::Value, key: &str, value: &serde_json::Value) -> &'static str {
+    let required = schema
+        .get("required")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|names| names.iter().any(|name| name == key));
+    if required || is_nullable(value) {
+        ""
+    } else {
+        "?"
+    }
+}
+
+/// Whether a schema admits `null`.
+fn is_nullable(schema: &serde_json::Value) -> bool {
+    let null = serde_json::Value::from("null");
+    match schema.get("type") {
+        Some(serde_json::Value::Array(types)) if types.contains(&null) => return true,
+        Some(t) if *t == null => return true,
+        _ => {}
+    }
+    ["oneOf", "anyOf"].iter().any(|key| {
+        schema
+            .get(*key)
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|members| members.iter().any(is_nullable))
+    })
+}
+
 /// A schema as a TS type expression.
 fn render(schema: &serde_json::Value) -> String {
     if let Some(value) = schema.get("const") {
@@ -166,7 +206,7 @@ fn render(schema: &serde_json::Value) -> String {
     if let Some(props) = properties(schema) {
         let fields: Vec<String> = props
             .iter()
-            .map(|(k, v)| format!("{k}: {}", render(v)))
+            .map(|(k, v)| format!("{k}{}: {}", optional_mark(schema, k, v), render(v)))
             .collect();
         return format!("{{ {} }}", fields.join("; "));
     }
@@ -240,10 +280,14 @@ mod tests {
                     SavedNode::Leaf {
                         id: "agent:core/dev".into(),
                         workspace_id: "agent:core/dev".into(),
+                        tabs: vec!["agent:core/dev".into(), "doc:core/README.md".into()],
+                        active: "doc:core/README.md".into(),
                     },
                     SavedNode::Leaf {
                         id: "ws-1".into(),
                         workspace_id: "ws-1".into(),
+                        tabs: vec![],
+                        active: String::new(),
                     },
                 ],
                 sizes: vec![25.0, 75.0],
@@ -251,6 +295,8 @@ mod tests {
         };
         let json = serde_json::to_string(&file).unwrap();
         assert!(json.contains(r#""kind":"leaf","id":"agent:core/dev","workspaceId""#));
+        // A one-tab tile writes no tabs and no active tab.
+        assert!(json.contains(r#"{"kind":"leaf","id":"ws-1","workspaceId":"ws-1"}"#));
         assert_eq!(serde_json::from_str::<GroupFile>(&json).unwrap(), file);
     }
 

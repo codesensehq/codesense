@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -144,5 +145,28 @@ describe("tileKeyOf and tileKindOf", () => {
   it("keys a file and an agent as the leaf-id grammar does", () => {
     expect(tileKeyOf(REFS["markdown file"])).toBe("doc:core/notes/plan.md");
     expect(tileKeyOf(REFS.agent)).toBe("agent:team-2/review.bot_1");
+  });
+});
+
+describe("tile keys and the leaf-id grammar", () => {
+  const rows: { leaf: string; layer: string; valid: boolean }[] = JSON.parse(
+    readFileSync("tests/fixtures/leaf-keys.json", "utf8"),
+  ).refs;
+  const validIn = (leaf: string, layer: string) =>
+    rows.some((r) => r.leaf === leaf && r.layer === layer && r.valid);
+
+  // The store checks every saved tab with the Rust grammar, which reads the same fixture.
+  it.each(Object.entries(REFS).filter(([, ref]) => ref.kind !== "shell"))(
+    "the %s key is one the store keeps",
+    (_, ref) => {
+      expect(validIn(tileKeyOf(ref), "private"), tileKeyOf(ref)).toBe(true);
+    },
+  );
+
+  it("keeps a worktree's diff and a scratch note out of a shared layer", () => {
+    for (const ref of [REFS.diff, REFS.notes])
+      expect(validIn(tileKeyOf(ref), "shared")).toBe(false);
+    for (const ref of [REFS["story page"], REFS.inbox, REFS.dashboard])
+      expect(validIn(tileKeyOf(ref), "shared")).toBe(true);
   });
 });

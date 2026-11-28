@@ -841,6 +841,30 @@ fn leaf_problem(id: &str, workspace_id: &str) -> Option<String> {
     leaf_ref_problem(id, Layer::Private)
 }
 
+/// The most tabs one tile holds.
+const TABS_MAX: usize = 64;
+
+/// Why a leaf's tabs are refused: more than [`TABS_MAX`], a repeated or refused ref, or an active
+/// tab that isn't one of them. With no tabs there is no active tab.
+fn tabs_problem(tabs: &[String], active: &str) -> Option<String> {
+    if <[String]>::is_empty(tabs) {
+        return (!str::is_empty(active)).then(|| format!("an active tab {active:?} with no tabs"));
+    }
+    if tabs.len() > TABS_MAX {
+        return Some(format!("a tile holds at most {TABS_MAX} tabs"));
+    }
+    for (at, tab) in Iterator::enumerate(tabs.iter()) {
+        if tabs[..at].contains(tab) {
+            return Some(format!("the tab {tab:?} is listed twice"));
+        }
+        if let Some(why) = leaf_ref_problem(tab, Layer::Private) {
+            return Some(why);
+        }
+    }
+    (!tabs.iter().any(|tab| tab == active))
+        .then(|| format!("the active tab {active:?} is not one of the tile's tabs"))
+}
+
 /// Why a split's shape is refused: fewer than two children, not one size per child, or a size
 /// that is not a finite number of 0 or more. The one split rule, shared as `leaf_problem` is.
 fn split_problem(children: usize, sizes: &[f64]) -> Option<String> {
@@ -859,7 +883,12 @@ fn split_problem(children: usize, sizes: &[f64]) -> Option<String> {
 /// Why the store refuses `node`, or `None`.
 fn tree_problem(node: &SavedNode) -> Option<String> {
     match node {
-        SavedNode::Leaf { id, workspace_id } => leaf_problem(id, workspace_id),
+        SavedNode::Leaf {
+            id,
+            workspace_id,
+            tabs,
+            active,
+        } => leaf_problem(id, workspace_id).or_else(|| tabs_problem(tabs, active)),
         SavedNode::Split {
             children, sizes, ..
         } => {
@@ -924,7 +953,7 @@ fn repair(node: &serde_json::Value, dropped: &mut Vec<String>) -> Option<Option<
         "leaf" => {
             if object
                 .keys()
-                .any(|k| !matches!(&**k, "kind" | "id" | "workspaceId"))
+                .any(|k| !matches!(&**k, "kind" | "id" | "workspaceId" | "tabs" | "active"))
             {
                 return None;
             }
@@ -932,11 +961,14 @@ fn repair(node: &serde_json::Value, dropped: &mut Vec<String>) -> Option<Option<
             let workspace_id = object
                 .get("workspaceId")
                 .and_then(serde_json::Value::as_str);
+            let (tabs, active) = repair_tabs(object, dropped)?;
             match (id, workspace_id) {
                 (Some(id), Some(workspace_id)) if leaf_problem(id, workspace_id).is_none() => {
                     Some(Some(SavedNode::Leaf {
                         id: id.to_string(),
                         workspace_id: workspace_id.to_string(),
+                        tabs,
+                        active,
                     }))
                 }
                 _ => {
@@ -988,6 +1020,44 @@ fn repair(node: &serde_json::Value, dropped: &mut Vec<String>) -> Option<Option<
         }
         _ => None,
     }
+}
+
+/// A leaf's tabs with the refused ones dropped, and its active tab: kept when it is still one of
+/// them, else the first. A repeat is dropped as a refused tab is, and past [`TABS_MAX`] the rest
+/// are. `None`: `tabs` or `active` isn't this shape, so the file can't be read.
+fn repair_tabs(
+    object: &serde_json::Map<String, serde_json::Value>,
+    dropped: &mut Vec<String>,
+) -> Option<(Vec<String>, String)> {
+    let listed = match object.get("tabs") {
+        None => vec![],
+        Some(tabs) => tabs
+            .as_array()?
+            .iter()
+            .map(|tab| serde_json::Value::as_str(tab).map(str::to_string))
+            .collect::<Option<Vec<_>>>()?,
+    };
+    let active = match object.get("active") {
+        None => "",
+        Some(active) => serde_json::Value::as_str(active)?,
+    };
+    let mut tabs: Vec<String> = vec![];
+    for tab in listed {
+        if tabs.len() < TABS_MAX
+            && !tabs.contains(&tab)
+            && leaf_ref_problem(&tab, Layer::Private).is_none()
+        {
+            tabs.push(tab);
+        } else {
+            dropped.push(tab);
+        }
+    }
+    let active = if tabs.iter().any(|tab| tab == active) {
+        active.to_string()
+    } else {
+        <[String]>::first(&tabs).cloned().unwrap_or_default()
+    };
+    Some((tabs, active))
 }
 
 /// `sizes` scaled to sum to 100, or an even split when they sum to 0 (the kit's rule).

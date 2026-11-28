@@ -21,6 +21,8 @@ fn leaf(id: &str) -> SavedNode {
     SavedNode::Leaf {
         id: id.into(),
         workspace_id: id.into(),
+        tabs: vec![],
+        active: String::new(),
     }
 }
 
@@ -403,6 +405,8 @@ fn a_refused_tree_writes_nothing_and_says_why() {
     let mismatched = SavedNode::Leaf {
         id: "ws-1".into(),
         workspace_id: "ws-2".into(),
+        tabs: vec![],
+        active: String::new(),
     };
     for (tree, says) in [
         (leaf("doc:../x"), "doc:../x"),
@@ -661,6 +665,8 @@ fn the_saved_leaf_rows_of_the_fixture_hold() {
             let written = SavedNode::Leaf {
                 id: id.clone(),
                 workspace_id: workspace_id.clone(),
+                tabs: vec![],
+                active: String::new(),
             };
             assert_eq!(tree_problem(&written).is_none(), row.valid, "write {node}");
         }
@@ -705,6 +711,91 @@ fn a_restart_restores_splits_and_sizes_exactly() {
     assert_eq!(loaded.file.root, Some(resized));
     assert_eq!(loaded.file.owner, OwnerKind::Group);
     assert!(loaded.dropped.is_empty());
+}
+
+fn tabbed(id: &str, tabs: &[&str], active: &str) -> SavedNode {
+    SavedNode::Leaf {
+        id: id.into(),
+        workspace_id: id.into(),
+        tabs: tabs.iter().map(|tab| tab.to_string()).collect(),
+        active: active.into(),
+    }
+}
+
+/// A tile's tabs and the one it shows come back after a restart, beside a one-tab tile.
+#[test]
+fn a_restart_restores_a_tiles_tabs_and_its_active_tab() {
+    let tmp = tempdir().unwrap();
+    let tree = split(
+        Axis::Row,
+        vec![
+            tabbed(
+                "dashboard:team:acme/app:core/board",
+                &[
+                    "dashboard:team:acme/app:core/board",
+                    "story-page:DEMO-63",
+                    "diff:context:ctx-demo",
+                ],
+                "story-page:DEMO-63",
+            ),
+            leaf("notes:scratch"),
+        ],
+        vec![50.0, 50.0],
+    );
+    let s = store(tmp.path(), true);
+    assert_eq!(s.commit("main", 0, put(tree.clone())), Ok(1));
+    drop(s);
+    let loaded = store(tmp.path(), true).load("main").unwrap();
+    assert_eq!(loaded.file.root, Some(tree));
+    assert!(loaded.dropped.is_empty());
+}
+
+#[test]
+fn a_refused_tab_set_writes_nothing_and_says_why() {
+    let tmp = tempdir().unwrap();
+    let s = store(tmp.path(), true);
+    let many: Vec<String> = (0..=TABS_MAX).map(|n| format!("notes:n{n}")).collect();
+    let many: Vec<&str> = many.iter().map(String::as_str).collect();
+    for (tree, says) in [
+        (
+            tabbed("ws-1", &["ws-1", "inbox:acme"], "ws-2"),
+            "not one of",
+        ),
+        (tabbed("ws-1", &[], "ws-1"), "no tabs"),
+        (tabbed("ws-1", &["ws-1", "ws-1"], "ws-1"), "twice"),
+        (tabbed("ws-1", &["ws-1", "doc:../x"], "ws-1"), "doc:../x"),
+        (tabbed("ws-1", &many, "notes:n0"), "at most"),
+    ] {
+        match s.commit("main", 0, put(tree)) {
+            Err(StoreError::InvalidTree(why)) => assert!(why.contains(says), "{why}"),
+            other => panic!("{says}: {other:?}"),
+        }
+    }
+    assert!(!file_of(tmp.path(), "main").exists());
+}
+
+/// On load a refused or repeated tab is dropped and named, and an active tab that is gone falls
+/// back to the first one left.
+#[test]
+fn a_loaded_tile_drops_its_refused_tabs() {
+    let node = serde_json::json!({
+        "kind": "leaf",
+        "id": "ws-1",
+        "workspaceId": "ws-1",
+        "tabs": ["ws-1", "doc:../x", "inbox:acme", "ws-1"],
+        "active": "doc:../x",
+    });
+    let mut dropped = vec![];
+    let repaired = repair(&node, &mut dropped).unwrap();
+    assert_eq!(
+        repaired,
+        Some(tabbed("ws-1", &["ws-1", "inbox:acme"], "ws-1"))
+    );
+    assert_eq!(dropped, vec!["doc:../x".to_string(), "ws-1".to_string()]);
+    // Tabs that aren't a list of text aren't this shape.
+    let bad =
+        serde_json::json!({ "kind": "leaf", "id": "ws-1", "workspaceId": "ws-1", "tabs": "ws-1" });
+    assert_eq!(repair(&bad, &mut vec![]), None);
 }
 
 /// The store's own write raises no change event for the watcher.

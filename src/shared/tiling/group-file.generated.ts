@@ -13,5 +13,5 @@ export type Axis = "row" | "column";
 export type OwnerKind = "workspace" | "group" | "starter";
 
 export type SavedNode =
-  | { id: string; kind: "leaf"; workspaceId: string }
+  | { active?: string; id: string; kind: "leaf"; tabs?: string[]; workspaceId: string }
   | { axis: Axis; children: SavedNode[]; kind: "split"; sizes: number[] };

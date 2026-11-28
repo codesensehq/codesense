@@ -126,6 +126,8 @@ mod tests {
             root: Some(SavedNode::Leaf {
                 id: leaf.into(),
                 workspace_id: leaf.into(),
+                tabs: vec![],
+                active: String::new(),
             }),
         }
     }

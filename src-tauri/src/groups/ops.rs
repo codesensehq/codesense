@@ -321,6 +321,8 @@ fn leaf(id: &str) -> SavedNode {
     SavedNode::Leaf {
         id: id.to_string(),
         workspace_id: id.to_string(),
+        tabs: vec![],
+        active: "".to_owned(),
     }
 }
 
