@@ -5,13 +5,17 @@
 //! refuse with the tiles flag off.
 //!
 //! A window's pins go through `window_pins_read` and `window_pins_write`, over the store's one
-//! pins accessor in the active org's group folder.
+//! pins accessor in the active org's group folder, keyed by the calling window's own label.
+//!
+//! Each command runs its store work (the lock, the fsync, the projection) on the blocking pool,
+//! off the command workers.
 
 use serde::{Deserialize, Serialize};
 
 use super::ops::parse_op;
 use super::shape::{OwnerKind, SavedNode};
 use super::store::{GroupStore, StoreError, StoreWrite, Writer};
+use crate::commands::async_helpers::await_blocking;
 
 /// Which group file a command names.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -192,19 +196,23 @@ fn store_for<R: tauri::Runtime>(
 /// The group file `file` of the context repo `org`, as a window hydrates it: null when it
 /// doesn't exist.
 #[tauri::command]
-pub fn group_read(
+pub async fn group_read(
     app: tauri::AppHandle,
     flag: tauri::State<'_, crate::flags::TilesFlag>,
     org: String,
     file: GroupFileRef,
 ) -> Result<Option<GroupHead>, String> {
-    read(&store_for(&app, flag.is_on(), &org)?, &file)
+    let tiles = flag.is_on();
+    await_blocking("group_read", move || {
+        read(&store_for(&app, tiles, &org)?, &file)
+    })
+    .await
 }
 
 /// Writes a gesture's kit ops to the group file `file` of the context repo `org`, as the person
 /// at the calling window, on the `baseRev` the window last read.
 #[tauri::command]
-pub fn group_commit(
+pub async fn group_commit(
     app: tauri::AppHandle,
     window: tauri::Window,
     flag: tauri::State<'_, crate::flags::TilesFlag>,
@@ -213,40 +221,55 @@ pub fn group_commit(
     base_rev: u64,
     ops: Vec<serde_json::Value>,
 ) -> Result<CommitReply, String> {
-    let store = store_for(&app, flag.is_on(), &org)?;
-    let reply = commit(&store, tauri::Window::label(&window), &file, base_rev, &ops)?;
-    if let CommitReply::Placed { .. } = reply {
-        // The write is placed whatever the publish does; a window that misses the delta reads
-        // the head on its next conflict.
-        if let Err(e) = crate::live_hub::groups::publish_change(&app, &store, &file.id) {
-            log::warn!(target: "groups", "could not publish a group change: {e}");
+    let tiles = flag.is_on();
+    let label = String::from(tauri::Window::label(&window));
+    await_blocking("group_commit", move || {
+        let store = store_for(&app, tiles, &org)?;
+        let reply = commit(&store, &label, &file, base_rev, &ops)?;
+        if let CommitReply::Placed { .. } = reply {
+            // The write is placed whatever the publish does; a window that misses the delta
+            // reads the head on its next conflict.
+            if let Err(e) = crate::live_hub::groups::publish_change(&app, &store, &file.id) {
+                log::warn!(target: "groups", "could not publish a group change: {e}");
+            }
         }
-    }
-    Ok(reply)
+        Ok(reply)
+    })
+    .await
 }
 
-/// The pins of the window labelled `label`, from the active org's group folder: none when no
-/// org is active. Refused with tiles off.
+/// The calling window's pins, from the active org's group folder: none when no org is active.
+/// Refused with tiles off.
 #[tauri::command]
-pub fn window_pins_read(
+pub async fn window_pins_read(
     app: tauri::AppHandle,
+    window: tauri::Window,
     flag: tauri::State<'_, crate::flags::TilesFlag>,
-    label: String,
 ) -> Result<Vec<String>, String> {
-    let store = active_store(&app, flag.is_on())?;
-    read_pins(flag.is_on(), store.as_ref(), &label)
+    let tiles = flag.is_on();
+    let label = String::from(tauri::Window::label(&window));
+    await_blocking("window_pins_read", move || {
+        let store = active_store(&app, tiles)?;
+        read_pins(tiles, store.as_ref(), &label)
+    })
+    .await
 }
 
-/// Replaces the pins of the window labelled `label` with `keys`, in one write.
+/// Replaces the calling window's pins with `keys`, in one write.
 #[tauri::command]
-pub fn window_pins_write(
+pub async fn window_pins_write(
     app: tauri::AppHandle,
+    window: tauri::Window,
     flag: tauri::State<'_, crate::flags::TilesFlag>,
-    label: String,
     keys: Vec<String>,
 ) -> Result<PinsReply, String> {
-    let store = active_store(&app, flag.is_on())?;
-    write_pins(flag.is_on(), store.as_ref(), &label, keys)
+    let tiles = flag.is_on();
+    let label = String::from(tauri::Window::label(&window));
+    await_blocking("window_pins_write", move || {
+        let store = active_store(&app, tiles)?;
+        write_pins(tiles, store.as_ref(), &label, keys)
+    })
+    .await
 }
 
 #[cfg(test)]

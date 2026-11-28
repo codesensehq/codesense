@@ -6099,11 +6099,12 @@ export const groupCommit = (org: string, file: GroupFileRef, baseRev: number, op
   invoke<GroupCommitReply>("group_commit", { org, file, baseRev, ops });
 /** Why a window's pins write wrote nothing. */
 export type WindowPinsRefusal = "fourth" | "flag-off" | "no-org";
-/** The pins of the window labelled `label`, from the active org's group folder. */
-export const windowPinsRead = (label: string) => invoke<string[]>("window_pins_read", { label });
-/** Replaces the pins of the window labelled `label` with `keys`, in one write. */
-export const windowPinsWrite = (label: string, keys: string[]) =>
-  invoke<{ ok: true } | { refused: WindowPinsRefusal }>("window_pins_write", { label, keys });
+/** The calling window's pins, from the active org's group folder. The host keys them by the
+ *  window that calls, never by a label the page passes. */
+export const windowPinsRead = () => invoke<string[]>("window_pins_read");
+/** Replaces the calling window's pins with `keys`, in one write. */
+export const windowPinsWrite = (keys: string[]) =>
+  invoke<{ ok: true } | { refused: WindowPinsRefusal }>("window_pins_write", { keys });
 
 // Platform capabilities
 export interface PlatformCap {
