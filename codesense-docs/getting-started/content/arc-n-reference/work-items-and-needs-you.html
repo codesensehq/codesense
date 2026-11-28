@@ -46,6 +46,42 @@
         </p>
       </section>
 
+      <section data-search="story worktrees lead_diff combined diff lead read-only branches" id="lead-diff">
+        <h2>A story's worktrees and a lead's combined diff</h2>
+        <p>
+          A <strong>story's worktree list</strong> names every worktree the story uses, in this
+          order: its context worktree, its source worktree on this Mac, then its source worktree on
+          its workspace's machine. Each row has its branch, "(context)" or "(source)", its file count
+          against main, its path and its machine. A machine's row reads "‹machine›, ‹branch›" and
+          "remote", counts through the same read the source diff uses for that machine, and shows the
+          machine's state and no count while the machine is offline. The list belongs to the story,
+          so the active team never changes it.
+        </p>
+        <ul>
+          <li>A row on this Mac offers Open in Finder and Copy path.</li>
+          <li>A machine's row offers Copy path only, labelled "On ‹machine›", and copies the path on that machine.</li>
+        </ul>
+        <p>
+          <code>lead_diff</code> takes a work item id and returns a lead's
+          <strong>combined diff</strong>: every context worktree whose record carries that work item,
+          including the lead's own when it has one. Each branch is measured against its own merge base
+          with main, with each file's + and − counts. A path that several branches change appears once
+          per branch and carries how many branches change it; nothing is merged or overwritten. A
+          branch whose ref or worktree is gone comes back marked deleted, with no files.
+        </p>
+        <p>
+          The combined diff reads "Diff for ‹lead› · ‹N› worktrees, ‹M› files · read-only", where ‹M›
+          adds up each branch's files. The stories' branches come first, then the lead's own, marked
+          "(the lead's own)". Opening a file shows its diff on that branch; when another branch changes
+          the same file, "Show its version" opens it there. There is no merge action, because each
+          story still merges through its own pull request.
+        </p>
+        <p>
+          Neither reads anything while it is hidden. While shown, each reads again when a branch head
+          moves; one that is hidden when a head moves is marked stale and reads again when it is shown.
+        </p>
+      </section>
+
       <section data-search="launched_by launchedBy restoredBy routine launcher values" id="launched-by">
         <h2>What <code>launched_by</code> records</h2>
         <table>

@@ -4656,6 +4656,7 @@ import type {
   ApproveMergeOutcome,
   FileRedline,
   IncomingStatus,
+  LeadDiff,
   PrReviewSummary,
   PublishFile,
   PublishOutcome,
@@ -4690,6 +4691,10 @@ export const getPublishSet = (
     pathPrefix,
     worktree,
   });
+
+// A lead's combined, read-only diff: every context worktree carrying `workItem`, each
+// against its own merge base with main (`lead_diff`).
+export const leadDiff = (workItem: string) => invoke<LeadDiff>("lead_diff", { workItem });
 
 // Cheap name-only "how many files changed" count for the CLOSED-pane sync badge
 // — no rename detection, no binary blobs, no EOL inflation (unlike getPublishSet).

@@ -303,3 +303,31 @@ export interface IncomingStatus {
    *  known locally. Absent when it is. */
   defaultBranchReason?: string;
 }
+
+/** A changed file on one of a lead's branches (Rust `LeadDiffFile`), with how many of
+ *  the lead's branches change its path. */
+export interface LeadDiffFile extends PublishFile {
+  branches: number;
+}
+
+/** One branch of a lead's combined diff (Rust `LeadBranch`). */
+export interface LeadBranch {
+  /** The registered context worktree id: reads a file's redline on this branch. */
+  worktree: string;
+  branch: string;
+  /** The worktree's name, the story it works. */
+  story: string;
+  /** The lead's own worktree rather than a story's. */
+  own: boolean;
+  /** The branch ref or its checkout is gone; it lists no files. */
+  deleted: boolean;
+  files: LeadDiffFile[];
+}
+
+/** A lead's combined, read-only diff (Rust `LeadDiff`): story branches first, then the
+ *  lead's own, each measured against its own merge base with main. */
+export interface LeadDiff {
+  workItem: string;
+  lead: string | null;
+  branches: LeadBranch[];
+}

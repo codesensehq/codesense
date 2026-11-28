@@ -1104,7 +1104,9 @@ pub use async_helpers::await_blocking;
 // +1 `system::get_platform_caps` (which optional features this OS supports). → 517.
 // +2 `workspace_chat::load_workspace_chat_media` / `read_workspace_chat_media` (the app
 // window loads and reads a workspace chat message's image). → 519.
-pub const EXPECTED_COMMAND_COUNT: usize = 520;
+// +1 `git_sync::context_worktree::lead_diff` (a lead's combined, read-only diff of its
+// context branches). → 521.
+pub const EXPECTED_COMMAND_COUNT: usize = 521;
 
 #[cfg(test)]
 mod tests {
