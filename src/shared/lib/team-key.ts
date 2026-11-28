@@ -35,6 +35,13 @@ export function buildTeamKey(orgSlug: string, teamName: string | null): string {
 
 export { parseTeamKey };
 
+/** The teamKey of an org and team as the org store holds them: the `NO_TEAM_SENTINEL` when no
+ *  org is active, else {@link buildTeamKey}. The one rule behind {@link useActiveTeamKey} and
+ *  {@link getActiveTeamKey}, for a selector that must read the pair itself. */
+export function teamKeyOfOrg(orgSlug: string | null, teamName: string | null): string {
+  return orgSlug === null ? NO_TEAM_SENTINEL : buildTeamKey(orgSlug, teamName);
+}
+
 /** A team as text names it: its name, or `org › team` when another team of `among` (team keys)
  *  has the same name in another org. A key with no team reads as its org. */
 export function teamLabelAmong(teamKey: string, among: Iterable<string>): string {
@@ -56,10 +63,7 @@ export function teamLabelAmong(teamKey: string, among: Iterable<string>): string
  *  Use this in components/hooks that need "the team for store reads
  *  RIGHT NOW." */
 export function useActiveTeamKey(): string {
-  const orgSlug = useOrgStore((s) => s.activeOrgSlug);
-  const teamName = useOrgStore((s) => s.activeTeamName);
-  if (orgSlug === null) return NO_TEAM_SENTINEL;
-  return buildTeamKey(orgSlug, teamName);
+  return useOrgStore((s) => teamKeyOfOrg(s.activeOrgSlug, s.activeTeamName));
 }
 
 /** Non-React variant of {@link useActiveTeamKey} — reads `useOrgStore`
@@ -77,8 +81,7 @@ export function useActiveTeamKey(): string {
  */
 export function getActiveTeamKey(): string {
   const { activeOrgSlug, activeTeamName } = useOrgStore.getState();
-  if (activeOrgSlug === null) return NO_TEAM_SENTINEL;
-  return buildTeamKey(activeOrgSlug, activeTeamName);
+  return teamKeyOfOrg(activeOrgSlug, activeTeamName);
 }
 
 /** Reactive: whether a REAL (non-null) team is active. False in BOTH no-team

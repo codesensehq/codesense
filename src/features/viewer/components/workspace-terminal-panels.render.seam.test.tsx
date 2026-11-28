@@ -725,6 +725,14 @@ describe("the tile probe: no descendant of an unrelated tile commits", () => {
     expect(probe.committed("tile:")).toEqual([]);
   });
 
+  it("when the active team switches (a warm tile has its own team)", async () => {
+    await renderAgents();
+    act(() => useOrgStore.setState({ activeTeamName: "other" }));
+    await flush();
+    // The chrome and tab bar of a tile holding its own team read no active team.
+    expect(probe.committed("chrome:")).toEqual([]);
+  });
+
   it("when an inbox row for another tab changes", async () => {
     await renderAgents();
     act(() =>

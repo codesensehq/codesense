@@ -72,7 +72,8 @@ import { isQuietMark } from "@/shared/lib/status-mark";
 import { StageRail } from "@/shared/components/stage-rail";
 import { TerminalTabBar, type SelectTabOptions } from "./terminal-tab-bar";
 import { useWorkspaceTeamHue } from "../hooks/use-workspace-crews";
-import { useActiveTeamKey } from "@/shared/lib/team-key";
+import { teamKeyOfOrg } from "@/shared/lib/team-key";
+import { useOrgStore } from "@/shared/stores/org-store";
 import { focusWorkspaceTerminal } from "../lib/focus-cascade";
 import type { FocusIndicator } from "../lib/focus-indicator";
 import {
@@ -392,8 +393,10 @@ export function TerminalTileChrome({
   // the SAME label span a story tile uses.
   const isEpic = ws.kind === "epic";
   const label = useWorkspaceLabel(ws);
-  const activeTeamKey = useActiveTeamKey();
-  const teamKey = teamKeyProp ?? activeTeamKey;
+  // A tile given its team reads no active team: a switch commits nothing in it.
+  const teamKey = useOrgStore(
+    (s) => teamKeyProp ?? teamKeyOfOrg(s.activeOrgSlug, s.activeTeamName),
+  );
   const teamHue = useWorkspaceTeamHue(teamKey, ws.id);
   // The tile `×` names the verb a click takes (Hide / End), probed on hover,
   // focus, or when ⋮ opens (a folded entry has no hover).

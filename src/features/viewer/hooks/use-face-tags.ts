@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-import { useMemo, useRef, useSyncExternalStore } from "react";
+import { useMemo, useSyncExternalStore } from "react";
 import { useShallow } from "zustand/react/shallow";
 
 import { agentRowLabel } from "@/features/viewer/lib/agent-row-presentation";
@@ -17,6 +17,7 @@ import {
   selectRunningTerminalTabIndex,
   useViewerStore,
   type TerminalTabIndex,
+  type ViewerState,
 } from "@/shared/stores/viewer-store";
 import type { AgentIdentityChoice } from "@/shared/lib/agent-identity-choice";
 import type { AgentSessionRow } from "@/tauri/commands";
@@ -52,24 +53,49 @@ export function useFaceTag(
   handle: string | undefined,
   faces: FaceTagInput["faces"],
 ): number | undefined {
-  const last = useRef<{ inputs: unknown[]; tags: ReadonlyMap<string, number> } | null>(null);
   const read = () => {
     if (handle === undefined) return undefined;
     const sessions = useAgentListProjectionStore.getState().sessions;
     const viewer = useViewerStore.getState();
     const running = selectRunningTerminalTabIndex(viewer);
     const minimized = selectMinimizedTerminalTabIndex(viewer);
-    const inputs = [teamKey, sessions, viewer.agentIdentity, faces, running, minimized];
-    if (!last.current || inputs.some((input, i) => !Object.is(input, last.current!.inputs[i]))) {
-      const choices = identityChoicesOf(viewer.agentIdentity, teamKey ?? undefined);
-      last.current = {
-        inputs,
-        tags: faceTagsFor(teamKey, { sessions, choices, faces, running, minimized }),
-      };
-    }
-    return last.current.tags.get(handle);
+    return cachedFaceTags(teamKey, [sessions, viewer.agentIdentity, faces, running, minimized]).get(
+      handle,
+    );
   };
   return useSyncExternalStore(subscribeFaceTagStores, read);
+}
+
+/** Each team's tag map as last computed, with the inputs it was computed from. Every tab of a
+ *  team reads the same inputs (a team's faces are one object while its packs are), so a change
+ *  computes the map once for the team, not once per tab; a change to any input (the packs
+ *  included) computes it again. */
+const tagCache = new Map<string, { inputs: unknown[]; tags: ReadonlyMap<string, number> }>();
+const ALL_TEAMS_KEY = "\0";
+
+function cachedFaceTags(
+  teamKey: string | null,
+  inputs: [
+    FaceTagInput["sessions"],
+    ViewerState["agentIdentity"],
+    FaceTagInput["faces"],
+    TerminalTabIndex,
+    TerminalTabIndex,
+  ],
+): ReadonlyMap<string, number> {
+  const key = teamKey ?? ALL_TEAMS_KEY;
+  const cached = tagCache.get(key);
+  if (cached && inputs.every((input, i) => Object.is(input, cached.inputs[i]))) return cached.tags;
+  const [sessions, agentIdentity, faces, running, minimized] = inputs;
+  const tags = faceTagsFor(teamKey, {
+    sessions,
+    choices: identityChoicesOf(agentIdentity, teamKey ?? undefined),
+    faces,
+    running,
+    minimized,
+  });
+  tagCache.set(key, { inputs, tags });
+  return tags;
 }
 
 function subscribeFaceTagStores(onChange: () => void): () => void {

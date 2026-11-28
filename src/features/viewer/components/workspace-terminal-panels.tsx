@@ -194,7 +194,8 @@ export interface FrameProbe {
   /** The frame or cell mounted (a remount counts again). */
   mount: (frameId: string) => void;
   /** A `React.Profiler` commit anywhere in a tile frame's tree: the frame and every descendant
-   *  (tab bar, captions, panes). Frame ids as for `render`. */
+   *  (tab bar, captions, panes). Frame ids as for `render`; a tile's chrome and tab bar alone
+   *  report as `chrome:{workspaceId}`. */
   descendants?: (frameId: string, phase: "mount" | "update" | "nested-update") => void;
 }
 
@@ -937,6 +938,19 @@ function useFocusTile(teamKey: string, workspaceId: string): () => void {
   }, [teamKey, workspaceId]);
 }
 
+/** Reports a `React.Profiler` commit anywhere in `children` to the probe, under `frameId`. Renders
+ *  nothing extra when no probe is set. */
+function ProbedTree({ frameId, children }: { frameId: string; children: ReactNode }) {
+  const descendants = useContext(FrameProbeContext)?.descendants;
+  return descendants ? (
+    <Profiler id={frameId} onRender={(_id, phase) => descendants(frameId, phase)}>
+      {children}
+    </Profiler>
+  ) : (
+    children
+  );
+}
+
 /** One mosaic leaf. Its props are its id alone: what it draws comes from its panel's view store, so
  *  it redraws only for a change to its own view (or to its own subscriptions below). */
 const WorkspaceTileFrame = memo(function WorkspaceTileFrame({ id }: { id: string }) {
@@ -1042,57 +1056,61 @@ const TileFrameContent = memo(function TileFrameContent({ teamKey, view }: TileF
         {...(split ? attributes : {})}
         className={split ? "cursor-grab active:cursor-grabbing" : undefined}
       >
-        <TerminalTileChrome
-          workspace={ws}
-          teamKey={teamKey}
-          isFocused={isFocused}
-          focusIndicator={focusIndicator}
-          // SW-EW-34 v2 (D8): drop the redundant id block on a lone console
-          // tile — a console top switcher owns identity there.
-          // SLW-FX-18: …but ONLY for kinds that have no per-tile identity to
-          // show. The switcher that shipped to main (`IdentityMenu`)
-          // carries org·team only — never the story title or status dropdown —
-          // so a lone-console STORY tile was left with a blank top-left. Narrow
-          // the gate with the same centralized `statusBadge` capability the
-          // chrome uses to render the dropdown (`terminal-tile-chrome.tsx`), so
-          // the mount decision and the show decision can't disagree: a story
-          // (statusBadge=true) keeps its title + status; identity-less kinds
-          // (epic/root/generic) stay hidden exactly as before.
-          hideIdentity={view.isConsole && !view.split && !getKindCapabilities(ws.kind).statusBadge}
-          tabs={tabs}
-          activeTabId={activeTabId}
-          chromeBg={view.themeConfig.chromeBg}
-          terminalBg={view.themeConfig.theme.background}
-          // Hide (–) and the default close (✕) are available at EVERY N —
-          // including the lone tile (N=1); closing the last workspace drains the
-          // CLI to its empty state. Zoom below stays split-only — it genuinely
-          // has nothing to do with a single tile.
-          onHideTile={() => hideWorkspace(teamKey, ws.id)}
-          onCloseTile={() => void closeWorkspace(teamKey, ws.id)}
-          onFocusTile={focusTileFromChrome}
-          onToggleZoom={
-            split
-              ? () => {
-                  focusTile();
-                  toggleTileZoom(teamKey, ws.id);
-                }
-              : undefined
-          }
-          isZoomed={isZoomed}
-          hiddenTileCount={view.hiddenTileCount}
-          hiddenAttentionScope={isZoomed ? { teamKey, wsIds: view.hiddenTileIds } : undefined}
-          onOpenStoryDoc={view.onOpenStoryDoc}
-          onStoryStatusChange={
-            view.onStoryStatusChange
-              ? (newStatus) => view.onStoryStatusChange!(ws.id, newStatus)
-              : undefined
-          }
-          // SW-EW-46: the tab-grid dial surface (only meaningful while expanded).
-          panedTabIds={panedTabIds}
-          gridActive={showGrid}
-          canGrid={canGrid}
-          {...actions}
-        />
+        <ProbedTree frameId={`chrome:${ws.id}`}>
+          <TerminalTileChrome
+            workspace={ws}
+            teamKey={teamKey}
+            isFocused={isFocused}
+            focusIndicator={focusIndicator}
+            // SW-EW-34 v2 (D8): drop the redundant id block on a lone console
+            // tile — a console top switcher owns identity there.
+            // SLW-FX-18: …but ONLY for kinds that have no per-tile identity to
+            // show. The switcher that shipped to main (`IdentityMenu`)
+            // carries org·team only — never the story title or status dropdown —
+            // so a lone-console STORY tile was left with a blank top-left. Narrow
+            // the gate with the same centralized `statusBadge` capability the
+            // chrome uses to render the dropdown (`terminal-tile-chrome.tsx`), so
+            // the mount decision and the show decision can't disagree: a story
+            // (statusBadge=true) keeps its title + status; identity-less kinds
+            // (epic/root/generic) stay hidden exactly as before.
+            hideIdentity={
+              view.isConsole && !view.split && !getKindCapabilities(ws.kind).statusBadge
+            }
+            tabs={tabs}
+            activeTabId={activeTabId}
+            chromeBg={view.themeConfig.chromeBg}
+            terminalBg={view.themeConfig.theme.background}
+            // Hide (–) and the default close (✕) are available at EVERY N —
+            // including the lone tile (N=1); closing the last workspace drains the
+            // CLI to its empty state. Zoom below stays split-only — it genuinely
+            // has nothing to do with a single tile.
+            onHideTile={() => hideWorkspace(teamKey, ws.id)}
+            onCloseTile={() => void closeWorkspace(teamKey, ws.id)}
+            onFocusTile={focusTileFromChrome}
+            onToggleZoom={
+              split
+                ? () => {
+                    focusTile();
+                    toggleTileZoom(teamKey, ws.id);
+                  }
+                : undefined
+            }
+            isZoomed={isZoomed}
+            hiddenTileCount={view.hiddenTileCount}
+            hiddenAttentionScope={isZoomed ? { teamKey, wsIds: view.hiddenTileIds } : undefined}
+            onOpenStoryDoc={view.onOpenStoryDoc}
+            onStoryStatusChange={
+              view.onStoryStatusChange
+                ? (newStatus) => view.onStoryStatusChange!(ws.id, newStatus)
+                : undefined
+            }
+            // SW-EW-46: the tab-grid dial surface (only meaningful while expanded).
+            panedTabIds={panedTabIds}
+            gridActive={showGrid}
+            canGrid={canGrid}
+            {...actions}
+          />
+        </ProbedTree>
       </div>
       {/* SW-TP CAP-13: the standalone per-tab primitives toolbar is retired.
           Its contents (cwd, progress note, Editor/Diff/Inbox/HUD toggles) have

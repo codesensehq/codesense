@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { act, renderHook, waitFor } from "@testing-library/react";
+import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 
 const handlers = new Map<string, () => void>();
 vi.mock("@tauri-apps/api/event", () => ({
@@ -291,6 +291,34 @@ describe("one read per team", () => {
       expect(result.current.packs[0]?.id).toBe("crew");
       await act(async () => vi.advanceTimersByTime(60_000));
       expect(avatarPacksList).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reads a failing active team once per wait, however many callers mounted at different times", async () => {
+    vi.useFakeTimers();
+    try {
+      avatarPacksList.mockRejectedValue(new Error("not synced"));
+      renderHook(() => useAvatarPacks());
+      await act(async () => {});
+      expect(avatarPacksList).toHaveBeenCalledTimes(1);
+      await act(async () => vi.advanceTimersByTime(1_000));
+      // The second caller's own mount reads the failed team once, and starts no chain of its own.
+      renderHook(() => useAvatarPacks());
+      await act(async () => {});
+      expect(avatarPacksList).toHaveBeenCalledTimes(2);
+      await act(async () => vi.advanceTimersByTime(1_000));
+      expect(avatarPacksList).toHaveBeenCalledTimes(3);
+      // Three failures wait 8s: one read at its end, not one for each caller's own phase.
+      await act(async () => vi.advanceTimersByTime(7_999));
+      expect(avatarPacksList).toHaveBeenCalledTimes(3);
+      await act(async () => vi.advanceTimersByTime(1));
+      expect(avatarPacksList).toHaveBeenCalledTimes(4);
+      // Both callers gone: no read is left pending.
+      cleanup();
+      await act(async () => vi.advanceTimersByTime(120_000));
+      expect(avatarPacksList).toHaveBeenCalledTimes(4);
     } finally {
       vi.useRealTimers();
     }

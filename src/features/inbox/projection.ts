@@ -29,14 +29,23 @@ export const inboxNeedsYou = (rows: readonly InboxCounts[], handles: readonly st
     (sum, row) => sum + handles.reduce((n, handle) => n + (row.needsYouBySender[handle] ?? 0), 0),
     0,
   );
+/** The projection's own fields for the session `handle` of `team`, or undefined: the one match
+ *  and lookup behind {@link joinInboxSessions} and the per-tab counts. */
+export function inboxCountsRowFor(
+  counts: readonly InboxCounts[],
+  team: InboxTeam | null | undefined,
+  handle: string,
+): Partial<SessionListRow> | undefined {
+  return counts.find((row) => row.team.org === team?.org && row.team.team === team?.team)?.sessions[
+    handle
+  ];
+}
 export function joinInboxSessions(
   sessions: SessionListRow[],
   counts: readonly InboxCounts[],
 ): SessionListRow[] {
   return sessions.map((session) => {
-    const row = counts.find(
-      (row) => row.team.org === session.team?.org && row.team.team === session.team?.team,
-    )?.sessions[session.handle];
+    const row = inboxCountsRowFor(counts, session.team, session.handle);
     return row ? { ...session, ...row } : session;
   });
 }

@@ -40,7 +40,7 @@ export interface TeamAgentIdentity {
 export function useTeamAgentIdentities(teamKey: string): TeamAgentIdentity[] {
   const nodes = useAgentListNodes(teamKey);
   const choices = useAgentIdentityChoices(teamKey);
-  const avatars = useAvatarPacks();
+  const avatars = useAvatarPacks(teamKey);
   const faceTags = useFaceTags(teamKey);
   return useMemo(
     () => teamAgentIdentitiesOf(nodes, { choices, faces: avatars.faces, tags: faceTags }),

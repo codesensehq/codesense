@@ -3,6 +3,7 @@ import { useShallow } from "zustand/react/shallow";
 
 import { useAgentListProjectionStore } from "@/features/viewer/lib/agent-list-projection";
 
+import { inboxCountsRowFor } from "../projection";
 import { useInboxProjectionStore, useWatchInboxProjection } from "./use-inbox-projection";
 import { useInboxSessionsStore, useWatchInboxSessions } from "./use-inbox-sessions";
 
@@ -27,14 +28,13 @@ export function useTabInboxCounts(sessionId: string): { direct: number; group: n
       return row ? [row.team?.org, row.team?.team, row.unread, row.groupUnread] : NO_ROW;
     }),
   );
+  const teamOf = org === undefined ? undefined : { org, team: team as string };
   // The projection's fields win over the list's, as the join spreads them: one it sets
   // (even to undefined) replaces the list's.
   const [hasUnread, ownUnread, hasGroup, ownGroup] = useInboxProjectionStore(
     useShallow((s) => {
-      if (org === undefined) return NO_COUNTS;
-      const own = s.counts.find((c) => c.team.org === org && c.team.team === team)?.sessions[
-        handle
-      ];
+      if (!teamOf) return NO_COUNTS;
+      const own = inboxCountsRowFor(s.counts, teamOf, handle);
       return own ? ["unread" in own, own.unread, "groupUnread" in own, own.groupUnread] : NO_COUNTS;
     }),
   );

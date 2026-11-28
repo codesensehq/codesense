@@ -58,18 +58,30 @@ export function useTabTimerAgents(): ReadonlyMap<string, TabTimerAgent> {
 }
 
 /** The interactive agent `sessionId` runs, or null (a plain shell, a headless run). Read for this
- *  session alone and compared shallowly, so another session's change does not redraw its tab. */
+ *  session alone and compared shallowly, so another session's change does not redraw its tab. The
+ *  saved agent's definition is read by key alone, so an edit to another agent does not either. */
 export function useTabTimerAgent(sessionId: string | undefined): TabTimerAgent | null {
-  const agents = useAgentsStore((s) => s.rows);
-  return useAgentListProjectionStore(
+  const fromRow = useAgentListProjectionStore(
     useShallow((s) => {
       if (!sessionId) return null;
       // The last row for the session wins, as in the map.
       let agent: TabTimerAgent | null = null;
       for (const row of s.sessions ?? []) {
-        if (row.sessionId === sessionId) agent = timerAgentOf(row, agents) ?? agent;
+        if (row.sessionId === sessionId) agent = timerAgentOf(row, null) ?? agent;
       }
       return agent;
     }),
+  );
+  const definitionKey = fromRow?.saved ? fromRow.agentKey : null;
+  const definition = useAgentsStore(
+    useShallow((s) => {
+      const d = definitionKey ? s.rows?.find((a) => a.key === definitionKey) : undefined;
+      return d ? ([d.name, d.runtime] as const) : null;
+    }),
+  );
+  return useMemo(
+    () =>
+      fromRow && definition ? { ...fromRow, name: definition[0], runtime: definition[1] } : fromRow,
+    [fromRow, definition],
   );
 }

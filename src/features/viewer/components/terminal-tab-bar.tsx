@@ -18,7 +18,8 @@ import { MiddleTruncate, isMiddleTruncated } from "./middle-truncate";
 import { AgentTabLabel, TabFace } from "./agent-tab-label";
 import { TAB_PILL_MIN_W } from "@/features/viewer/lib/tile-chrome-fit";
 import { useAgentListProjectionStore } from "@/features/viewer/lib/agent-list-projection";
-import { useAvatarPacks } from "@/shared/hooks/use-avatar-packs";
+import { useTeamFaces } from "@/shared/hooks/use-avatar-packs";
+import { NO_TEAM_SENTINEL } from "@/shared/lib/team-key";
 import { resolveAgentFace, type AgentFace } from "@/features/viewer/lib/agent-list-view";
 import { agentRowLabel, agentRowNames } from "@/features/viewer/lib/agent-row-presentation";
 import { isAgentSession } from "@/features/viewer/lib/hand-agents";
@@ -670,7 +671,8 @@ function useTabFace(sessionId: string): TabFaceView | null {
     useShallow((s) => tabAgentFields(s.sessions, sessionId)),
   );
   const teamKey = useTabTeamOf(sessionId);
-  const { faces } = useAvatarPacks(teamKey ?? undefined);
+  // With no team to read, no team's packs (as the tab look reads them).
+  const faces = useTeamFaces(teamKey ?? NO_TEAM_SENTINEL);
   const choice = useAgentIdentityChoice(teamKey ?? undefined, fields?.handle);
   const tag = useFaceTag(teamKey, fields?.handle, faces);
   return useMemo(() => {

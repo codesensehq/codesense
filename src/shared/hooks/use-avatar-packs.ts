@@ -5,9 +5,9 @@ import { listenScoped } from "@/shared/windows/listen-scoped";
 
 import { createListenerGroup, type ListenerGroup } from "@/shared/lib/tauri-listeners";
 import {
-  buildTeamKey,
   getActiveTeamKey,
   NO_TEAM_SENTINEL,
+  teamKeyOfOrg,
   useActiveTeamKey,
 } from "@/shared/lib/team-key";
 import { useOrgStore } from "@/shared/stores/org-store";
@@ -287,31 +287,51 @@ function teamActions(teamKey: string): Pick<AvatarPacks, "setDefaultPack" | "sha
 const RETRY_FIRST_MS = 2_000;
 const RETRY_MAX_MS = 60_000;
 
-/** Read the active team again after a failed read, waiting longer after each failure in a row.
- *  Every other team is read again only when it is next needed. */
+/** The callers that want an active team read again after its failed read, by team. */
+const retryInterest = new Map<string, Set<symbol>>();
+
+/** The one retry wait pending for each such team, however many callers want it. */
+const retryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+/** Arm the team's next retry unless one is pending. A read failing the same way leaves the entry
+ *  as it was, so each retry schedules the next from here, not from any caller. */
+function armRetry(teamKey: string): void {
+  if (retryTimers.has(teamKey) || !retryInterest.has(teamKey)) return;
+  const failures = Math.max(1, failedReads.get(teamKey) ?? 1);
+  const wait = Math.min(RETRY_MAX_MS, RETRY_FIRST_MS * 2 ** (failures - 1));
+  retryTimers.set(
+    teamKey,
+    setTimeout(() => {
+      retryTimers.delete(teamKey);
+      if (!retryInterest.has(teamKey)) return;
+      ensureLoaded(teamKey);
+      void inFlight.get(teamKey)?.then(() => {
+        if (useAvatarPacksStore.getState().byTeam[teamKey]?.failed) armRetry(teamKey);
+      });
+    }, wait),
+  );
+}
+
+/** Read the active team again after a failed read, waiting longer after each failure in a row:
+ *  one chain per team, whatever number of callers want it. Every other team is read again only
+ *  when it is next needed. */
 function useRetryFailedRead(teamKey: string, entry: TeamAvatarPacks | undefined): void {
   const failed = entry?.failed === true;
+  const caller = useCallerId();
   useEffect(() => {
     if (!failed || teamKey === NO_TEAM_SENTINEL) return;
-    // A read failing the same way leaves the entry as it was, so each retry schedules the next.
-    let stopped = false;
-    let timer: ReturnType<typeof setTimeout>;
-    const retry = () => {
-      const failures = Math.max(1, failedReads.get(teamKey) ?? 1);
-      const wait = Math.min(RETRY_MAX_MS, RETRY_FIRST_MS * 2 ** (failures - 1));
-      timer = setTimeout(() => {
-        ensureLoaded(teamKey);
-        void inFlight.get(teamKey)?.then(() => {
-          if (!stopped && useAvatarPacksStore.getState().byTeam[teamKey]?.failed) retry();
-        });
-      }, wait);
-    };
-    retry();
+    const callers = retryInterest.get(teamKey) ?? new Set<symbol>();
+    callers.add(caller);
+    retryInterest.set(teamKey, callers);
+    armRetry(teamKey);
     return () => {
-      stopped = true;
-      clearTimeout(timer);
+      callers.delete(caller);
+      if (callers.size > 0) return;
+      retryInterest.delete(teamKey);
+      clearTimeout(retryTimers.get(teamKey));
+      retryTimers.delete(teamKey);
     };
-  }, [teamKey, failed]);
+  }, [caller, teamKey, failed]);
 }
 
 /** A stable identity for one mounted caller of the hooks. */
@@ -328,10 +348,28 @@ function useCallerId(): symbol {
  * the active team switches between two others.
  */
 export function useAvatarPacks(team?: string): AvatarPacks {
-  const teamKey = useOrgStore((s) => team ?? teamKeyOf(s.activeOrgSlug, s.activeTeamName));
+  const teamKey = useOrgStore((s) => team ?? teamKeyOfOrg(s.activeOrgSlug, s.activeTeamName));
   const isActive = useOrgStore(
-    (s) => team === undefined || teamKeyOf(s.activeOrgSlug, s.activeTeamName) === team,
+    (s) => team === undefined || teamKeyOfOrg(s.activeOrgSlug, s.activeTeamName) === team,
   );
+  const entry = usePackEntry(teamKey, isActive);
+  const actions = useMemo(() => (isActive ? teamActions(teamKey) : null), [isActive, teamKey]);
+  return useMemo(() => avatarPacksView(entry ?? EMPTY_TEAM, actions), [entry, actions]);
+}
+
+/**
+ * The faces of one named team's packs, for a view that only draws them. Unlike
+ * {@link useAvatarPacks} it never reads which team is active, so it does not redraw when the
+ * active team switches to or from the named one (that would only change the actions it lacks).
+ */
+export function useTeamFaces(team: string): FaceSource {
+  const entry = usePackEntry(team, false);
+  return useMemo(() => teamFaceSourceOf(entry ?? EMPTY_TEAM), [entry]);
+}
+
+/** One team's entry, read when needed, kept while the caller is mounted, and read again after a
+ *  failed read when `retry` (the team is the active one). */
+function usePackEntry(teamKey: string, retry: boolean): TeamAvatarPacks | undefined {
   const entry = useAvatarPacksStore((s) =>
     teamKey === NO_TEAM_SENTINEL ? undefined : s.byTeam[teamKey],
   );
@@ -342,14 +380,8 @@ export function useAvatarPacks(team?: string): AvatarPacks {
     ensureLoaded(teamKey);
   }, [caller, teamKey]);
   useEffect(() => () => wantTeams(caller, null), [caller]);
-  useRetryFailedRead(isActive ? teamKey : NO_TEAM_SENTINEL, entry);
-  const actions = useMemo(() => (isActive ? teamActions(teamKey) : null), [isActive, teamKey]);
-  return useMemo(() => avatarPacksView(entry ?? EMPTY_TEAM, actions), [entry, actions]);
-}
-
-/** The team key of an org and team, as {@link useActiveTeamKey} builds it. */
-function teamKeyOf(orgSlug: string | null, teamName: string | null): string {
-  return orgSlug === null ? NO_TEAM_SENTINEL : buildTeamKey(orgSlug, teamName);
+  useRetryFailedRead(retry ? teamKey : NO_TEAM_SENTINEL, entry);
+  return entry;
 }
 
 /**
