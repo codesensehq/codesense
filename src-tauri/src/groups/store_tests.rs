@@ -589,6 +589,28 @@ fn a_symlinked_folder_or_file_is_refused_and_written_through_never() {
     );
 }
 
+/// The Scratch-open `.gitignore` write replaces a symlink and never writes through it.
+#[test]
+fn a_symlinked_gitignore_is_replaced_and_its_target_left_alone() {
+    let tmp = tempdir().unwrap();
+    let outside = tempdir().unwrap();
+    let s = store(tmp.path(), true);
+    let dir = scratch_space::open_group_space(tmp.path(), &me(), ORG, true)
+        .unwrap()
+        .unwrap();
+    let target = outside.path().join("theirs.txt");
+    std::fs::write(&target, b"theirs").unwrap();
+    std::fs::remove_file(dir.join(".gitignore")).unwrap();
+    std::os::unix::fs::symlink(&target, dir.join(".gitignore")).unwrap();
+
+    s.commit("main", 0, put(leaf("ws-1"))).unwrap();
+
+    assert_eq!(std::fs::read(&target).unwrap(), b"theirs");
+    let meta = std::fs::symlink_metadata(dir.join(".gitignore")).unwrap();
+    assert!(std::fs::Metadata::is_file(&meta), "the link is now a file");
+    assert_eq!(std::fs::read(dir.join(".gitignore")).unwrap(), b"*\n");
+}
+
 // 1.4 the saved leaf's keys.
 
 #[derive(serde::Deserialize)]

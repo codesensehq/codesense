@@ -437,8 +437,14 @@ pub fn open_group_space(
     let io = |e: std::io::Error| ScratchError::Io(format!("cannot open the group folder: {e}"));
     std::fs::create_dir_all(&dir).map_err(io)?;
     let ignore = dir.join(".gitignore");
-    if std::fs::read_to_string(&ignore).unwrap_or_default() != GROUPS_GITIGNORE {
-        std::fs::write(&ignore, GROUPS_GITIGNORE).map_err(io)?;
+    // A symlink is never read or written through: it is replaced by a fresh file (the rename
+    // swaps the link itself), so a link to a user's file leaves that file alone.
+    let is_current = std::fs::symlink_metadata(&ignore)
+        .is_ok_and(|meta| std::fs::Metadata::is_file(&meta))
+        && std::fs::read_to_string(&ignore).is_ok_and(|text| text == GROUPS_GITIGNORE);
+    if !is_current {
+        crate::content_engine::write_tmp_fsync_rename(&ignore, GROUPS_GITIGNORE.as_bytes())
+            .map_err(|e| io(std::io::Error::other(e.to_string())))?;
     }
     Ok(Some(dir))
 }
