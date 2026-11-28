@@ -19,7 +19,11 @@ function watch() {
     }
   };
 }
-export function useInboxProjection(): InboxCounts[] {
+/** Keep the shared inbox counts read while the caller is mounted, without subscribing to them. */
+export function useWatchInboxProjection(): void {
   useEffect(watch, []);
+}
+export function useInboxProjection(): InboxCounts[] {
+  useWatchInboxProjection();
   return useInboxProjectionStore((state) => state.counts);
 }

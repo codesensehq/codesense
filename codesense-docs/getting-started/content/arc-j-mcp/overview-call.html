@@ -324,7 +324,11 @@
             </tr>
             <tr>
               <td>sessions</td>
-              <td><code>total</code>, <code>byState</code>, <code>byMachine</code>, <code>needsYou</code> (who waits on you), and <code>notExited</code>: each running agent or terminal's handle, state, machine, workspace, story, role, who launched it and its unread count.</td>
+              <td><code>total</code>, <code>byState</code> (sessions by their own state; its <code>needs-you</code> counts sessions blocked or waiting on a permission, so it can differ from the <code>needsYou</code> section's <code>total</code>, which counts the set's items), <code>byMachine</code>, <code>needsYou</code> (the sessions the needs-you set's items are about, or an <code>error</code> when the set could not be read), and <code>notExited</code>: each running agent or terminal's handle, state, machine, workspace, story, role, who launched it and its unread count.</td>
+            </tr>
+            <tr>
+              <td>needsYou</td>
+              <td>The one needs-you set: everything that waits on you (a question, a permission ask, a merge card, an agent capped at its spend cap or failed; never an FYI). <code>total</code>, <code>byKind</code>, and <code>items</code>: each item's <code>kind</code>, <code>session</code>, <code>org</code>, <code>team</code>, <code>workItem</code>, and a question's text or a card's <code>messageId</code>. A team's agent reads only its own team's items.</td>
             </tr>
             <tr>
               <td>agents</td>
@@ -332,7 +336,7 @@
             </tr>
             <tr>
               <td>routines</td>
-              <td><code>total</code>, how many are <code>enabled</code>, how many need you, <code>lastRunByStatus</code>, and <code>items</code> with each routine's <code>runs_on</code>, <code>armed_here</code>, schedule, next and last run.</td>
+              <td><code>total</code>, how many are <code>enabled</code>, <code>runsAwaiting</code> (routines whose last run waits on you), <code>lastRunByStatus</code>, and <code>items</code> with each routine's <code>runs_on</code>, <code>armed_here</code>, schedule, next and last run.</td>
             </tr>
             <tr>
               <td>inbox</td>
@@ -387,6 +391,16 @@
     "truncated": false,
     "detail": ["who_am_i", "list_sessions", …]
   },
+  "needsYou": {
+    "total": 1,
+    "byKind": { "permission": 1 },
+    "items": [
+      { "kind": "permission", "session": "tab-builder", "org": "acme/team-context", "team": "dev",
+        "workItem": "wi_00000000000000a1" }
+    ],
+    "truncated": false,
+    "detail": ["list_sessions", "inbox_list", "read_terminal_tab"]
+  },
   "agents": {
     "total": 5,
     "byScope": { "builtin": 3, "team": 2 },
@@ -397,7 +411,7 @@
   "routines": {
     "total": 3,
     "enabled": 2,
-    "needsYou": 1,
+    "runsAwaiting": 1,
     "lastRunByStatus": { "failed": 1 },
     "items": [
       { "id": "builder-wake", "name": "Wake the Builder", "team": "dev", "enabled": true,

@@ -101,7 +101,11 @@ const needs = {
 
 test("the failed lanes are read from the needs context", () => {
   assert.deepEqual(failedLanes(needs), ["pane-harness", "load"]);
-  assert.deepEqual(failedLanes({ perf: { result: "cancelled" } }), []);
+  assert.deepEqual(
+    failedLanes({ "pane-harness": { result: "cancelled" }, perf: { result: "success" } }),
+    ["pane-harness"],
+  );
+  assert.deepEqual(failedLanes({ perf: { result: "skipped" } }), []);
 });
 
 function stubGh(issues) {
@@ -144,7 +148,7 @@ test("trackNightly opens one labelled issue with the marker when none exists", (
   assert.ok(body.startsWith(`${MARKER}\n`));
   assert.match(
     body,
-    /2026-11-28: pane-harness, load failed: https:\/\/github\.com\/example\/repo\/actions\/runs\/7/,
+    /2026-11-28: pane-harness, load timed out or failed: https:\/\/github\.com\/example\/repo\/actions\/runs\/7/,
   );
   assert.equal(create[create.indexOf("--label") + 1], LABEL);
   assert.deepEqual(result, { action: "created", url: "https://github.com/example/repo/issues/42" });
@@ -157,7 +161,7 @@ test("trackNightly comments on the open issue, else reopens the newest closed on
   ]);
   assert.deepEqual(trackNightly(["load"], options(open.gh)), { action: "commented", number: 9 });
   assert.deepEqual(open.calls[1].slice(0, 3), ["issue", "comment", "9"]);
-  assert.match(open.calls[1][4], /2026-11-28: load failed/);
+  assert.match(open.calls[1][4], /2026-11-28: load timed out or failed/);
   const closed = stubGh([
     { number: 4, state: "CLOSED", body: `${MARKER}\nold` },
     { number: 8, state: "CLOSED", body: `${MARKER}\nnewer` },
@@ -167,14 +171,14 @@ test("trackNightly comments on the open issue, else reopens the newest closed on
   assert.deepEqual(closed.calls[2].slice(0, 3), ["issue", "comment", "8"]);
 });
 
-test("the issue CLI does nothing when no lane failed, and refuses without a run URL", () => {
+test("the issue CLI does nothing when no lane timed out or failed, and refuses without a run URL", () => {
   const env = { ...process.env, NEEDS: JSON.stringify({ perf: { result: "success" } }) };
   const quiet = spawnSync(process.execPath, [script, "issue", "--run-url", "https://x/runs/1"], {
     encoding: "utf8",
     env,
   });
   assert.equal(quiet.status, 0, quiet.stderr);
-  assert.match(quiet.stdout, /nightly: no lane failed/);
+  assert.match(quiet.stdout, /nightly: no lane timed out or failed/);
   assert.equal(spawnSync(process.execPath, [script, "issue"], { env }).status, 1);
 });
 

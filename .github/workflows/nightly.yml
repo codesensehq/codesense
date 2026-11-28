@@ -4,9 +4,9 @@ name: Nightly
 # The slow lanes no pull request waits on, each its own job on macos-15: the @nightly tile specs,
 # the pane harness on WebKit, the perf baseline, the tile load tests and the frame media specs that
 # Linux WebKit can't play (tests/e2e-mock/README.md).
-# A failed scheduled run on main opens or updates one issue labelled nightly; a dispatched run
-# never writes one. Dispatch with record to measure and upload a new macos-15 perf set instead of
-# comparing against it.
+# A red scheduled run on main (a lane that failed or timed out) opens or updates one issue
+# labelled nightly; a dispatched run never writes one. Dispatch with record to measure and upload a
+# new macos-15 perf set instead of comparing against it.
 on:
   schedule:
     - cron: "17 6 * * *"
@@ -310,13 +310,19 @@ jobs:
           [[ -x "$binary" ]] || { echo "::error::cargo named no codesense_lib test binary"; exit 1; }
           echo "binary=$binary" >> "$GITHUB_OUTPUT"
       - name: Run the native media specs
+        id: media
+        # Known red: macOS WebKit never loads the two viewer frames, so the four native media specs
+        # fail in their beforeEach. Continuing keeps this step's result from paging the nightly issue;
+        # every other step still fails the job. Tracked in
+        # https://github.com/codesensehq/codesense/issues/490. Remove by 2026-12-12.
+        continue-on-error: true
         env:
           CODESENSE_FRAME_TEST_BINARY: ${{ steps.fixture.outputs.binary }}
         run: >-
           pnpm exec playwright test -c playwright.frame-security.config.ts --project=webkit
           tests/frame-security/hostile.spec.ts -g "native (audio|video) loads"
       - name: Upload failure traces
-        if: failure()
+        if: ${{ !cancelled() && (failure() || steps.media.outcome == 'failure') }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: frame-media-${{ github.run_id }}-${{ github.run_attempt }}
@@ -326,9 +332,10 @@ jobs:
 
   nightly-issue:
     name: Track the nightly
-    # One issue for every red night, opened or updated only by a scheduled run on main.
+    # One issue for every red night (a lane that failed or timed out), opened or updated only by
+    # a scheduled run on main.
     needs: [tiles-nightly, pane-harness, perf, load, frame-media]
-    if: ${{ !cancelled() && contains(needs.*.result, 'failure') && github.event_name == 'schedule' && github.ref == 'refs/heads/main' && !github.event.repository.fork }}
+    if: ${{ !cancelled() && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')) && github.event_name == 'schedule' && github.ref == 'refs/heads/main' && !github.event.repository.fork }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     concurrency:

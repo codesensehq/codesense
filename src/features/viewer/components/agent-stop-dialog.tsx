@@ -15,8 +15,8 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { useAgentSessions } from "@/features/viewer/hooks/use-agent-sessions";
 import { agentRowNames } from "@/features/viewer/lib/agent-row-presentation";
+import { useAgentListProjectionStore } from "@/features/viewer/lib/agent-list-projection";
 import { logger } from "@/shared/lib/logger";
 import { type AgentSessionRow, wvRosterForSession, wvWorkerForceClose } from "@/tauri/commands";
 
@@ -46,7 +46,9 @@ export function useAgentStop(): {
   requestStop: (row: AgentSessionRow, approval?: StopApproval) => void;
   dialog: React.JSX.Element;
 } {
-  const { setSessions, reload } = useAgentSessions();
+  // The roster's actions alone: a stop never redraws its caller for a roster change.
+  const setSessions = useAgentListProjectionStore((s) => s.setSessions);
+  const reload = useAgentListProjectionStore((s) => s.reload);
   const [target, setTarget] = useState<StopTarget | null>(null);
   const [always, setAlways] = useState(false);
 

@@ -1,0 +1,53 @@
+{
+  "about": "Merge card or question: the Foreman story view's kindOf and the needs-you set's card_kind both read these cases.",
+  "cases": [
+    {
+      "name": "a short PR link with a merge reply and send back",
+      "summary": "merge #1291?",
+      "text": "acme/app#1291 is green and reviewed. Reply `merge` or send back.",
+      "kind": "merge"
+    },
+    {
+      "name": "a full PR link offering merge or send back",
+      "summary": "",
+      "text": "https://github.com/acme/app/pull/77 passed review. Merge or send back?",
+      "kind": "merge"
+    },
+    {
+      "name": "merge / send back with quotes",
+      "summary": "Ready: acme/app#12",
+      "text": "Reply \"merge\" to land it, or \"send back\" with notes.",
+      "kind": "merge"
+    },
+    {
+      "name": "a question with no PR",
+      "summary": "pins per window or per group?",
+      "text": "Round 4 of 5 is waiting on one call: pins per window or per group?",
+      "kind": "question"
+    },
+    {
+      "name": "a PR without an offer to merge",
+      "summary": "",
+      "text": "acme/app#40 is open. Which reviewer should take it? You can send back notes.",
+      "kind": "question"
+    },
+    {
+      "name": "an offer to merge with no PR named",
+      "summary": "",
+      "text": "Reply `merge` or send back.",
+      "kind": "question"
+    },
+    {
+      "name": "a PR and a merge reply but no send back",
+      "summary": "",
+      "text": "acme/app#41: reply `merge` when ready.",
+      "kind": "question"
+    },
+    {
+      "name": "an issue number is not a PR",
+      "summary": "",
+      "text": "Fixes #41. Reply `merge` or send back.",
+      "kind": "question"
+    }
+  ]
+}

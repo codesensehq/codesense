@@ -70,6 +70,8 @@ describe("the 14:02 sample day", () => {
     for (const item of day.expect.needsYou) expect(sessions).toContain(item.session);
     const fyi = day.inbox.filter((card) => card.kind === "update");
     expect(fyi).toHaveLength(1);
-    expect(day.expect.needsYou.map((item) => item.id)).not.toContain(`inbox:${fyi[0].messageId}`);
+    expect(day.expect.needsYou.map((item) => item.id)).not.toContain(
+      `inbox:${fyi[0].org}/${fyi[0].team}/${fyi[0].messageId}`,
+    );
   });
 });

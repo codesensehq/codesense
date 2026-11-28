@@ -4,6 +4,7 @@ import { act, fireEvent, render, renderHook, screen } from "@/test-utils";
 import { DndContext, PointerSensor, useSensor, useSensors } from "@dnd-kit/core";
 
 vi.mock("@/tauri/commands", () => ({
+  avatarPacksListForTeam: vi.fn().mockResolvedValue({ packs: [], warnings: [] }),
   saveAppState: vi.fn().mockResolvedValue(undefined),
   loadAppState: vi.fn().mockResolvedValue("{}"),
   pushViewerState: vi.fn().mockResolvedValue(undefined),

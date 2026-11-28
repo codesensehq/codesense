@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { act, renderHook, waitFor } from "@testing-library/react";
+import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 
 const handlers = new Map<string, () => void>();
 vi.mock("@tauri-apps/api/event", () => ({
@@ -220,6 +220,26 @@ describe("one read per team", () => {
     expect(avatarPacksList).toHaveBeenCalledTimes(2);
   });
 
+  it("does not redraw a team's readers when its read fails again the same way", async () => {
+    avatarPacksList.mockRejectedValue(new Error("not synced"));
+    let renders = 0;
+    const first = renderHook(() => {
+      renders++;
+      return useAvatarPacks("acme:ops");
+    });
+    await waitFor(() => expect(first.result.current.warnings).toEqual(["not synced"]));
+    const before = renders;
+    // Another caller mounting reads the failed team again, and it fails the same way.
+    renderHook(() => useAvatarPacks("acme:ops"));
+    await waitFor(() => expect(avatarPacksList).toHaveBeenCalledTimes(2));
+    await act(async () => {});
+    expect(renders).toBe(before);
+    // A different failure is news.
+    avatarPacksList.mockRejectedValue(new Error("offline"));
+    renderHook(() => useAvatarPacks("acme:ops"));
+    await waitFor(() => expect(first.result.current.warnings).toEqual(["offline"]));
+  });
+
   it("forgets the teams neither listed nor active", async () => {
     avatarPacksList.mockResolvedValue({ packs: [], warnings: [] });
     const { rerender } = renderHook(({ keys }) => useTeamAvatarPacks(keys), {
@@ -276,6 +296,34 @@ describe("one read per team", () => {
     }
   });
 
+  it("reads a failing active team once per wait, however many callers mounted at different times", async () => {
+    vi.useFakeTimers();
+    try {
+      avatarPacksList.mockRejectedValue(new Error("not synced"));
+      renderHook(() => useAvatarPacks());
+      await act(async () => {});
+      expect(avatarPacksList).toHaveBeenCalledTimes(1);
+      await act(async () => vi.advanceTimersByTime(1_000));
+      // The second caller's own mount reads the failed team once, and starts no chain of its own.
+      renderHook(() => useAvatarPacks());
+      await act(async () => {});
+      expect(avatarPacksList).toHaveBeenCalledTimes(2);
+      await act(async () => vi.advanceTimersByTime(1_000));
+      expect(avatarPacksList).toHaveBeenCalledTimes(3);
+      // Three failures wait 8s: one read at its end, not one for each caller's own phase.
+      await act(async () => vi.advanceTimersByTime(7_999));
+      expect(avatarPacksList).toHaveBeenCalledTimes(3);
+      await act(async () => vi.advanceTimersByTime(1));
+      expect(avatarPacksList).toHaveBeenCalledTimes(4);
+      // Both callers gone: no read is left pending.
+      cleanup();
+      await act(async () => vi.advanceTimersByTime(120_000));
+      expect(avatarPacksList).toHaveBeenCalledTimes(4);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("refuses to set a default pack or share once another team is active", async () => {
     avatarPacksList.mockResolvedValue({ packs: [CREW], warnings: [] });
     const { result } = renderHook(() => useAvatarPacks());
@@ -316,5 +364,65 @@ describe("one read per team", () => {
     });
     expect(useAvatarPacksStore.getState().byTeam["acme:core"]?.defaultPack).toBe("crew");
     expect(useAvatarPacksStore.getState().byTeam["acme:ops"]?.defaultPack ?? null).toBeNull();
+  });
+});
+
+describe("useAvatarPacks for a named team", () => {
+  beforeEach(() => {
+    handlers.clear();
+    avatarPacksList.mockReset();
+    avatarDefaultPackSet.mockClear();
+    useAvatarPacksStore.setState({ byTeam: {} });
+    useOrgStore.setState({ activeOrgSlug: "acme", activeTeamName: "core" });
+  });
+
+  it("reads the named team, not the active one, and forgets it once no caller names it", async () => {
+    const OPS = { ...CREW, id: "ops-crew", faces: [{ ...CREW.faces[0], ref: "ops-crew:grumpy" }] };
+    avatarPacksList.mockImplementation((teamKey: string) =>
+      Promise.resolve({ packs: teamKey === "acme:ops" ? [OPS] : [CREW], warnings: [] }),
+    );
+    const first = renderHook(() => useAvatarPacks("acme:ops"));
+    const second = renderHook(() => useAvatarPacks("acme:ops"));
+    await waitFor(() => expect(first.result.current.packs[0]?.id).toBe("ops-crew"));
+    expect(avatarPacksList).toHaveBeenCalledWith("acme:ops");
+    expect(avatarPacksList).not.toHaveBeenCalledWith("acme:core");
+    expect(second.result.current.faces).toBe(first.result.current.faces);
+
+    // A caller saying what it needs prunes the teams no mounted caller names.
+    first.unmount();
+    renderHook(() => useAvatarPacks());
+    await waitFor(() => expect(useAvatarPacksStore.getState().byTeam["acme:core"]).toBeDefined());
+    expect(useAvatarPacksStore.getState().byTeam["acme:ops"]).toBeDefined();
+    second.unmount();
+    renderHook(() => useAvatarPacks());
+    await waitFor(() => expect(useAvatarPacksStore.getState().byTeam["acme:ops"]).toBeUndefined());
+  });
+
+  it("gives a team that is not the active one read-only actions, and the active one its own", async () => {
+    avatarPacksList.mockResolvedValue({ packs: [CREW], warnings: [] });
+    const ops = renderHook(() => useAvatarPacks("acme:ops"));
+    const core = renderHook(() => useAvatarPacks("acme:core"));
+    await waitFor(() => expect(core.result.current.packs[0]?.id).toBe("crew"));
+    expect(ops.result.current.canShare).toBe(false);
+    await act(() => ops.result.current.setDefaultPack("crew"));
+    expect(avatarDefaultPackSet).not.toHaveBeenCalled();
+    expect(core.result.current.canShare).toBe(true);
+  });
+
+  it("does not redraw when the active team switches between two other teams", async () => {
+    avatarPacksList.mockResolvedValue({ packs: [CREW], warnings: [] });
+    let renders = 0;
+    const { result } = renderHook(() => {
+      renders++;
+      return useAvatarPacks("acme:ops");
+    });
+    await waitFor(() => expect(result.current.packs[0]?.id).toBe("crew"));
+    const before = renders;
+    act(() => useOrgStore.setState({ activeTeamName: "dev" }));
+    act(() => useOrgStore.setState({ activeTeamName: "web" }));
+    expect(renders).toBe(before);
+    // Becoming the active team gives it its actions.
+    act(() => useOrgStore.setState({ activeTeamName: "ops" }));
+    expect(result.current.canShare).toBe(true);
   });
 });

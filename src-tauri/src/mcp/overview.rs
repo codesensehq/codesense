@@ -12,7 +12,7 @@
 //! CodeSense works" page that also ships in the bundled CodeSense docs, compiled in so it
 //! reaches remote agents too, whose machines don't hold the docs checkout.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use rmcp::schemars::JsonSchema;
@@ -29,7 +29,7 @@ pub(crate) const CONCEPTS_GUIDE_PATH: &str = "getting-started/content/concepts/R
 /// How many rows a list section shows before it says `truncated`.
 const MAX_ROWS: usize = 25;
 
-pub(crate) const DESCRIPTION: &str = "Overview of CodeSense right now, in ONE read-only call: start here to answer any question about CodeSense state. Returns { generatedAt, context (active org/team), machines (connection status), sessions (running agents/terminals by state and machine, who launched whom, who needs you), agents (saved Agents), routines (enabled, last run, needs you), inbox (human unread; sessions with unread mail), roleQueues (per role in the active team: pending/claimed/accepted deliveries and live instances), workspaces (open workspaces and their tabs), docs (where the bundled CodeSense docs and the concepts guide are) }. Each section has `detail`: the tools to call for the full data. A section that could not be read has `error` instead of data; the rest still answer. Lists are capped (`truncated: true` when cut). Optional {guide: true}: return the concepts guide instead (how CodeSense works: orgs, teams, content layers, workspaces, machines, sessions, Agents, roles, inboxes, routines, notes, dashboards, each with its MCP tools).";
+pub(crate) const DESCRIPTION: &str = "Overview of CodeSense right now, in ONE read-only call: start here to answer any question about CodeSense state. Returns { generatedAt, context (active org/team), machines (connection status), sessions (running agents/terminals by state and machine, who launched whom, who needs you), needsYou (everything that waits on the person: questions, permission asks, merge cards, capped or failed agents, by kind; a team's agent sees only its own team's), agents (saved Agents), routines (enabled, last run, runsAwaiting: runs waiting on the person), inbox (human unread; sessions with unread mail), roleQueues (per role in the active team: pending/claimed/accepted deliveries and live instances), workspaces (open workspaces and their tabs), docs (where the bundled CodeSense docs and the concepts guide are) }. Each section has `detail`: the tools to call for the full data. A section that could not be read has `error` instead of data; the rest still answer. Lists are capped (`truncated: true` when cut). Optional {guide: true}: return the concepts guide instead (how CodeSense works: orgs, teams, content layers, workspaces, machines, sessions, Agents, roles, inboxes, routines, notes, dashboards, each with its MCP tools).";
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -60,6 +60,8 @@ pub(crate) struct OverviewInputs {
     pub active: Option<(String, String)>,
     /// `list_sessions` rows.
     pub sessions: Result<Vec<Value>, String>,
+    /// The needs-you set: the live hub's `needsYou` rows.
+    pub needs_you: Result<Vec<Value>, String>,
     /// `list_machines` rows for the active team.
     pub machines: Result<Vec<Value>, String>,
     /// `agent_list` rows.
@@ -135,6 +137,7 @@ const SESSION_TOOLS: &[&str] = &[
     "send_to_session",
     "get_viewer_state",
 ];
+const NEEDS_YOU_TOOLS: &[&str] = &["list_sessions", "inbox_list", "read_terminal_tab"];
 const AGENT_TOOLS: &[&str] = &["agent_list", "agent_get"];
 const ROUTINE_TOOLS: &[&str] = &["routine_list", "routine_get", "routine_runs", "routine_run"];
 const INBOX_TOOLS: &[&str] = &[
@@ -200,16 +203,40 @@ fn machines_section(machines: &Result<Vec<Value>, String>) -> Value {
     })
 }
 
-fn sessions_section(sessions: &Result<Vec<Value>, String>) -> Value {
+/// The sessions an item of the needs-you set is about, by session id or handle.
+fn waiting_sessions(needs_you: &[Value]) -> BTreeSet<&str> {
+    needs_you
+        .iter()
+        .filter_map(|item| str_at(item, "session"))
+        .collect()
+}
+
+fn sessions_section(
+    sessions: &Result<Vec<Value>, String>,
+    needs_you: &Result<Vec<Value>, String>,
+) -> Value {
     let rows = match sessions {
         Ok(rows) => rows,
         Err(e) => return failed(e, SESSION_TOOLS),
     };
-    let needs_you: Vec<Value> = rows
-        .iter()
-        .filter(|row| str_at(row, "state") == Some("needs-you"))
-        .map(|row| pick(row, &["handle", "displayName", "machine"]))
-        .collect();
+    // A set that could not be read says so; it never reads as nobody waiting.
+    let needs_you = match needs_you {
+        Ok(items) => {
+            let waiting = waiting_sessions(items);
+            let rows: Vec<Value> = rows
+                .iter()
+                .filter(|row| {
+                    [str_at(row, "sessionId"), str_at(row, "handle")]
+                        .into_iter()
+                        .flatten()
+                        .any(|id| waiting.contains(id))
+                })
+                .map(|row| pick(row, &["handle", "displayName", "machine"]))
+                .collect();
+            Value::from(rows)
+        }
+        Err(e) => failed(e, NEEDS_YOU_TOOLS),
+    };
     let items: Vec<Value> = rows
         .iter()
         .filter(|row| str_at(row, "state") != Some("exited"))
@@ -233,12 +260,48 @@ fn sessions_section(sessions: &Result<Vec<Value>, String>) -> Value {
     let (items, truncated) = capped(items);
     json!({
         "total": rows.len(),
+        // Sessions by their own state. Its `needs-you` is a session blocked or waiting on a
+        // permission, not the set: one session can hold two items or none (a blocked agent asks
+        // nothing), and an ended sender's card still counts there.
         "byState": count_by(rows, |r| str_at(r, "state").map(str::to_string)),
         "byMachine": count_by(rows, |r| Some(str_at(r, "machine").unwrap_or("unknown").to_string())),
         "needsYou": needs_you,
         "notExited": items,
         "truncated": truncated,
         "detail": detail(SESSION_TOOLS),
+    })
+}
+
+/// Everything that waits on the person: the one needs-you set, by kind.
+fn needs_you_section(needs_you: &Result<Vec<Value>, String>) -> Value {
+    let rows = match needs_you {
+        Ok(rows) => rows,
+        Err(e) => return failed(e, NEEDS_YOU_TOOLS),
+    };
+    let items = rows
+        .iter()
+        .map(|row| {
+            pick(
+                row,
+                &[
+                    "kind",
+                    "session",
+                    "org",
+                    "team",
+                    "workItem",
+                    "question",
+                    "messageId",
+                ],
+            )
+        })
+        .collect();
+    let (items, truncated) = capped(items);
+    json!({
+        "total": rows.len(),
+        "byKind": count_by(rows, |row| str_at(row, "kind").map(str::to_string)),
+        "items": items,
+        "truncated": truncated,
+        "detail": detail(NEEDS_YOU_TOOLS),
     })
 }
 
@@ -297,7 +360,9 @@ fn routines_section(routines: &Result<Vec<Value>, String>) -> Value {
     json!({
         "total": rows.len(),
         "enabled": rows.iter().filter(|r| flag(r, "enabled")).count(),
-        "needsYou": rows.iter().filter(|r| flag(r, "needs_you")).count(),
+        // Runs that ended waiting on the person. Not needs-you items: those are the
+        // `needsYou` section's set.
+        "runsAwaiting": rows.iter().filter(|r| flag(r, "needs_you")).count(),
         "lastRunByStatus": count_by(rows, last_status),
         "items": items,
         "truncated": truncated,
@@ -460,7 +525,8 @@ pub(crate) fn compose(inputs: &OverviewInputs) -> Value {
         "generatedAt": inputs.generated_at,
         "context": context_section(&inputs.active),
         "machines": machines_section(&inputs.machines),
-        "sessions": sessions_section(&inputs.sessions),
+        "sessions": sessions_section(&inputs.sessions, &inputs.needs_you),
+        "needsYou": needs_you_section(&inputs.needs_you),
         "agents": agents_section(&inputs.agents),
         "routines": routines_section(&inputs.routines),
         "inbox": inbox_section(&inputs.human_unread, &inputs.sessions, &inputs.active),
@@ -535,6 +601,35 @@ fn role_entry(roles: &mut BTreeMap<String, RoleQueue>, role: String) -> &mut Rol
     })
 }
 
+/// The view of the needs-you set a caller reads: the person sees every place, a team's
+/// agent only its own team's.
+pub(crate) fn needs_you_view(
+    scope: &crate::context_repo::caller_scope::CallerScope,
+) -> Result<String, String> {
+    use crate::context_repo::caller_scope::CallerScope;
+    match scope {
+        CallerScope::Human => Ok("all".into()),
+        CallerScope::Team(view) => Ok(crate::live_hub::view_key::team_key(
+            view.org(),
+            view.reader_team(),
+        )),
+        CallerScope::Unknown => Err("the caller's team is unknown".into()),
+    }
+}
+
+/// The caller's view of the needs-you set from the running hub: the person's `all`, a team's
+/// agent its own team's. A caller of no known team errors before the hub is asked.
+pub(crate) fn read_needs_you<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    scope: &crate::context_repo::caller_scope::CallerScope,
+) -> Result<Vec<Value>, String> {
+    use tauri::Manager;
+    let view = needs_you_view(scope)?;
+    app.try_state::<crate::live_hub::LiveHub>()
+        .ok_or_else(|| "the live hub is not running".to_string())?
+        .needs_you_rows(&view)
+}
+
 /// Reads every source the overview needs from the running app. Never fails: a source
 /// that can't be read becomes its section's `error`.
 pub(crate) async fn gather(
@@ -566,6 +661,9 @@ pub(crate) async fn gather(
         .and_then(|rows| to_rows(&rows)),
         None => Err("no active team: machines are listed per team".to_string()),
     };
+
+    // Read before `scope` moves into the routines read below.
+    let needs_you = read_needs_you(app, &scope);
 
     let (agents, routines, docs_root) = match &ambient {
         Ok((home, user_id)) => {
@@ -658,6 +756,7 @@ pub(crate) async fn gather(
         generated_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
         active,
         sessions,
+        needs_you,
         machines,
         agents,
         routines,
@@ -724,6 +823,7 @@ mod tests {
         "context",
         "machines",
         "sessions",
+        "needsYou",
         "agents",
         "routines",
         "inbox",
@@ -737,6 +837,7 @@ mod tests {
             generated_at: "2026-10-04T00:00:00Z".into(),
             active: None,
             sessions: Ok(vec![]),
+            needs_you: Ok(vec![]),
             machines: Ok(vec![]),
             agents: Ok(vec![]),
             routines: Ok(vec![]),
@@ -763,6 +864,40 @@ mod tests {
         assert_eq!(out["docs"]["error"], "cannot read docs");
         assert!(out["sessions"].get("error").is_none());
         assert!(out["docs"].get("conceptsGuide").is_some());
+    }
+
+    /// An unread set says so in both places it shows; the session lists still answer.
+    #[test]
+    fn an_unread_needs_you_set_is_an_error_never_nobody_waiting() {
+        let mut inputs = populated();
+        inputs.needs_you = Err("the needs-you set is not projected yet".into());
+        let out = compose(&inputs);
+        assert_eq!(
+            out["sessions"]["needsYou"]["error"],
+            "the needs-you set is not projected yet"
+        );
+        assert_eq!(
+            out["needsYou"]["error"],
+            "the needs-you set is not projected yet"
+        );
+        assert_eq!(out["sessions"]["total"], 4);
+        assert_eq!(out["sessions"]["notExited"].as_array().unwrap().len(), 3);
+    }
+
+    /// The person reads every place's items, a team's agent only its own team's view, and a
+    /// caller of no known team none.
+    #[test]
+    fn the_set_is_read_in_the_callers_view() {
+        use crate::context_repo::caller_scope::CallerScope;
+        let root = tempfile::tempdir().unwrap();
+        let team = CallerScope::Team(crate::context_repo::inheritance::team_view(
+            tempfile::TempDir::path(&root),
+            "acme",
+            "steward",
+        ));
+        assert_eq!(needs_you_view(&CallerScope::Human).unwrap(), "all");
+        assert_eq!(needs_you_view(&team).unwrap(), "team:acme/steward");
+        assert!(needs_you_view(&CallerScope::Unknown).is_err());
     }
 
     #[test]
@@ -793,6 +928,11 @@ mod tests {
                 json!({"handle":"w1","displayName":"worker 1","state":"needs-you","machine":"box","launchedBy":"lead","unread":2,"oldestUnreadAt":"2026-10-04T00:00:00.000Z","role":"worker"}),
                 json!({"handle":"w2","displayName":"worker 2","state":"idle","machine":"box","launchedBy":"lead","unread":null,"oldestUnreadAt":null}),
                 json!({"handle":"old","displayName":"old","state":"exited","machine":"This Mac","launchedBy":null,"unread":0,"oldestUnreadAt":null}),
+            ]),
+            // The set, not a session's state, says who waits on the person.
+            needs_you: Ok(vec![
+                json!({"id":"agent:w1:permission","kind":"permission","session":"w1","org":"acme/ctx","team":"web","workItem":"wi_00000000000000a1"}),
+                json!({"id":"inbox:acme/ctx/web/7","kind":"merge","session":"lead","org":"acme/ctx","team":"web","workItem":"wi_00000000000000a1","messageId":7}),
             ]),
             machines: Ok(vec![
                 json!({"machineId":"local","label":"This Mac","kind":"local","status":{"state":"connected","workspaces":2},"remoteMcpControl":false,"attention":0}),
@@ -861,6 +1001,7 @@ mod tests {
         assert_eq!(out["context"]["org"], Value::Null);
         assert_eq!(out["sessions"]["total"], 0);
         assert_eq!(out["sessions"]["needsYou"], json!([]));
+        assert_eq!(out["needsYou"]["total"], 0);
         assert_eq!(out["machines"]["total"], 0);
         assert_eq!(out["agents"]["total"], 0);
         assert_eq!(out["routines"]["total"], 0);
@@ -870,6 +1011,39 @@ mod tests {
         assert_eq!(out["workspaces"]["total"], 0);
         assert_eq!(out["docs"]["org"], "codesense/docs");
         assert_eq!(out["docs"]["root"], Value::Null);
+    }
+
+    /// `byState` counts sessions by their own state and `needsYou` counts the set's items, so
+    /// they differ by design: a blocked agent is a `needs-you` session that asks nothing, a
+    /// capped agent that also asks is one session and two items, and an ended sender's card is
+    /// an item with no running session.
+    #[test]
+    fn by_state_counts_sessions_and_the_set_counts_items() {
+        let mut inputs = empty();
+        inputs.sessions = Ok(vec![
+            json!({"handle":"blocked","displayName":"blocked","state":"needs-you","machine":"This Mac"}),
+            json!({"handle":"capped","displayName":"capped","state":"running","machine":"This Mac"}),
+            json!({"handle":"gone","displayName":"gone","state":"exited","machine":"This Mac"}),
+        ]);
+        inputs.needs_you = Ok(vec![
+            json!({"id":"agent:capped:capped","kind":"capped","session":"capped"}),
+            json!({"id":"agent:capped:question","kind":"question","session":"capped","question":"Which branch?"}),
+            json!({"id":"inbox:acme/web/3","kind":"question","session":"gone","messageId":3,"question":"Ship it?"}),
+        ]);
+        let out = compose(&inputs);
+        assert_eq!(out["sessions"]["byState"]["needs-you"], 1);
+        assert_eq!(out["needsYou"]["total"], 3);
+        let waiting: Vec<&str> = out["sessions"]["needsYou"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s["handle"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            waiting,
+            ["capped", "gone"],
+            "the set names who waits, not byState"
+        );
     }
 
     #[test]
@@ -895,7 +1069,17 @@ mod tests {
         assert_eq!(s["byMachine"], json!({"This Mac":2,"box":2}));
         assert_eq!(
             s["needsYou"],
-            json!([{"handle":"w1","displayName":"worker 1","machine":"box"}])
+            json!([
+                {"handle":"lead","displayName":"lead","machine":"This Mac"},
+                {"handle":"w1","displayName":"worker 1","machine":"box"}
+            ])
+        );
+        let n = &out["needsYou"];
+        assert_eq!(n["total"], 2);
+        assert_eq!(n["byKind"], json!({"merge":1,"permission":1}));
+        assert_eq!(
+            n["items"][1],
+            json!({"kind":"merge","session":"lead","org":"acme/ctx","team":"web","workItem":"wi_00000000000000a1","messageId":7})
         );
         let live: Vec<&str> = s["notExited"]
             .as_array()
@@ -917,7 +1101,8 @@ mod tests {
         let r = &out["routines"];
         assert_eq!(r["total"], 2);
         assert_eq!(r["enabled"], 1);
-        assert_eq!(r["needsYou"], 1);
+        assert_eq!(r["runsAwaiting"], 1);
+        assert_eq!(r.get("needsYou"), None);
         assert_eq!(r["lastRunByStatus"], json!({"failed":1}));
 
         let i = &out["inbox"];

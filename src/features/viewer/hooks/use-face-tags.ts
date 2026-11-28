@@ -1,12 +1,15 @@
 // SPDX-License-Identifier: MIT
-import { useMemo } from "react";
+import { useMemo, useSyncExternalStore } from "react";
 import { useShallow } from "zustand/react/shallow";
 
 import { agentRowLabel } from "@/features/viewer/lib/agent-row-presentation";
 import { duplicateFaceTags, resolveAgentFace } from "@/features/viewer/lib/agent-list-view";
 import { isAgentSession } from "@/features/viewer/lib/hand-agents";
 import { useAgentListProjectionStore } from "@/features/viewer/lib/agent-list-projection";
-import { useAgentIdentityChoices } from "@/features/viewer/hooks/use-listed-agents";
+import {
+  identityChoicesOf,
+  useAgentIdentityChoices,
+} from "@/features/viewer/hooks/use-listed-agents";
 import { useAvatarPacks } from "@/shared/hooks/use-avatar-packs";
 import {
   findTabLocationBySessionId,
@@ -14,6 +17,7 @@ import {
   selectRunningTerminalTabIndex,
   useViewerStore,
   type TerminalTabIndex,
+  type ViewerState,
 } from "@/shared/stores/viewer-store";
 import type { AgentIdentityChoice } from "@/shared/lib/agent-identity-choice";
 import type { AgentSessionRow } from "@/tauri/commands";
@@ -31,12 +35,76 @@ const NO_TAGS: ReadonlyMap<string, number> = new Map();
 export function useFaceTags(teamKey: string | null): ReadonlyMap<string, number> {
   const sessions = useAgentListProjectionStore((s) => s.sessions);
   const choices = useAgentIdentityChoices(teamKey ?? undefined);
-  const { faces } = useAvatarPacks();
+  const { faces } = useAvatarPacks(teamKey ?? undefined);
   const teamOf = useTabTeamBySession();
   return useMemo(
     () => faceTags(teamKey, { sessions, choices, faces, teamOf }),
     [teamKey, sessions, choices, faces, teamOf],
   );
+}
+
+/**
+ * One agent's number in {@link useFaceTags}, for a surface that draws one agent (a tile's tab): read
+ * from the stores at each change but returned as a number, so the caller redraws only when that
+ * agent's number changes, not for every session, look or layout change. `faces` is the team's.
+ */
+export function useFaceTag(
+  teamKey: string | null,
+  handle: string | undefined,
+  faces: FaceTagInput["faces"],
+): number | undefined {
+  const read = () => {
+    if (handle === undefined) return undefined;
+    const sessions = useAgentListProjectionStore.getState().sessions;
+    const viewer = useViewerStore.getState();
+    const running = selectRunningTerminalTabIndex(viewer);
+    const minimized = selectMinimizedTerminalTabIndex(viewer);
+    return cachedFaceTags(teamKey, [sessions, viewer.agentIdentity, faces, running, minimized]).get(
+      handle,
+    );
+  };
+  return useSyncExternalStore(subscribeFaceTagStores, read);
+}
+
+/** Each team's tag map as last computed, with the inputs it was computed from. Every tab of a
+ *  team reads the same inputs (a team's faces are one object while its packs are), so a change
+ *  computes the map once for the team, not once per tab; a change to any input (the packs
+ *  included) computes it again. */
+const tagCache = new Map<string, { inputs: unknown[]; tags: ReadonlyMap<string, number> }>();
+const ALL_TEAMS_KEY = "\0";
+
+function cachedFaceTags(
+  teamKey: string | null,
+  inputs: [
+    FaceTagInput["sessions"],
+    ViewerState["agentIdentity"],
+    FaceTagInput["faces"],
+    TerminalTabIndex,
+    TerminalTabIndex,
+  ],
+): ReadonlyMap<string, number> {
+  const key = teamKey ?? ALL_TEAMS_KEY;
+  const cached = tagCache.get(key);
+  if (cached && inputs.every((input, i) => Object.is(input, cached.inputs[i]))) return cached.tags;
+  const [sessions, agentIdentity, faces, running, minimized] = inputs;
+  const tags = faceTagsFor(teamKey, {
+    sessions,
+    choices: identityChoicesOf(agentIdentity, teamKey ?? undefined),
+    faces,
+    running,
+    minimized,
+  });
+  tagCache.set(key, { inputs, tags });
+  return tags;
+}
+
+function subscribeFaceTagStores(onChange: () => void): () => void {
+  const stopSessions = useAgentListProjectionStore.subscribe(onChange);
+  const stopViewer = useViewerStore.subscribe(onChange);
+  return () => {
+    stopSessions();
+    stopViewer();
+  };
 }
 
 /** The team of each session whose tab is open. A running tab wins over a minimized one. */

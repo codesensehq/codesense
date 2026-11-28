@@ -1840,12 +1840,15 @@ test("claude driver: a turn past its timeout is killed with its whole process gr
     t,
     "onboard-repo",
     [{ ...ok(), steps: [{ grandchild: "hold" }, { sleep: 20000 }] }],
-    { timeoutMs: 400 },
+    // Room for the fake's start and MCP initialize before its grandchild (up to 1.7 s under load).
+    { timeoutMs: 5000 },
     { budgetLeft: 2 },
   );
-  infra(r, /timed out after 0\.4s/);
-  assert.ok(Date.now() - started < 10000, "did not wait for the child");
-  assert.ok(await gone(r.fake.pids().grandchild), "the grandchild was killed with the group");
+  infra(r, /timed out after 5s/);
+  assert.ok(Date.now() - started < 12000, "did not wait for the child");
+  const pids = r.fake.pids();
+  assert.ok(pids, "the fake started its grandchild");
+  assert.ok(await gone(pids.grandchild), "the grandchild was killed with the group");
   assert.equal(r.error.cost_usd, 2, "a timed-out turn is charged its cap");
 });
 

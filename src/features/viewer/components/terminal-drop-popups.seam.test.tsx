@@ -74,6 +74,7 @@ vi.mock("@/tauri/commands", async (importOriginal) => ({
     h.server.resize(session, cols, rows),
   ),
   markInboxMessageRead: vi.fn(() => Promise.resolve()),
+  avatarPacksListForTeam: vi.fn().mockResolvedValue({ packs: [], warnings: [] }),
 }));
 vi.mock("@/features/inbox/hooks/use-session-inbox", () => ({
   useSessionInbox: (handle: string) => ({
@@ -83,7 +84,11 @@ vi.mock("@/features/inbox/hooks/use-session-inbox", () => ({
     reload: vi.fn(),
   }),
 }));
-vi.mock("@/features/inbox/hooks/use-inbox-sessions", () => ({ useInboxSessions: () => [] }));
+vi.mock("@/features/inbox/hooks/use-inbox-sessions", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/features/inbox/hooks/use-inbox-sessions")>()),
+  useInboxSessions: () => [],
+  useWatchInboxSessions: () => {},
+}));
 vi.mock("@/shared/lib/get-current-user", () => ({ useCurrentUser: () => null }));
 vi.mock("./source-editor-inset", () => ({ WorktreeEditorSurface: () => null }));
 vi.mock("@/features/dashboard/components/markdown-viewer", () => ({ MarkdownViewer: () => null }));

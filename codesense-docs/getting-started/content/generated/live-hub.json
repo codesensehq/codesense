@@ -1,6 +1,6 @@
 {
   "counts": {
-    "builtins": 17,
+    "builtins": 18,
     "families": 1
   },
   "topics": [
@@ -807,6 +807,14 @@
           }
         }
       ]
+    },
+    {
+      "name": "needsYou",
+      "rows": [
+        {
+          "description": "untyped (Value)"
+        }
+      ]
     }
   ],
   "families": [
@@ -1143,15 +1151,15 @@
     "admitsSource": "\n    let key = key.split(\"|\").next().unwrap_or(key);\n    key == \"all\" || scope == Some(key)\n"
   },
   "sources": {
-    "src-tauri/src/live_hub/projection.rs": "2197f82cf052d87e3b7a569b72b633558869d496d37ee0c6d59fc8e544651396",
+    "src-tauri/src/live_hub/projection.rs": "2e73ef412cc25214dbb6669b828aadce88e9a07f65437165a5c88e39cce8893b",
     "src-tauri/src/live_hub/view_key.rs": "8e76214d7c961f122717219e2893d06ccd504dc042fe96790243089ea0a2ae37",
-    "src-tauri/src/live_hub/mod.rs": "db5f46026efd9006f0eda9b895636d701402539c131143b804795169ba9c063e",
+    "src-tauri/src/live_hub/mod.rs": "9e3fc74763da386672ca903eef2f84b8d19598ba7ebd173bdc84f04d9f0b7612",
     "src-tauri/src/live_hub/agent_list/sessions.rs": "a9726ec640a283d333235a25f81e21791f49f9231fc786e52e0f11dc60cd851d",
     "src-tauri/src/mcp/session_list.rs": "8e3713c878646c7310cc0e4fd6aaa9d1bbfa2d5510e552f0ef4ec80e8823d97a",
     "src-tauri/src/agents/session_fields.rs": "9ec6c8ab4833c6b6d6242524dac58c6203df507271a4bfa13233838553c50416",
     "src-tauri/src/live_hub/agent_list/fields.rs": "0e6d5d02a04c2e620fc4e754c5ab140cfe687eae3f3494fabdd1f44ad07416a8",
     "src-tauri/src/live_hub/effective_status.rs": "4c975cc197d37d6f0890ec4905b3db0a3b56b2deae669797bf28c284787aa2ca",
-    "src-tauri/src/live_hub/inbox.rs": "89c54696f40c6b37d90e052bcf3ed39c15d122d6111f1c24f849fbf1830948b6",
+    "src-tauri/src/live_hub/inbox.rs": "3706565fb9dd5c04e964eb456394a1bb8fd97fc3641e5434d90db73fa5214682",
     "src-tauri/src/live_hub/agent_list/rows.rs": "86be0bbd951d279e47bd938be31f1f5a4f8c70e24c0fc9e2db4fd9d07fa6dce2",
     "src-tauri/src/live_hub/agent_list/views.rs": "0fbc27242d28517476f53c8395fab13ba460850539003dd7d5bea97b685c5ebf",
     "src-tauri/src/records/projection.rs": "cb55ec6eb89f2f604c3be1bce7438b5bf4e3cc80818954665640adc5794843fd",
@@ -1176,6 +1184,7 @@
     "storyTotals",
     "pins",
     "messageDelivery",
+    "needsYou",
     "ui:<slotId>"
   ]
 }

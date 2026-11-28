@@ -256,9 +256,12 @@ impl VerbSpec {
         if matches!(&*self.name, "subscribe" | "unsubscribe" | "page") && args["topic"] == "pins" {
             return "inbox:read:team";
         }
-        // Where the human's messages to sessions stand reads like the inbox it comes from.
+        // Where the human's messages to sessions stand, and the needs-you set that carries
+        // their cards' text, read like the inbox they come from.
         if matches!(self.name.as_str(), "subscribe" | "unsubscribe" | "page")
-            && (args["topic"] == "inbox" || args["topic"] == "messageDelivery")
+            && (args["topic"] == "inbox"
+                || args["topic"] == "messageDelivery"
+                || args["topic"] == "needsYou")
         {
             if caller.scope == "team" {
                 "inbox:read:team"

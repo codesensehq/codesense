@@ -24,6 +24,7 @@ vi.mock("@tauri-apps/api/event", () => ({
 // ActivityV1 recovery has its own seam tests; these surfaces consume the projection.
 vi.mock("@/shared/hooks/use-terminal-activity", () => ({ useTerminalActivity: () => {} }));
 vi.mock("@/tauri/commands", () => ({
+  avatarPacksListForTeam: vi.fn().mockResolvedValue({ packs: [], warnings: [] }),
   saveAppState: vi.fn().mockResolvedValue(undefined),
   loadAppState: vi.fn().mockResolvedValue("{}"),
   listNotes: vi.fn().mockResolvedValue([]),
