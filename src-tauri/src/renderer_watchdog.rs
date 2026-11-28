@@ -326,8 +326,8 @@ impl RendererLiveness {
 ///
 /// It stays a one-way, infallible ack: every added field is optional and none can
 /// block the liveness store (a read that could break the ack would ironically
-/// trip the watchdog). Adding args to an existing command does not change the
-/// command-count contract.
+/// trip the watchdog). Adding args to an existing command registers no new
+/// command.
 #[tauri::command]
 pub fn renderer_heartbeat(
     state: tauri::State<'_, RendererLiveness>,
