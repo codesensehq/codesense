@@ -15,7 +15,7 @@ import { useViewerStore, type TerminalAiStatus } from "@/shared/stores/viewer-st
  *
  * Deliberately NOT a new signal: it introduces no streaming verb, taps no
  * terminal output for chat text, and adds no backend emit/command — it reads an
- * already-maintained store slice, so the `commands.contract` count stays green
+ * already-maintained store slice, so the `commands.contract` checks stay green
  * (AC-9/AC-10). (Design note: the story's original `appended_seq` output-cadence
  * idea is unreliable on the FE — output rides per-viewport streams that exist
  * only while a pane is attached, so cadence reads false-idle; `aiStatus` is the

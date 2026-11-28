@@ -8,14 +8,14 @@ import type { FileEntry } from "@/tauri/commands";
  * =======================
  * Typed wrappers for backend commands the settled mock-first Machines UI needs but
  * that do NOT yet have a Rust handler. They are deliberately kept OUT of
- * `commands.ts` so the `commands.contract.test.ts` count (TS wrappers ↔ Rust
- * handlers) stays exact.
+ * `commands.ts` so `commands.contract.test.ts` (every TS wrapper has a Rust
+ * handler) stays green.
  *
  * Each is real, typed, and invoked by production UI; in `pnpm dev:mock` the mock
  * backend (`src/app/mock/handlers/machines.ts`) answers them. In a real build they
  * reject as not-registered until the Rust handler lands — that's the "draft" state.
- * When a wiring story implements a handler, move the wrapper into `commands.ts`,
- * register the command in `lib.rs` and bump `EXPECTED_*_COMMAND_COUNT`.
+ * When a wiring story implements a handler, move the wrapper into `commands.ts`
+ * and register the command in `lib.rs`.
  *
  * The machine registry, the SSH connector, the Add-machine checklist and the
  * install are real (`commands.ts`, "Remote Machines"). What stays here:
