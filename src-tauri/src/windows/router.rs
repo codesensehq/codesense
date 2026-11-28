@@ -43,7 +43,7 @@ fn covers(changed: &Path, key: &ItemKey) -> bool {
 /// satellites holding a `tab` item it covers.
 pub fn route_path_event(registry: &WindowRegistry, file_path: &str) -> Vec<String> {
     let mut labels = vec![MAIN_LABEL.to_owned()];
-    if file_path.is_empty() {
+    if str::is_empty(file_path) {
         return labels;
     }
     let changed = Path::new(file_path);
