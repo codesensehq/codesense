@@ -5,8 +5,9 @@
 //! and seed profiles on a test's say. This guard parses each `.rs` file under `src/` with `syn` and
 //! fails on:
 //!
-//! - any item of a module file that is not declared under the gate: `windows/e2e.rs` is the one
-//!   such module today, so its `mod` declaration must carry it;
+//! - a file of a webdriver-only module ([`WEBDRIVER_MODULES`]: `windows/e2e.rs` and anything
+//!   under `windows/e2e/`) that the gate does not cover, whatever it holds, so the module's
+//!   helpers, types and constants stay out of a release build with its commands;
 //! - a `#[tauri::command]` fn whose name starts `e2e_`, or a `generate_handler!` entry naming one,
 //!   outside the gate. The shipped `wv_e2e_*` commands (the weft ledger's and the terminal
 //!   handler's) are gated at run time, not by the feature, and their prefix is allowed;
@@ -36,6 +37,20 @@ const FEATURE: &str = "e2e-webdriver";
 
 /// The WebDriver plugin's crates, as Rust names them.
 const PLUGINS: [&str; 2] = ["tauri_plugin_wdio", "tauri_plugin_wdio_webdriver"];
+
+/// The modules every item of which is test-only, as paths under `src/` without `.rs`: each
+/// covers `<path>.rs`, `<path>/mod.rs` and every file under `<path>/`.
+const WEBDRIVER_MODULES: [&str; 1] = ["windows/e2e"];
+
+/// Whether `file` belongs to a [`WEBDRIVER_MODULES`] module.
+fn webdriver_only(file: &str) -> bool {
+    WEBDRIVER_MODULES.iter().any(|module| {
+        file.strip_suffix(".rs") == Some(*module)
+            || file
+                .strip_prefix(*module)
+                .is_some_and(|rest| rest.starts_with('/'))
+    })
+}
 
 /// Test-only commands start with this; `wv_e2e_` does not, so the shipped ones pass.
 const COMMAND_PREFIX: &str = "e2e_";
@@ -385,7 +400,8 @@ struct TreeScan {
 }
 
 /// Scan `files` (paths relative to `src/`, `/`-separated): each file's hits count only when no
-/// `mod` declaration on its path from the crate root, and not the file itself, carries the gate.
+/// `mod` declaration on its path from the crate root, and not the file itself, carries the gate;
+/// a webdriver-only module's file the gate does not cover is itself a hit.
 fn scan_tree(files: &BTreeMap<String, String>) -> TreeScan {
     let scans: BTreeMap<&str, FileScan> = files
         .iter()
@@ -421,6 +437,11 @@ fn scan_tree(files: &BTreeMap<String, String>) -> TreeScan {
     for (file, scan) in &scans {
         commands.extend(scan.commands.iter().cloned());
         if !gated(*file) {
+            if webdriver_only(file) {
+                hits.push(format!(
+                    "{file}:1: the webdriver-only module {file} outside #[cfg(feature = \"{FEATURE}\")]"
+                ));
+            }
             hits.extend(scan.hits.iter().cloned());
         }
     }
@@ -474,6 +495,11 @@ fn no_webdriver_code_outside_the_feature_gate() {
         scan.hits.is_empty(),
         "put test-only WebDriver code under #[cfg(feature = \"{FEATURE}\")]:\n{}",
         scan.hits.join("\n")
+    );
+    // The module the gate must cover is still where WEBDRIVER_MODULES says.
+    assert!(
+        files.keys().any(|file| webdriver_only(file)),
+        "no file under {WEBDRIVER_MODULES:?}: update the list"
     );
     // The scan sees the driver's commands, each defined once and registered once, so a scan
     // that stopped reaching them would fail here rather than pass on nothing.
@@ -581,14 +607,65 @@ fn fails_an_e2e_module_its_declaration_does_not_gate() {
         ]);
         assert_eq!(
             hits,
-            vec![format!(
-                "windows/e2e.rs:2: the command e2e_open_window outside #[cfg(feature = \"{FEATURE}\")]"
-            )],
+            vec![
+                format!("windows/e2e.rs:1: the webdriver-only module windows/e2e.rs outside #[cfg(feature = \"{FEATURE}\")]"),
+                format!("windows/e2e.rs:2: the command e2e_open_window outside #[cfg(feature = \"{FEATURE}\")]"),
+            ],
             "{declaration}"
         );
     }
     // A file no declaration reaches is scanned on its own.
-    assert_eq!(tree(&[("lib.rs", ""), ("windows/e2e.rs", e2e)]).len(), 1);
+    assert_eq!(tree(&[("lib.rs", ""), ("windows/e2e.rs", e2e)]).len(), 2);
+}
+
+#[test]
+fn fails_a_webdriver_only_module_that_holds_no_command() {
+    // Helpers, types and constants only: nothing a per-item rule would name.
+    let helpers = "pub(crate) fn seed_at() {}\npub struct Seeded;\nconst PROBE: &[u8] = b\"\";";
+    let gate = format!("outside #[cfg(feature = \"{FEATURE}\")]");
+    for (layout, child) in [
+        (["windows/mod.rs", "windows/e2e.rs"], "pub mod e2e;"),
+        (["windows/mod.rs", "windows/e2e/mod.rs"], "pub mod e2e;"),
+    ] {
+        let hits = tree(&[
+            ("lib.rs", "mod windows;"),
+            (layout[0], child),
+            (layout[1], helpers),
+        ]);
+        assert_eq!(
+            hits,
+            vec![format!(
+                "{}:1: the webdriver-only module {} {gate}",
+                layout[1], layout[1]
+            )],
+            "{layout:?}"
+        );
+    }
+    // A file deeper in the module is a hit of its own.
+    let hits = tree(&[
+        ("lib.rs", "mod windows;"),
+        ("windows/mod.rs", "pub mod e2e;"),
+        ("windows/e2e.rs", "mod seed;"),
+        ("windows/e2e/seed.rs", helpers),
+    ]);
+    assert_eq!(
+        hits,
+        ["windows/e2e.rs", "windows/e2e/seed.rs"]
+            .map(|file| format!("{file}:1: the webdriver-only module {file} {gate}"))
+            .to_vec()
+    );
+    // Gated, the same module passes, and a like-named module elsewhere is not webdriver-only.
+    assert!(tree(&[
+        ("lib.rs", "mod windows;"),
+        (
+            "windows/mod.rs",
+            "#[cfg(feature = \"e2e-webdriver\")]\npub mod e2e;"
+        ),
+        ("windows/e2e.rs", helpers),
+    ])
+    .is_empty());
+    assert!(!webdriver_only("windows/e2e_names.rs"));
+    assert!(!webdriver_only("other/windows/e2e.rs"));
 }
 
 #[test]
