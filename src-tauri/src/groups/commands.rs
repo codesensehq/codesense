@@ -230,7 +230,7 @@ pub async fn group_commit(
             // The write is placed whatever the publish does; a window that misses the delta
             // reads the head on its next conflict.
             if let Err(e) = crate::live_hub::groups::publish_change(&app, &store, &file.id) {
-                log::warn!(target: "groups", "could not publish a group change: {e}");
+                log::warn!(target: "group_store", "could not publish a group change: {e}");
             }
         }
         Ok(reply)
