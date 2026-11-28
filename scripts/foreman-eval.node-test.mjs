@@ -1845,7 +1845,9 @@ test("claude driver: a turn past its timeout is killed with its whole process gr
   );
   infra(r, /timed out after 0\.4s/);
   assert.ok(Date.now() - started < 10000, "did not wait for the child");
-  assert.ok(await gone(r.fake.pids().grandchild), "the grandchild was killed with the group");
+  const pids = r.fake.pids();
+  assert.ok(pids, "the fake started its grandchild");
+  assert.ok(await gone(pids.grandchild), "the grandchild was killed with the group");
   assert.equal(r.error.cost_usd, 2, "a timed-out turn is charged its cap");
 });
 
