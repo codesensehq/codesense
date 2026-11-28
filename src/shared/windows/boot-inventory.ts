@@ -211,6 +211,7 @@ export const BOOT_ROWS: readonly BootRow[] = [
   { id: "useAgentMessageListener", kind: "hook", class: "skip", why: why.mainStore },
   { id: "useCanvasRenderBridge", kind: "hook", class: "skip", why: "render replies are main-only" },
   { id: "useRenderedDocumentBridge", kind: "hook", class: "skip", why: "render replies are main-only" },
+  { id: "useMainWindowRegistry", kind: "hook", class: "skip", why: "keeps main's map of the items satellites own" },
   { id: "useManagedSessionBridge", kind: "hook", class: "skip", why: "a request/reply bridge: one window answers" },
   { id: "useTerminalStatusEvents", kind: "hook", class: "run", why: "the status dots of this window's terminals" },
   { id: "useTerminalDisplayGc", kind: "hook", class: "run", why: "disposes the displays of this window's closed tabs" },
