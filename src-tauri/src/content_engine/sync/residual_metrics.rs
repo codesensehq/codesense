@@ -53,7 +53,7 @@ pub(crate) use crate::install::story_linker::SYNC_TIMING_TARGET;
 pub(crate) struct ResidualCounters {
     /// `context-file-change` IPC emits — the per-path renderer notification
     /// (Open-Questions #6, ~2,198/burst to already-debounced consumers). One bump
-    /// per `app.emit("context-file-change", …)`.
+    /// per change, made by `crate::windows::router::emit_path_event`, the one sender.
     context_file_change_emits: AtomicU64,
 }
 
