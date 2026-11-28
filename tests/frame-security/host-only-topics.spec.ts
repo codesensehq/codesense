@@ -7,10 +7,25 @@ import { resolve } from "node:path";
 import { createServer as createViteServer, type ViteDevServer } from "vite";
 import tailwindcss from "@tailwindcss/vite";
 
-// The topics only the host reads, as the Rust live hub names them: a page never subscribes to,
-// pages, leaves or writes one, even with every verb admitted.
-const GROUPS_RS = readFileSync(resolve("src-tauri/src/live_hub/groups.rs"), "utf8");
-const HOST_ONLY = [...GROUPS_RS.matchAll(/pub const GROUPS?: &str = "([^"]+)";/g)].map((m) => m[1]);
+// The topics only the host reads, as `HOST_ONLY_TOPICS` in the Rust live hub names them: a page
+// never subscribes to, pages, leaves or writes one, even with every verb admitted.
+const HUB = "src-tauri/src/live_hub";
+const topicConsts = new Map(
+  [
+    ...readFileSync(resolve(HUB, "groups.rs"), "utf8").matchAll(
+      /pub const (\w+): &str = "([^"]+)";/g,
+    ),
+  ].map((m) => [m[1], m[2]] as const),
+);
+const listed = /pub const HOST_ONLY_TOPICS: \[&str; \d+\] = \[([^\]]*)\];/.exec(
+  readFileSync(resolve(HUB, "projection.rs"), "utf8"),
+);
+const HOST_ONLY = (listed?.[1] ?? "")
+  .split(",")
+  .map((entry) => entry.trim())
+  .filter(Boolean)
+  .map((entry) => topicConsts.get(entry.split("::").pop() ?? "") ?? entry.replace(/^"|"$/g, ""));
+if (HOST_ONLY.length === 0) throw new Error("no host-only topics found in HOST_ONLY_TOPICS");
 const VERBS = ["subscribe", "page", "unsubscribe", "setUiState"];
 type Outcome = { verb: string; topic: string; ok: boolean; error?: string };
 
