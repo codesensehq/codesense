@@ -26,7 +26,7 @@ import { renderViewer } from "@/shared/lib/render-viewer";
 
 import { BOOT_EXPORTS, BootRows, SATELLITE_ROWS } from "./boot-inventory";
 import type { ReleasedItems } from "./hand-off";
-import { canonicalItemKey, TAB_ITEM_KIND, type ItemKey } from "./item-key";
+import { canonicalItemKey, itemName, TAB_ITEM_KIND, type ItemKey } from "./item-key";
 import { EMPTY_SLICE_SOURCE, installSliceSource, type SliceSource, type SliceView } from "./slice";
 
 // The module rows (the virtual-tab registrations) run before the first render, so a
@@ -53,11 +53,6 @@ type SatelliteRenderer = (content: SatelliteContent) => ReactNode;
 export interface SatelliteActions {
   closeWindow: () => void;
   focusMain?: () => void;
-}
-
-/** A tab item's name, as its tab shows it. */
-function itemName(item: ItemKey): string {
-  return item.id.slice(item.id.lastIndexOf("/") + 1) || item.id;
 }
 
 /** The content a slice hands the renderer, given the items this window has let go. */

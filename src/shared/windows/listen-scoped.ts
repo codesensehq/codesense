@@ -13,6 +13,10 @@
  *   handler only when `owns(payload)` says this window shows what the event is
  *   about (terminal sessions and streams). In `main` it always calls the handler.
  *   With no `owns`, a satellite owns nothing.
+ * - `this-window` is `owning-window` registered on this window's own webview
+ *   rather than on every target, so an event Rust emits to another window's
+ *   label never reaches it, while a broadcast still does (terminal streams,
+ *   which Rust emits to the window that subscribed them).
  *
  * No added cost: in `main` the function handed to `listen` is the caller's own
  * handler for every scope, and the result is `listen`'s own promise. Only a
@@ -20,9 +24,9 @@
  */
 import { listen, type EventCallback, type EventName, type UnlistenFn } from "@tauri-apps/api/event";
 
-import { isMainWindow } from "@/shared/lib/current-window";
+import { currentWindowLabel, isMainWindow } from "@/shared/lib/current-window";
 
-export type ListenerScope = "main-only" | "every-window" | "owning-window";
+export type ListenerScope = "main-only" | "every-window" | "owning-window" | "this-window";
 
 const noop: UnlistenFn = () => {};
 
@@ -35,11 +39,16 @@ export function listenScoped<T>(
   let registered = handler;
   if (!isMainWindow()) {
     if (scope === "main-only") return Promise.resolve(noop);
-    if (scope === "owning-window") {
+    if (scope === "owning-window" || scope === "this-window") {
       registered = (event) => {
         if (owns?.(event.payload)) return handler(event);
       };
     }
+  }
+  if (scope === "this-window") {
+    return listen(event, registered, {
+      target: { kind: "WebviewWindow", label: currentWindowLabel() },
+    });
   }
   return listen(event, registered);
 }

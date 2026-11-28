@@ -15,6 +15,8 @@
  *   shows; doing it in each window is correct and idempotent.
  * - `owning-window`: the event is about one terminal session or stream, which a
  *   satellite shows only once a later story gives it workspaces and an `owns`.
+ * - `this-window`: as `owning-window`, for an event Rust emits to one window's
+ *   label (a terminal stream's output), so no other window hears it.
  *
  * `listener-inventory.test.ts` keeps this list and the code in step: a call
  * with no row, a scope that differs from its row, or a row whose site is gone
@@ -148,5 +150,5 @@ export const LISTENER_INVENTORY: readonly ListenerRow[] = [
   { file: "shared/stores/workspace-archive-store.ts", event: "codesense:workspace-archive-changed", scope: "every-window", why: "keeps the archive state current" },
   { file: "shared/terminal/terminal-manager.ts", event: "pty-exit", scope: "owning-window", why: "a terminal session exited" },
   { file: "shared/terminal/terminal-manager.ts", event: "TERMINAL_STREAMS_LOST_EVENT", scope: "every-window", why: "session-server reconnect: each window reconnects its own streams" },
-  { file: "shared/terminal/terminal-manager.ts", event: "{channel}", scope: "owning-window", why: "pty-output-stream: one terminal stream's output" },
+  { file: "shared/terminal/terminal-manager.ts", event: "{channel}", scope: "this-window", why: "pty-output-stream: one terminal stream's output, emitted to the window that subscribed it" },
 ];

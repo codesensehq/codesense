@@ -302,8 +302,19 @@ pub mod admitted_commands {
     ) -> Result<SubscribeResponse, String> {
         let viewport = crate::commands::pty_viewer::window_viewport(&window)?;
         let remote = super::super::pty_layout::authorize_human_terminal(&app, &pty_id).await?;
+        let label = tauri::WebviewWindow::label(&window).to_owned();
         await_blocking("subscribe_terminal", move || {
+            use crate::commands::pty_host::StreamIds;
+            let streams = app.try_state::<StreamIds>();
+            // A reserved stream's early output is emitted as it binds, so its target is set
+            // first. Unsubscribe releases a reservation whose subscribe fails, and its target.
+            if let (Some(streams), Some(local)) = (&streams, stream) {
+                StreamIds::set_stream_target(streams, local, &label);
+            }
             let result = subscribe_reference_authorized(&app, &pty_id, &viewport, stream, remote)?;
+            if let (Some(streams), None) = (&streams, stream) {
+                StreamIds::set_stream_target(streams, result.stream_id.0, &label);
+            }
             Ok(SubscribeResponse {
                 private_authority_epoch: if remote {
                     crate::commands::pty_backend::resolve_session_reference(&app, &pty_id, true)?

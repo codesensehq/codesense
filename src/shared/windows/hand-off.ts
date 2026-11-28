@@ -8,7 +8,8 @@
  * item is never let go, and one after it takes the item back.
  *
  * `main` lets a tab go through `closeTab`, which refuses a tab that became dirty during
- * the flush and retires every frame the tab hosts; an abort reopens it where it was (a tab
+ * the flush with its own toast (the abort shows none, `shown-refusals.ts`) and retires
+ * every frame the tab hosts; an abort reopens it where it was (a tab
  * that was not open appends), as the preview tab if it was one. A
  * satellite hands its renderer `handed-off`, which retires the frame; an abort renders
  * the item again.
@@ -25,6 +26,7 @@ import {
 
 import { canonicalItemKey, type ItemKey } from "./item-key";
 import { openItemTab, openWhenTeamReady, repoPathForItem } from "./items-returned";
+import { markRefusalShown, takeRefusalShown } from "./shown-refusals";
 import type { AckOutcome, HandOffAck, HandOffRequest, MoveAborted } from "./window-slice";
 
 /** How a window lets an item go and takes it back. `R` is what `record` keeps for a
@@ -64,6 +66,7 @@ export function createHandOff<R>(
   };
   return {
     async onHandOff({ key, moveId, budgetMs }) {
+      takeRefusalShown(key);
       if (isItemDirty(key)) return answer({ moveId, ok: false, reason: "dirty" });
       const move = { key, recorded: side.record?.(key), released: false };
       moves.set(moveId, move);
@@ -124,7 +127,10 @@ export function mainTabSide(): HandOffSide<TabPlace> {
     letGo(key, place) {
       const repoPath = place?.repoPath ?? repoPathForItem(key) ?? "";
       useViewerStore.getState().closeTab(key.team, repoPath, key.id);
-      return !tabsOf(key.team).some((t) => t.path === key.id);
+      const gone = !tabsOf(key.team).some((t) => t.path === key.id);
+      // `closeTab` refused the tab, which turned dirty during the flush, with its own toast.
+      if (!gone) markRefusalShown(key);
+      return gone;
     },
     takeBack(key, place) {
       // `record` always runs on this side. Not open at hand-off (the user closed it during
